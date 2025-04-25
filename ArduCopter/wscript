@@ -3,6 +3,13 @@
 
 def build(bld):
     vehicle = bld.path.name
+    bld.env.append_value(
+        'INCLUDES',
+        [   
+            'libraries/vl53l1x_api/core/inc',       # for Crazyflie support
+            'libraries/vl53l1x_api/platform/inc',   # for Crazyflie support
+        ],
+    )
     bld.ap_stlib(
         name=vehicle + '_libs',
         ap_vehicle=vehicle,
@@ -26,14 +33,17 @@ def build(bld):
             'AP_Devo_Telem',
             'AC_AutoTune',
             'AP_KDECAN',
-            'AP_SurfaceDistance'
+            'AP_SurfaceDistance',
+            'vl53l1x_api',     # Added for FlowDeck Support via ST VL53L1x API
         ],
     )
+    print("STATIC_LIBS for %s:" % vehicle, bld.env.STATIC_LIBS) #DEBUG
 
     bld.ap_program(
         program_name='arducopter',
         program_groups=['bin', 'copter'],
-        use=vehicle + '_libs',
+        #use=vehicle + '_libs',
+        use=[vehicle + '_libs', 'vl53l1x_api'],
         defines=['FRAME_CONFIG=MULTICOPTER_FRAME'],
         )
 
@@ -42,4 +52,4 @@ def build(bld):
         program_groups=['bin', 'heli'],
         use=vehicle + '_libs',
         defines=['FRAME_CONFIG=HELI_FRAME'],
-        )
+        )  

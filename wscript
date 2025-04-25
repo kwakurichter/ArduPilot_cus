@@ -941,6 +941,9 @@ def build(bld):
 
     bld.add_group('build')
     bld.get_board().build(bld)
+
+    bld.recurse('libraries/vl53l1x_api')    # Add Crazyflie flowdeck support via ST vl53l1x API
+
     _build_common_taskgens(bld)
 
     _build_recursion(bld)

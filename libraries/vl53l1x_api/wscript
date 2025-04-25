@@ -1,0 +1,35 @@
+# libraries/vl53l1x_api/wscript
+print('>>> entered vl53l1x_api wscript')        #DEBUG
+
+def build(bld):
+
+    # ------------------------------------------------------------------
+    # 1.  Collect source files we really want on an embedded
+    #     build:  everything under core/src plus custom ArduPilot
+    #     platform layer.  Skip ST’s Windows reference implementation.
+    # ------------------------------------------------------------------
+    src = []
+    src += bld.path.ant_glob('core/src/*.c')
+    src += bld.path.ant_glob('platform/src/*.c', excl='platform/src/vl53l1_platform.c')
+    src += ['vl53l1_platform_ardupilot.cpp']
+
+    # ------------------------------------------------------------------
+    # 2.  Tell the compiler where to find headers:
+    #     - the top folder (.)
+    #     - core/inc   (ST public API)
+    #     - platform/inc  (log macros etc.)
+    # ------------------------------------------------------------------
+    inc = [
+        '.',                         # .
+        'core/inc',
+        'platform/inc',
+    ]
+
+    # build a static library called “vl53l1x_api”
+    bld.stlib(
+        target      = 'vl53l1x_api',   # <‑‑ this becomes libvl53l1x_api.a
+        source      = src,
+        includes    = inc,           # export headers in this dir
+        export_includes = inc,
+        cxxflags    = ['-std=gnu++17']
+    )

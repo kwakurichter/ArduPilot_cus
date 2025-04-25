@@ -53,6 +53,7 @@ public:
         UAVCAN = 6,
         MSP = 7,
         UPFLOW = 8,
+        FLOWDECK = 9,   // Add Crazyflie FlowDeck support
         SITL = 10,
     };
 

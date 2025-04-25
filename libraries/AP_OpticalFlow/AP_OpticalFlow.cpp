@@ -12,6 +12,7 @@
 #include "AP_OpticalFlow_HereFlow.h"
 #include "AP_OpticalFlow_MSP.h"
 #include "AP_OpticalFlow_UPFLOW.h"
+#include "AP_OpticalFlow_FlowDeck.h"    // Add Crazyflie FlowDeck support
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
 #include <AP_AHRS/AP_AHRS.h>
@@ -27,7 +28,7 @@ const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
     // @DisplayName: Optical flow sensor type
     // @Description: Optical flow sensor type
     // @SortValues: AlphabeticalZeroAtTop
-    // @Values: 0:None, 1:PX4Flow, 2:Pixart, 3:Bebop, 4:CXOF, 5:MAVLink, 6:DroneCAN, 7:MSP, 8:UPFLOW
+    // @Values: 0:None, 1:PX4Flow, 2:Pixart, 3:Bebop, 4:CXOF, 5:MAVLink, 6:DroneCAN, 7:MSP, 8:UPFLOW, 9:FLOWDECK
     // @User: Standard
     // @RebootRequired: True
     AP_GROUPINFO_FLAGS("_TYPE", 0,  AP_OpticalFlow,    _type,   (float)OPTICAL_FLOW_TYPE_DEFAULT, AP_PARAM_FLAG_ENABLE),
@@ -111,12 +112,19 @@ AP_OpticalFlow::AP_OpticalFlow()
 
 void AP_OpticalFlow::init(uint32_t log_bit)
 {
-     _log_bit = log_bit;
+    hal.console->printf("AP_OpticalFlow::init START\n"); // DEBUG 
+    hal.console->flush();
+    _log_bit = log_bit;
 
     // return immediately if not enabled or backend already created
     if ((_type == Type::NONE) || (backend != nullptr)) {
+        hal.console->printf("AP_OpticalFlow::init exiting early (type None or backend exists)\n");  // DEBUG
+        hal.console->flush();
         return;
     }
+
+    hal.console->printf("AP_OpticalFlow::init Before Switch, type=%d\n", (int)_type.get()); // DEBUG
+    hal.console->flush();
 
     switch ((Type)_type) {
     case Type::NONE:
@@ -162,6 +170,13 @@ void AP_OpticalFlow::init(uint32_t log_bit)
     case Type::UPFLOW:
 #if AP_OPTICALFLOW_UPFLOW_ENABLED
         backend = AP_OpticalFlow_UPFLOW::detect(*this);
+#endif
+        break;
+    case Type::FLOWDECK:    // Add Crazyflie FlowDeck support
+#if AP_OPTICALFLOW_FLOWDECK_ENABLED
+        hal.console->printf("AP_OpticalFlow::init trying FlowDeck detect\n"); // DEBUG
+        hal.console->flush();
+        backend = AP_OpticalFlow_FlowDeck::detect("optflow", *this);
 #endif
         break;
     case Type::SITL:

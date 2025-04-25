@@ -98,6 +98,10 @@ STORAGE_FLASH_PAGE 1
 # reserve 32k for bootloader and 32k for flash storage
 FLASH_RESERVE_START_KB 64
 
+# SPI Device table
+# Add FlowDeck Support
+SPIDEV optflow     SPI1 DEVID0 E_CS1 MODE3 1*MHZ 1*MHZ  # Can we increase the frequency to the 2MHz max?
+
 # One IMU for Crazyflie 2.1 - I2C
 IMU BMI088 I2C:0:0x18 I2C:0:0x69 ROTATION_ROLL_180
 
@@ -119,10 +123,17 @@ define HAL_COMPASS_AUTO_ROT_DEFAULT 2
 
 define MAG_BOARD_ORIENTATION ROTATION_YAW_180
 
+# Optical Flow Sensor
+# define HAL_SPI_DEVICE_OPTFLOW SPI:optflow,0,2*MHZ,MODE3,E_CS1     # Incorrect definition
+
 # no ADC pins
 define HAL_USE_ADC FALSE
+define HAL_USE_SPI TRUE     # Necessary?
 
 include ../include/minimize_features.inc
+
+define AP_RANGEFINDER_ENABLED 1
+define AP_OPTICALFLOW_ENABLED 1
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter
