@@ -62,11 +62,17 @@ private:
     // Initialization status flag
     bool is_initialized = false;
 
+    // to count init retries
+    uint8_t _init_retries = 0; // Initialize to 0
+
     // Internal initialization function
     bool init();
 
     // Timer function (optional, likely unused)
     void timer();
+
+    // Define maximum retries
+    static const uint8_t MAX_INIT_RETRIES = 10;
 
 };
 

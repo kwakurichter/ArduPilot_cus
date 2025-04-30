@@ -22,6 +22,8 @@
 #include <AP_AHRS/AP_AHRS.h>
 #include <utility>
 #include <stdio.h>
+
+#define FLOW_RESOLUTION 0.1f //We do get the measurements in 10x the motion pixels (experimentally measured)
  
 extern const AP_HAL::HAL& hal;
  
@@ -141,6 +143,8 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     reg_read(0x06);
     hal.scheduler->delay(1);  // delay
     // --- End of Sensor Initialization
+
+    is_initialized = true;
 
     hal.console->printf("FlowDeck: Turn on LED\n"); // DEBUG
 
@@ -262,6 +266,20 @@ void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta
 void AP_OpticalFlow_FlowDeck::timer()
 {
     // hal.console->printf("FlowDeck: timer() called.\n"); // DEBUG (will very noisy)
+
+    if (!is_initialized) {
+        // Attempt re-initialization periodically
+        static uint32_t last_init_attempt_ms = 0;
+        if ((AP_HAL::millis() - last_init_attempt_ms > 5000) &&  (_init_retries < MAX_INIT_RETRIES)){ // Retry every 5s
+             last_init_attempt_ms = AP_HAL::millis();
+             _init_retries++; // <<< Increment retry counter before attempting
+
+             hal.console->printf("FlowDeck: Re-attempting initialization (%u/%u)...\n", (unsigned)_init_retries, (unsigned)MAX_INIT_RETRIES); // Updated log
+
+             init(); // Attempt to re-initialize
+         }
+        return;
+    }
     
     uint8_t motion = reg_read(REG_MOTION);
 
@@ -274,6 +292,10 @@ void AP_OpticalFlow_FlowDeck::timer()
         int16_t delta_x = 0;
         int16_t delta_y = 0;
         read_motion_count(&delta_x, &delta_y);
+
+        // Scale by configured factors
+        delta_x *= FLOW_RESOLUTION;
+        delta_y *= FLOW_RESOLUTION;
 
         //hal.console->printf("FlowDeck Update: dx=%d dy=%d\n", delta_x, delta_y); // DEBUG
          
@@ -297,8 +319,8 @@ void AP_OpticalFlow_FlowDeck::timer()
         gyro_sum_count++;
          
         // Apply sensor-specific constants (from Kalman filter)
-        const float Npix = 30.0f;              // Number of pixels in field of view
-        const float thetapix = radians(4.2f);  // Aperture angle per pixel in radians
+        const float Npix = 35.0f;              // Number of pixels in field of view (Changed to 35 from 30)
+        const float thetapix = radians(41.06813f);  // Aperture angle per pixel in radians (Changed to ~42 degrees)
         const float omegaFactor = 1.25f;       // Gyro compensation factor
         
         // Convert from sensor frame to flow rates
@@ -355,8 +377,10 @@ void AP_OpticalFlow_FlowDeck::timer()
         float flow_y = (float)delta_y * (thetapix / (Npix * dt)) * height_estimate / R22;
         
         // Apply gyro compensation
-        flow_x += omegaFactor * omegay_b;
-        flow_y -= omegaFactor * omegax_b;
+        //flow_x += omegaFactor * omegay_b;
+        //flow_y -= omegaFactor * omegax_b;
+        flow_x += (omegaFactor * omegay_b) * height_estimate / R22;
+        flow_y -= (omegaFactor * omegax_b) * height_estimate / R22;
         
         // Scale by configured factors
         flow_x *= flowScaleFactorX;

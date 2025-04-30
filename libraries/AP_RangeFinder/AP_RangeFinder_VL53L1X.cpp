@@ -146,14 +146,36 @@ bool AP_RangeFinder_VL53L1X::init()
 void AP_RangeFinder_VL53L1X::update(void)
 {
     if (!is_initialized) {
-        // Attempt re-initialization periodically
-        // static uint32_t last_init_attempt_ms = 0;
-        // if (AP_HAL::millis() - last_init_attempt_ms > 5000) { // Retry every 5s
-        //     last_init_attempt_ms = AP_HAL::millis();
-        //     init(); // Attempt to re-initialize
-        // }
+        // Attempt re-initialization periodically if desired, up to a maximum count
+        static uint32_t last_init_attempt_ms = 0;
+    
+        // Check if status indicates a need for re-init, enough time has passed and we haven't exceeded the maximum retry count
+        if ((state.status == RangeFinder::Status::NotConnected || state.status == RangeFinder::Status::NoData) &&
+            (_init_retries < MAX_INIT_RETRIES) &&
+            (AP_HAL::millis() - last_init_attempt_ms > 5000)) { // Retry every 5s
+    
+            last_init_attempt_ms = AP_HAL::millis();
+            _init_retries++; // <<< Increment retry counter before attempting
+    
+            hal.console->printf("VL53L1X: Re-attempting initialization (%u/%u)...\n", (unsigned)_init_retries, (unsigned)MAX_INIT_RETRIES); // Updated log
+    
+            // Clear potential stale status before retrying init
+            set_status(RangeFinder::Status::NotConnected);
+            init(); // Attempt to re-initialize
+    
+            // If init() succeeded, is_initialized will be true, and this block won't run next time.
+            // If init() failed, is_initialized remains false, and we might retry later if count < max.
+    
+        } else if (_init_retries >= MAX_INIT_RETRIES && state.status != RangeFinder::Status::NotConnected) {
+             // Once max retries are hit, ensure status stays NotConnected
+             // This prevents it flip-flopping if it was temporarily NoData.
+             set_status(RangeFinder::Status::NotConnected);
+        }
+    
+        // If not initialized (either failed init or max retries reached), do nothing more in update
         return;
     }
+    
 
     VL53L1_Error st_status = VL53L1_ERROR_NONE;
     uint8_t data_ready = 0;
