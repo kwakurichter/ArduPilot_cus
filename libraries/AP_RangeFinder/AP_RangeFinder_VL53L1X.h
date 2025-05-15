@@ -53,6 +53,13 @@ private:
     // ArduPilot I2C device handle
     AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev;
 
+    // Instance of the ST API Low-Level Driver structure
+    // This holds all the state and configuration for the sensor.
+    //VL53L1_LLDriverData_t st_ll_data;
+
+    // Pointer to the device structure (used as handle for ST API calls)
+    //VL53L1_DEV st_dev_ptr = &st_ll_data;
+
     /* Full ST device wrapper – contains LL driver data plus user fields */
     VL53L1_Dev_t st_dev;
 
@@ -62,17 +69,11 @@ private:
     // Initialization status flag
     bool is_initialized = false;
 
-    // to count init retries
-    uint8_t _init_retries = 0; // Initialize to 0
-
     // Internal initialization function
     bool init();
 
     // Timer function (optional, likely unused)
     void timer();
-
-    // Define maximum retries
-    static const uint8_t MAX_INIT_RETRIES = 10;
 
 };
 

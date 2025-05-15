@@ -15,9 +15,9 @@ define STM32_ST_USE_TIMER 5
 FLASH_SIZE_KB 1024
 
 
-# use USB for stdout
-#STDOUT_SERIAL SD3
-#STDOUT_BAUDRATE 57600
+# use UART for stdout
+# STDOUT_SERIAL SD3
+# STDOUT_BAUDRATE 115200
 
 # usart2
 PA2 USART2_TX USART2 # E_TX2
@@ -132,8 +132,9 @@ define HAL_USE_SPI TRUE     # Necessary?
 
 include ../include/minimize_features.inc
 
-define AP_RANGEFINDER_ENABLED 1
-define AP_OPTICALFLOW_ENABLED 1
+define AP_RANGEFINDER_ENABLED 1     #FlowDeck Support
+define AP_OPTICALFLOW_ENABLED 1     #FlowDeck Support
+define AP_SCRIPTING_ENABLED 1       #Lua Script Support
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter

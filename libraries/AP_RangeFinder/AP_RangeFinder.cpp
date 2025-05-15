@@ -17,6 +17,8 @@
 
 #if AP_RANGEFINDER_ENABLED
 
+#include <AP_HAL/AP_HAL.h> // Added to include delay for FlowDeck support
+#include <GCS_MAVLink/GCS.h> // Added for DEBUG
 #include "AP_RangeFinder_analog.h"
 #include "AP_RangeFinder_PulsedLightLRF.h"
 #include "AP_RangeFinder_MaxsonarI2CXL.h"
@@ -287,6 +289,19 @@ __INITFUNC__ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial
     AP_RangeFinder_Backend_Serial *(*serial_create_fn)(RangeFinder::RangeFinder_State&, AP_RangeFinder_Params&) = nullptr;
 
     const Type _type = (Type)params[instance].type.get();
+
+    // <<<< CONDITIONAL DELAY FOR VL53L1X >>>>
+    // We only want to delay if this instance is for the VL53L1X
+    //bool is_vl53l1x = (_type == Type::VL53L1X_Short);
+
+    //if (is_vl53l1x) {
+    //    hal.console->printf("RangeFinder: Delaying VL53L1X init for 200ms (instance %u)...\n", instance); // DEBUG
+    //    gcs().send_text(MAV_SEVERITY_DEBUG, "RangeFinder: Delaying VL53L1X init for 200ms (instance %u)...\n", instance); // DEBUG
+    //    hal.scheduler->delay(200); // Delay for 200 milliseconds
+    //    hal.console->printf("RangeFinder: VL53L1X delay complete.\n"); // DEBUG
+    //    gcs().send_text(MAV_SEVERITY_DEBUG, "RangeFinder: VL53L1X delay complete.\n"); // DEBUG
+    //}
+
     switch (_type) {
 #if AP_RANGEFINDER_PULSEDLIGHTLRF_ENABLED
     case Type::PLI2C:

@@ -31,12 +31,6 @@ private:
     static const uint8_t REG_MOTION = 0x02;     // Motion register (not sure)
     static const uint8_t REG_QUALITY = 0x07;     // Quality register (not sure)
 
-    // to count init retries
-    uint8_t _init_retries = 0; // Initialize to 0
-    
-    // Initialization status flag
-    bool is_initialized = false;
-    
     // read a register from the sensor
     uint8_t reg_read(uint8_t reg);
     
@@ -67,9 +61,6 @@ private:
     uint32_t last_update_ms;          // system time of last update
     Vector2f gyro_sum;                // sum of gyro sensor values since last frame
     uint16_t gyro_sum_count;          // number of gyro samples in sum
-
-    // Define maximum retries
-    static const uint8_t MAX_INIT_RETRIES = 10;
 };
 
 #endif // AP_OPTICALFLOW_FLOWDECK_ENABLED

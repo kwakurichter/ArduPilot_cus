@@ -22,8 +22,10 @@
 #include <AP_AHRS/AP_AHRS.h>
 #include <utility>
 #include <stdio.h>
+#include <GCS_MAVLink/GCS.h>
 
 #define FLOW_RESOLUTION 0.1f //We do get the measurements in 10x the motion pixels (experimentally measured)
+#define OULIER_LIMIT 100
  
 extern const AP_HAL::HAL& hal;
  
@@ -42,6 +44,7 @@ AP_OpticalFlow_FlowDeck::AP_OpticalFlow_FlowDeck(const char *devname, AP_Optical
 AP_OpticalFlow_FlowDeck *AP_OpticalFlow_FlowDeck::detect(const char *devname, AP_OpticalFlow &_frontend)
 {
     hal.console->printf("FlowDeck::detect START\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck::detect START\n"); // DEBUG
     AP_OpticalFlow_FlowDeck *sensor = new AP_OpticalFlow_FlowDeck(devname, _frontend);
     if (!sensor) {
         return nullptr;
@@ -57,11 +60,14 @@ AP_OpticalFlow_FlowDeck *AP_OpticalFlow_FlowDeck::detect(const char *devname, AP
 bool AP_OpticalFlow_FlowDeck::setup_sensor()
 {
     hal.console->printf("FlowDeck::setup_sensor START\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck::setup_sensor START\n"); // DEBUG
     if (!_dev) {
         hal.console->printf("FlowDeck: FAILED to get SPI device\n"); // DEBUG
+        gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: FAILED to get SPI device\n"); // DEBUG
         return false;
     }
     hal.console->printf("FlowDeck: Got SPI device OK\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Got SPI device OK\n"); // DEBUG
  
     // Get semaphore (threading)
     WITH_SEMAPHORE(_dev->get_semaphore());
@@ -71,6 +77,7 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     hal.scheduler->delay(40);  // Brief delay
 
     hal.console->printf("FlowDeck: Resetting sensor...\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Resetting sensor...\n"); // DEBUG
     // Reset sequence by toggling CS: HIGH->LOW->HIGH
     _dev->set_chip_select(false);  // HIGH (inactive)
     hal.scheduler->delay(2);  // Brief delay
@@ -87,19 +94,22 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     reg_write(0x3A, 0x5A);
     hal.scheduler->delay(5);  // delay
     hal.console->printf("FlowDeck: Power on reset sent.\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Power on reset sent.\n"); // DEBUG
     // --- End of Reset Sequence ---
 
     // --- ID Check with Retries ---
-    hal.console->printf("FlowDeck: Checking ID (will retry up to 5 times)...\n");   // DEBUG
+    hal.console->printf("FlowDeck: Checking ID (will retry up to 10 times)...\n");   // DEBUG
     hal.console->flush();
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Checking ID (will retry up to 10 times)...\n"); // DEBUG
     uint8_t id = 0;
     uint8_t id_inv = 0;
     bool id_ok = false;
-    for (int i = 0; i < 5; i++) { // Loop up to 5 times
+    for (int i = 0; i < 10; i++) { // Loop up to 5 times
         id = reg_read(REG_ID);         // Read register 0x00
         id_inv = reg_read(REG_ID_INV); // Read register 0x5F
         hal.console->printf("FlowDeck: Attempt %d: Read ID=0x%02X, InvID=0x%02X\n", i + 1, id, id_inv);
         hal.console->flush();
+        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Attempt %d: Read ID=0x%02X, InvID=0x%02X\n", i + 1, id, id_inv); // DEBUG
 
         if (id == 0x49 && id_inv == 0xB6) { // Check for expected values
             id_ok = true;
@@ -114,22 +124,28 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     if (!id_ok) {
          hal.console->printf("FlowDeck: ID check FAILED after multiple attempts!\n");
          hal.console->flush();
+         gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: ID check FAILED after multiple attempts!\n"); // DEBUG
          return false; // Exit setup if ID check failed
     }
     hal.console->printf("FlowDeck: ID check OK\n");
     hal.console->flush();
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: ID check OK\n"); // DEBUG
     // --- End of ID Check ---
  
     // Register periodic callback for sensor reading (every 10ms = 100Hz)
     hal.console->printf("FlowDeck: Registering periodic callback...\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Registering periodic callback...\n"); // DEBUG
     bool registered = _dev->register_periodic_callback(10000, FUNCTOR_BIND_MEMBER(&AP_OpticalFlow_FlowDeck::timer, void));
     if (!registered) {
         hal.console->printf("FlowDeck: FAILED to register periodic callback\n"); // DEBUG
+        gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: FAILED to register periodic callback\n"); // DEBUG
     } else {
         hal.console->printf("FlowDeck: Periodic callback registered OK\n"); // DEBUG
+        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Periodic callback registered OK\n"); // DEBUG
     }
 
     hal.console->printf("FlowDeck: Init Registers\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Init Registers\n"); // DEBUG
  
     // --- Initialize sensor with required configuration ---
     // Write registers for improved performance
@@ -144,14 +160,14 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     hal.scheduler->delay(1);  // delay
     // --- End of Sensor Initialization
 
-    is_initialized = true;
-
     hal.console->printf("FlowDeck: Turn on LED\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Turn on LED\n"); // DEBUG
 
     // Turn on LED
     setLED(true);
 
     hal.console->printf("FlowDeck: Setup Done!\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Setup Done!\n"); // DEBUG
      
     return true;
 }
@@ -165,6 +181,7 @@ uint8_t AP_OpticalFlow_FlowDeck::reg_read(uint8_t reg)
 
     if (!success) {
         hal.console->printf("Failed to read register 0x%02X\n", reg); // Log which register failed
+        gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to read register 0x%02X\n", reg); // DEBUG
         return 0;
     }
 
@@ -180,6 +197,7 @@ void AP_OpticalFlow_FlowDeck::reg_write(uint8_t reg, uint8_t value)
 
     if (!success) {
         hal.console->printf("Failed to write 0x%02X to register 0x%02X\n", value, reg);
+        gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to write 0x%02X to register 0x%02X\n", value, reg); // DEBUG
     }
     
     hal.scheduler->delay_microseconds(50);  // Add delay in-between writes
@@ -267,85 +285,58 @@ void AP_OpticalFlow_FlowDeck::timer()
 {
     // hal.console->printf("FlowDeck: timer() called.\n"); // DEBUG (will very noisy)
 
-    if (!is_initialized) {
-        // Attempt re-initialization periodically
-        static uint32_t last_init_attempt_ms = 0;
-        if ((AP_HAL::millis() - last_init_attempt_ms > 5000) &&  (_init_retries < MAX_INIT_RETRIES)){ // Retry every 5s
-             last_init_attempt_ms = AP_HAL::millis();
-             _init_retries++; // <<< Increment retry counter before attempting
+    // Calculate dt based on time since last timer() execution
+    const uint32_t now_us = AP_HAL::micros();
+    float dt = (now_us - last_flow_us) * 1.0e-6f;
+    last_flow_us = now_us; // Update last_flow_us EVERY time timer() runs
 
-             hal.console->printf("FlowDeck: Re-attempting initialization (%u/%u)...\n", (unsigned)_init_retries, (unsigned)MAX_INIT_RETRIES); // Updated log
-
-             init(); // Attempt to re-initialize
-         }
+    // Skip if dt is invalid (e.g., first run or time warp)
+    // Allow slightly larger dt here if timer callback isn't perfectly regular
+    if (!is_positive(dt) || dt > 0.1f) { // e.g., reject > 100ms dt
+        gyro_sum.zero(); // Reset gyro sum if skipping
+        gyro_sum_count = 0;
         return;
     }
+
+    // Accumulate gyro data since last timer execution
+    const Vector3f &gyro = AP::ahrs().get_gyro();
+    // Integrate gyro over the dt period
+    // (Note: averaging like before might be okay too if dt is fairly constant,
+    // but integrating is technically more correct if dt varies)
+    // For simplicity, let's stick to averaging for now, but be aware dt applies to it.
+    gyro_sum.x += gyro.x;
+    gyro_sum.y += gyro.y;
+    gyro_sum_count++;
+    // IMPORTANT: Gyro sum should now be reset AFTER _update_frontend OR if motion is not valid.
     
+    // Attempt to read motion
     uint8_t motion = reg_read(REG_MOTION);
 
     // hal.console->printf("FlowDeck: motion=0x%02X\n", motion); // DEBUG
-     
-    // Only process if motion detected
-    if (motion == 0xB0) {      // 0xB0 indicates valid motion data detected by the sensor
-        // hal.console->printf("FlowDeck: motion detected!"); // DEBUG
-        
+
+    if (motion == 0xB0) { // Process only if motion detected
+        // ... (read delta_x, delta_y, apply flip, check outliers as before) ...
         int16_t delta_x = 0;
         int16_t delta_y = 0;
         read_motion_count(&delta_x, &delta_y);
+        int16_t accpx = -delta_y;
+        int16_t accpy = -delta_x;
 
-        // Scale by configured factors
-        delta_x *= FLOW_RESOLUTION;
-        delta_y *= FLOW_RESOLUTION;
+        // Outlier Check
+        if (abs(accpx) >= OULIER_LIMIT || abs(accpy) >= OULIER_LIMIT) {
+             // hal.console->printf("FlowDeck: Outlier detected! accpx=%d, accpy=%d\n", accpx, accpy);
+             gyro_sum.zero(); // Reset gyro sum as we are discarding this cycle's potential update
+             gyro_sum_count = 0;
+             return; // Discard this measurement and wait for the next timer() call
+        }
 
-        //hal.console->printf("FlowDeck Update: dx=%d dy=%d\n", delta_x, delta_y); // DEBUG
-         
+        accpx *= FLOW_RESOLUTION;
+        accpy *= FLOW_RESOLUTION;
+
         // Get surface quality
         uint8_t quality = reg_read(REG_QUALITY);
-         
-        // Get delta time since last successful reading
-        const uint32_t now = AP_HAL::micros();
-        float dt = (now - last_flow_us) * 1.0e-6f;
-        last_flow_us = now;
 
-        // Skip if dt is too small or too large
-        if (!is_positive(dt) || dt > 0.5f) {
-            return;
-        }
-         
-        // Get gyro data for sensor compensation
-        const Vector3f &gyro = AP::ahrs().get_gyro();
-        gyro_sum.x += gyro.x;
-        gyro_sum.y += gyro.y;
-        gyro_sum_count++;
-         
-        // Apply sensor-specific constants (from Kalman filter)
-        const float Npix = 35.0f;              // Number of pixels in field of view (Changed to 35 from 30)
-        const float thetapix = radians(41.06813f);  // Aperture angle per pixel in radians (Changed to ~42 degrees)
-        const float omegaFactor = 1.25f;       // Gyro compensation factor
-        
-        // Convert from sensor frame to flow rates
-        // Note: We invert the calculation from the Kalman filter
-        //       to go from pixel movement to flow rates
-        
-        // Prepare optical flow data
-        struct AP_OpticalFlow::OpticalFlow_state state;
-        
-        // Set quality
-        state.surface_quality = quality;
-        
-        // Calculate flow rates applying optical flow scaling and sensor characteristics
-        const Vector2f flowScaler = _flowScaler();
-        float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
-        float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
-        
-        // Average body rates from accumulated gyro data
-        float omegax_b = 0.0f;
-        float omegay_b = 0.0f;
-        if (gyro_sum_count > 0) {
-            omegax_b = gyro_sum.x / gyro_sum_count;
-            omegay_b = gyro_sum.y / gyro_sum_count;
-        }
-        
+        // ... (calculate height_estimate, R22 as before) ...
         // Height estimate - use rangefinder if available, otherwise use EKF height
         float height_estimate = 1.0f;  // Default if no height source available
         const auto *rangefinder = AP::rangefinder();
@@ -363,52 +354,70 @@ void AP_OpticalFlow_FlowDeck::timer()
         // Ensure height is at least 0.1m to avoid division by zero
         height_estimate = MAX(height_estimate, 0.1f);
         
-        // Convert raw pixel counts to flow rates
-        // Based on the reverse of the Kalman filter prediction
-        // We're solving for dx_g and dy_g using the measured pixel change
-        
         // Get R[2][2] which is cosine of roll * cosine of pitch
         // This comes from the rotation matrix, in simple form:
         float R22 = cosf(AP::ahrs().get_roll()) * cosf(AP::ahrs().get_pitch());
-        
-        // Calculate flowRate from pixel movement (the inverse of the Kalman prediction)
+
+        // Average body rates from accumulated gyro data *over the dt period*
+        float omegax_b = 0.0f;
+        float omegay_b = 0.0f;
+        if (gyro_sum_count > 0) {
+            omegax_b = gyro_sum.x / gyro_sum_count;
+            omegay_b = gyro_sum.y / gyro_sum_count;
+        }
+
+        // Apply sensor-specific constants (from Kalman filter)
+        const float Npix = 35.0f;              // Number of pixels in field of view
+        const float thetapix = radians(41.06813f);  // Aperture angle per pixel in radians
+        //const float omegaFactor = 1.25f;       // Gyro compensation factor
+        const float omegaFactor = 1.0f;       // Gyro compensation factor
+
+        // Convert raw pixel counts to flow rates using the calculated dt
         // We're solving for velocity given the pixel movement
-        float flow_x = (float)delta_x * (thetapix / (Npix * dt)) * height_estimate / R22;
-        float flow_y = (float)delta_y * (thetapix / (Npix * dt)) * height_estimate / R22;
-        
+        float flow_x_raw = (float)accpx * (thetapix / (Npix * dt)) * height_estimate / R22;
+        float flow_y_raw = (float)accpy * (thetapix / (Npix * dt)) * height_estimate / R22;
+
         // Apply gyro compensation
-        //flow_x += omegaFactor * omegay_b;
-        //flow_y -= omegaFactor * omegax_b;
-        flow_x += (omegaFactor * omegay_b) * height_estimate / R22;
-        flow_y -= (omegaFactor * omegax_b) * height_estimate / R22;
-        
-        // Scale by configured factors
+        float flow_x = flow_x_raw + ((omegaFactor * omegay_b) * height_estimate / R22);
+        float flow_y = flow_y_raw - ((omegaFactor * omegax_b) * height_estimate / R22);
+
+        // ... (apply flowScaler, create state struct, apply yaw) ...
+        const Vector2f flowScaler = _flowScaler();
+        float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
+        float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
         flow_x *= flowScaleFactorX;
         flow_y *= flowScaleFactorY;
-        
-        // Assign to state
+
+        // Prepare optical flow data
+        struct AP_OpticalFlow::OpticalFlow_state state;
+        state.surface_quality = quality;
         state.flowRate.x = flow_x;
         state.flowRate.y = flow_y;
-        
-        // Copy average body rate
         state.bodyRate.x = omegax_b;
         state.bodyRate.y = omegay_b;
-        
-        // Apply yaw correction to the flow rate
-        _applyYaw(state.flowRate);
-        
+        _applyYaw(state.flowRate); // Apply yaw correction to the flow rate
+
         // Update frontend
         _update_frontend(state);
-        
-        // Reset gyro sum
+
+        // Reset gyro sum AFTER successful update
+        gyro_sum.zero();
+        gyro_sum_count = 0;
+
+    } else {
+        // Motion not detected (motion != 0xB0)
+        // We still accumulated gyro data for this dt period, but we aren't sending an update.
+        // Reset the gyro sum so it starts fresh for the next dt period.
         gyro_sum.zero();
         gyro_sum_count = 0;
     }
 }
  
-// --- Update ---
+// --- Update (will be called regularly by the main optical flow loop) ---
 void AP_OpticalFlow_FlowDeck::update()
 {
+    // Most of the work is done in timer()
+    // only needed for compatibility with the frontend API
     uint32_t now = AP_HAL::millis();
     if (now - last_update_ms < 100) {  // Limit updates to 10Hz (Necessary?)
         return;

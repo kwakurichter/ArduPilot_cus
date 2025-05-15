@@ -3,6 +3,7 @@
 
 #if AP_OPTICALFLOW_ENABLED
 
+#include <AP_HAL/AP_HAL.h> // Added to include delay for FlowDeck support
 #include "AP_OpticalFlow_Onboard.h"
 #include "AP_OpticalFlow_SITL.h"
 #include "AP_OpticalFlow_Pixart.h"
@@ -114,17 +115,20 @@ void AP_OpticalFlow::init(uint32_t log_bit)
 {
     hal.console->printf("AP_OpticalFlow::init START\n"); // DEBUG 
     hal.console->flush();
+    gcs().send_text(MAV_SEVERITY_DEBUG, "AP_OpticalFlow::init START\n"); // DEBUG
     _log_bit = log_bit;
 
     // return immediately if not enabled or backend already created
     if ((_type == Type::NONE) || (backend != nullptr)) {
         hal.console->printf("AP_OpticalFlow::init exiting early (type None or backend exists)\n");  // DEBUG
         hal.console->flush();
+        gcs().send_text(MAV_SEVERITY_ALERT, "AP_OpticalFlow::init exiting early (type None or backend exists)\n"); // DEBUG
         return;
     }
 
     hal.console->printf("AP_OpticalFlow::init Before Switch, type=%d\n", (int)_type.get()); // DEBUG
     hal.console->flush();
+    gcs().send_text(MAV_SEVERITY_DEBUG, "AP_OpticalFlow::init Before Switch, type=%d\n", (int)_type.get()); // DEBUG
 
     switch ((Type)_type) {
     case Type::NONE:
