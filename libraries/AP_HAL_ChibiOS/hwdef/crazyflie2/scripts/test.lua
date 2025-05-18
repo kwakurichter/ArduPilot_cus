@@ -1,66 +1,76 @@
--- Test for Autonomous flight
+-- test.lua
 
-function update () -- periodic function that will be called
-    gcs:send_text(6, "Autonomous test flight START...")
+local TAKEOFF_ALT = 1      -- metres
+local FORWARD_DIST = 3     -- metres
 
-    -- 1. Wait until drone is Armed
-    if not vehicle:armed() then
-        gcs:send_text(4, "Waiting for ARM...")
-        return update, 5000 -- retry in 5s
-    end
-    gcs:send_text(6, "Armed! Starting mission...")
+local state = 0           -- 0=waiting for arm, 1=mode set, 2=takeoff cmd, 3=waiting climb, 4=goto, 5=rtl
 
-    -- 2. Wait for EKF to init
-    if not ahrs:initialised() then
-        gcs:send_text(4, "Waiting for EKF init...")
-        return update, 5000 -- retry in 5s
-    end
-
-    -- 3. Set EKF origin (only once)
-    local origin_ok, origin_err = ahrs:get_origin()
-    if origin_ok then
-        gcs:send_text(3, "EKF origin already set — aborting")
-        return nil
+function update()
+    -- 1) wait for arm
+    if state == 0 then
+        if not arming:is_armed() then
+            gcs:send_text(4,"Waiting for ARM…")
+            return update,100
+        end
+        state = 1
     end
 
-    local loc = Location()
-    loc:lat(-353632640); loc:lng(1491652352); loc:alt(58409)
-    if not ahrs:set_origin(loc) then
-        gcs:send_text(3, "Failed to set EKF origin")
-        return nil
+    -- 2) switch to GUIDED
+    if state == 1 then
+        if vehicle:set_mode(4) then       -- GUIDED=4
+            gcs:send_text(6,"Mode=GUIDED")
+            state = 2
+        else
+            gcs:send_text(3,"GUIDED failed")
+            return nil
+        end
     end
-    gcs:send_text(6, string.format("Origin Set: %.7f, %.7f, %.1f", loc:lat()/1e7, loc:lng()/1e7, loc:alt()/100))
 
-    -- 4. Switch to GUIDED mode
-    local GUIDED = 4
-    if not vehicle:set_mode(GUIDED) then
-        gcs:send_text(3, "Failed to switch to GUIDED mode")
-        return nil
+    -- 3) send takeoff once
+    if state == 2 then
+        if vehicle:start_takeoff(TAKEOFF_ALT) then
+            gcs:send_text(6,string.format("Takeoff to %.1fm",TAKEOFF_ALT))
+            state = 3
+        else
+            gcs:send_text(3,"Takeoff failed")
+            return nil
+        end
     end
-    gcs:send_text(6, "Switched to GUIDED mode")
 
-    -- 5. Climb to altitude and then move
-    if ahrs:get_altitude() < 0.9 then
-        gcs:send_text(4, "Climbing...")
-        return update, 1000
+    -- 4) wait until we’re up
+    if state == 3 then
+        local ned = ahrs:get_relative_position_NED_home()
+        if not ned or (-ned:z() < TAKEOFF_ALT*0.9) then
+            return update,200     -- still climbing
+        end
+        gcs:send_text(6,"Climb complete")
+        state = 4
     end
-    local pos = ahrs:get_position() -- get current Location
-    if not pos then
-        gcs:send_text(3, "No position — aborting")
-        return nil
-    end
-    pos:offset(3, 0)    -- translate 3m North, 0m East
-    vehicle:set_target_location(pos)
 
-    -- 6. Once done, switch to RTL (Return-to-Launch) mode
-    local RTL_MODE = 6
-    if not vehicle:set_mode(RTL_MODE) then
-        gcs:send_text(3, "Failed to switch to RTL mode")
+    -- 5) move forward
+    if state == 4 then
+        local pos = ahrs:get_position()
+        if pos then
+            pos:offset(0, FORWARD_DIST)   -- north=0, east=+3 m → forward
+            vehicle:set_target_location(pos)
+            gcs:send_text(6,string.format("Goto +%dm",FORWARD_DIST))
+            state = 5
+        else
+            gcs:send_text(3,"No position")
+            return nil
+        end
     end
-    gcs:send_text(6, "Switched to RTL mode. Mission complete.")
-  
-    -- return update, 1000 -- request "update" to be rerun again 1000 milliseconds from now
-    return nil -- don't re-run
+
+    -- 6) RTL
+    if state == 5 then
+        if vehicle:set_mode(6) then    -- RTL=6
+            gcs:send_text(6,"Mode=RTL")
+        else
+            gcs:send_text(3,"RTL failed")
+        end
+        return nil  -- mission done
+    end
 end
-  
-return update, 5000   -- request "update" to be the first time 5000 milliseconds after script is loaded
+
+-- kick it off 5s after load
+return update,5000
