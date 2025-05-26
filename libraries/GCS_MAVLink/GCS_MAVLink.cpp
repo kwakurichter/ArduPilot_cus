@@ -26,9 +26,12 @@ This provides some support code and variables for MAVLink enabled sketches
 
 #include "GCS.h"
 #include "GCS_MAVLink.h"
+#include "mavlink_fragment.h"
 
 #include <AP_Common/AP_Common.h>
 #include <AP_HAL/AP_HAL.h>
+
+#define CHUNK_SIZE 63
 
 extern const AP_HAL::HAL& hal;
 
@@ -135,6 +138,27 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
     if (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]) {
         return;
     }
+    // 1) Only touch the port you care about
+    if (chan == MAVLINK_COMM_1 && is_your_msg(buf, len)) {
+        // 2) Break the full MAVLink frame into smaller pieces
+        auto fragments = fragment_buffer(buf, len, CHUNK_SIZE);
+        // 3) Send each piece in order…
+        for (auto &f : fragments) {
+            mavlink_comm_port[chan]->write(f.ptr, f.len);
+        }
+        // 4) And don’t fall through to the default write of the big packet
+        return;
+    }
+
+    // —otherwise— do the normal send
+    mavlink_comm_port[chan]->write(buf, len);
+}
+
+void comm_send_buffer_old(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
+{
+    if (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]) {
+        return;
+    }
 #if HAL_HIGH_LATENCY2_ENABLED
     // if it's a disabled high latency channel, don't send
     GCS_MAVLINK *link = gcs().chan(chan);
@@ -180,6 +204,22 @@ void comm_send_unlock(mavlink_channel_t chan_m)
     const uint8_t chan = uint8_t(chan_m);
     chan_discard[chan] = false;
     chan_locks[chan].give();
+}
+
+/*
+  Check MAVLink message packet ID
+ */
+bool is_your_msg(const uint8_t *buf, uint8_t len) {
+    // MAVLink-1: header is [0]=0xFE, [1]=len, [2]=seq, [3]=sysid, [4]=compid, [5]=msgid
+    // MAVLink-2: header is [0]=0xFD, [1]=len, [2]=incompat_flags, [3]=compat_flags,
+    //            [4]=seq, [5]=sysid, [6]=compid, [7..9]=msgid (24-bit little-endian)
+    uint8_t msgid;
+    if (buf[0] == MAVLINK_STX_V1) {
+        msgid = buf[5];
+    } else {
+        msgid = buf[7] | (buf[8] << 8) | (buf[9] << 16);
+    }
+    return msgid == MAVLINK_MSG_ID_YOUR_TARGET;
 }
 
 /*
