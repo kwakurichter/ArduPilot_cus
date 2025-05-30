@@ -2,12 +2,12 @@
 #include <algorithm>
 #include <string.h>
 
-#define MAVLINK_STX_V1 0xfe
-#define MAVLINK_STX_V2 0xfd
+#define MAVLINK_STX_V1 0xFE
+#define MAVLINK_STX_V2 0xFD
 
 //—extract and compare the MAVLink message ID—
 bool is_target_msg(const uint8_t *buf, uint8_t len) {
-    if (len < 8) return false;
+    if (len < 8) return UINT32_MAX;
     uint32_t msgid = 0;
     if (buf[0] == MAVLINK_STX_V1) {
         msgid = buf[5];
@@ -15,10 +15,9 @@ bool is_target_msg(const uint8_t *buf, uint8_t len) {
         msgid = uint32_t(buf[7]) | (uint32_t(buf[8])<<8) | (uint32_t(buf[9])<<16);
     }
     return msgid;
-    //return msgid == MAVLINK_MSG_ID_YOUR_TARGET;
 }
 
-//—slice the raw MAVLink bytes into equal-sized chunks—
+//—slice the raw MAVLink bytes into equal-sized chunks— DEPRECIATED
 std::vector<Fragment> fragment_buffer(const uint8_t *buf, uint8_t total_len, uint8_t max_chunk) {
     std::vector<Fragment> out;
     uint8_t offset = 0;
@@ -30,7 +29,7 @@ std::vector<Fragment> fragment_buffer(const uint8_t *buf, uint8_t total_len, uin
     return out;
 }
 
-//—wrap each MAVLink fragment in your 12-byte syslink + fragment header—
+//—wrap each MAVLink fragment in your 12-byte syslink + fragment header— DEPRECIATED
 std::vector<Fragment> wrap_with_syslink(const std::vector<Fragment> &mavfrags,
                                         uint16_t full_msg_id,
                                         uint16_t original_len)

@@ -136,20 +136,70 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
     if (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]) {
         return;
     }
-    // 1) Only touch the port you care about
+    // 1) Only touch the port we care about
     if (chan == MAVLINK_COMM_1) {
         // pick a chunk size so that after adding ~12B header+2B checksum
-        // you stay ≤ 64 bytes total
-        static const int MAV_CHUNK = 52; 
+        // we stay ≤ 64 bytes total
+        static const int MAV_CHUNK = 52;
+        // extract msgid
+        uint32_t msgid = is_target_msg(buf, len);
+        if (msgid == UINT32_MAX) {
+            // buffer malformed or too short—skip processing
+            return;
+        }
+        // if its a hearbeat, send it raw
+        if (msgid == MAVLINK_MSG_ID_HEARTBEAT) {
+            mavlink_comm_port[chan]->write(buf, len);
+            return;
+        }
+
         // derive a unique ID for this full message (seq+sysid)
         uint16_t full_id = (uint16_t)buf[4] << 8 | buf[3];
-        auto mavfrags = fragment_buffer(buf, len, MAV_CHUNK);
-        auto packets  = wrap_with_syslink(mavfrags, full_id, len);
+        uint8_t offset = 0;
 
-        // send each framed packet
-        for (auto &p : packets) {
-            mavlink_comm_port[chan]->write(p.ptr, p.len);
+        while (offset < len)
+        {
+            uint8_t this_len = std::min<uint8_t>(MAV_CHUNK, len - offset);
+            uint8_t length_field = 6 + this_len;
+            // allocate packet buffer on the stack
+            uint8_t packet[64];
+            uint8_t idx = 0;
+
+            //gcs().send_text(MAV_SEVERITY_ALERT, "DBG frag: len=%u off=%u this_len=%u L=%u", (unsigned)len, (unsigned)offset, (unsigned)this_len, (unsigned)length_field); // DEBUG
+
+            // 1) Syslink header
+            packet[idx++] = 0xBC;
+            packet[idx++] = 0xCF;
+            packet[idx++] = 0x00;            // TYPE = MAVLink
+            packet[idx++] = length_field; // fragment header (6 B) + data
+
+            // 2) Fragment header
+            packet[idx++] = uint8_t(full_id & 0xFF);
+            packet[idx++] = uint8_t(full_id >> 8);
+            packet[idx++] = uint8_t(len & 0xFF);
+            packet[idx++] = uint8_t(len >> 8);
+            packet[idx++] = uint8_t((len + MAV_CHUNK - 1)/MAV_CHUNK); // total_frags
+            packet[idx++] = uint8_t(offset / MAV_CHUNK);             // seq
+
+            // 3) Payload slice
+            memcpy(packet + idx, buf + offset, this_len);
+            idx += this_len;
+
+            // 4) Fletcher-8 over TYPE..data
+            uint8_t c0=0, c1=0;
+            for (uint8_t j = 2; j < idx; j++) {
+                c0 = (c0 + packet[j]) & 0xFF;
+                c1 = (c1 + c0)        & 0xFF;
+            }
+            packet[idx++] = c0;
+            packet[idx++] = c1;
+
+            // 5) write it immediately, while 'packet' is still in scope
+            mavlink_comm_port[chan]->write(packet, idx);
+
+            offset += this_len;
         }
+        
         return;  // skip the normal send
     }
     // otherwise the regular MAVLink send…
