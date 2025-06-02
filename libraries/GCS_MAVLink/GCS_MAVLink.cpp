@@ -31,6 +31,8 @@ This provides some support code and variables for MAVLink enabled sketches
 #include <AP_Common/AP_Common.h>
 #include <AP_HAL/AP_HAL.h>
 
+static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
+
 extern const AP_HAL::HAL& hal;
 
 #ifdef MAVLINK_SEPARATE_HELPERS
@@ -131,7 +133,7 @@ uint16_t comm_get_txspace(mavlink_channel_t chan)
 /*
   send a buffer out a MAVLink channel
  */
-void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
+void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
 {
     if (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]) {
         return;
@@ -141,26 +143,31 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
         // pick a chunk size so that after adding ~12B header+2B checksum
         // we stay ≤ 64 bytes total
         static const int MAV_CHUNK = 52;
-        // extract msgid
-        uint32_t msgid = is_target_msg(buf, len);
-        if (msgid == UINT32_MAX) {
-            // buffer malformed or too short—skip processing
-            return;
-        }
-        // if its a hearbeat, send it raw
-        if (msgid == MAVLINK_MSG_ID_HEARTBEAT) {
-            mavlink_comm_port[chan]->write(buf, len);
-            return;
-        }
-
-        // derive a unique ID for this full message (seq+sysid)
-        uint16_t full_id = (uint16_t)buf[4] << 8 | buf[3];
         uint8_t offset = 0;
+
+        // This full_id is for Syslink's own fragmentation of the current buf,
+        // if buf itself needs to be split into multiple Syslink frames.
+        uint16_t syslink_fragmentation_full_id = g_syslink_message_id_counter++;
+
+        // Calculate total Syslink fragments needed for *this current buf*
+        uint8_t total_syslink_fragments_for_chunk = (len + MAV_CHUNK - 1) / MAV_CHUNK;
+        if (total_syslink_fragments_for_chunk == 0 && len > 0) { // Ensure at least 1 fragment if data exists
+            total_syslink_fragments_for_chunk = 1;
+        }
+        else if (len == 0) { // No data to send
+            // Optionally, handle zero-length chunks if they are not expected
+            // or simply return if your protocol doesn't send empty Syslink messages.
+            // For now, we'll proceed, which might send a Syslink frame with empty data if chunk_len is 0
+            // and MAV_CHUNK allows for it (which it would, as this_len would be 0).
+            // Better to return if chunk_len is 0.
+            if (len == 0) return;
+        }
 
         while (offset < len)
         {
-            uint8_t this_len = std::min<uint8_t>(MAV_CHUNK, len - offset);
-            uint8_t length_field = 6 + this_len;
+            //uint8_t this_len = std::min<uint8_t>(MAV_CHUNK, len - offset);
+            uint8_t this_len = std::min((uint16_t)MAV_CHUNK, (uint16_t)(len - offset));
+            uint8_t length_field = 6 + this_len; // 6 for Syslink frag header + data part length
             // allocate packet buffer on the stack
             uint8_t packet[64];
             uint8_t idx = 0;
@@ -174,20 +181,22 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
             packet[idx++] = length_field; // fragment header (6 B) + data
 
             // 2) Fragment header
-            packet[idx++] = uint8_t(full_id & 0xFF);
-            packet[idx++] = uint8_t(full_id >> 8);
-            packet[idx++] = uint8_t(len & 0xFF);
-            packet[idx++] = uint8_t(len >> 8);
-            packet[idx++] = uint8_t((len + MAV_CHUNK - 1)/MAV_CHUNK); // total_frags
-            packet[idx++] = uint8_t(offset / MAV_CHUNK);             // seq
+            packet[idx++] = uint8_t(syslink_fragmentation_full_id & 0xFF);   // LSB of ID for this chunk's Syslink fragmentation session
+            packet[idx++] = uint8_t(syslink_fragmentation_full_id >> 8);     // MSB
+            packet[idx++] = uint8_t(len & 0xFF);                             // LSB of total length of current chunk_buf
+            packet[idx++] = uint8_t(len >> 8);                               // MSB
+            packet[idx++] = total_syslink_fragments_for_chunk;               // Total Syslink fragments for this chunk_buf
+            packet[idx++] = uint8_t(offset / MAV_CHUNK);                     // Sequence number of this Syslink fragment (0-indexed)
 
             // 3) Payload slice
-            memcpy(packet + idx, buf + offset, this_len);
+            if (this_len > 0) { // Only copy if there's data for this fragment
+                memcpy(packet + idx, buf + offset, this_len);
+            }
             idx += this_len;
 
             // 4) Fletcher-8 over TYPE..data
             uint8_t c0=0, c1=0;
-            for (uint8_t j = 2; j < idx; j++) {
+            for (uint8_t j = 2; j < idx; j++) { // Start from TYPE field (index 2)
                 c0 = (c0 + packet[j]) & 0xFF;
                 c1 = (c1 + c0)        & 0xFF;
             }
@@ -198,8 +207,10 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
             mavlink_comm_port[chan]->write(packet, idx);
 
             offset += this_len;
+            if (len == 0) break; // If original chunk was 0 length, send one empty syslink packet and exit
+
         }
-        
+
         return;  // skip the normal send
     }
     // otherwise the regular MAVLink send…

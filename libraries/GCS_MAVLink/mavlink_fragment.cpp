@@ -5,16 +5,25 @@
 #define MAVLINK_STX_V1 0xFE
 #define MAVLINK_STX_V2 0xFD
 
-//—extract and compare the MAVLink message ID—
-bool is_target_msg(const uint8_t *buf, uint8_t len) {
-    if (len < 8) return UINT32_MAX;
-    uint32_t msgid = 0;
+//—extract and compare the MAVLink message ID— DEPRECIATED
+uint32_t is_target_msg(const uint8_t *buf, uint16_t len) { // Changed len to uint16_t for consistency
+    uint32_t extracted_msgid = UINT32_MAX; // Default to invalid
+
+    if (buf == nullptr) return UINT32_MAX;
+
     if (buf[0] == MAVLINK_STX_V1) {
-        msgid = buf[5];
+        if (len < 8) return UINT32_MAX; // MAVLink v1 min frame length is 8 (for header + empty payload + CRC)
+        // MSGID is at buf[5] for MAVLink v1
+        extracted_msgid = buf[5];
     } else if (buf[0] == MAVLINK_STX_V2) {
-        msgid = uint32_t(buf[7]) | (uint32_t(buf[8])<<8) | (uint32_t(buf[9])<<16);
+        if (len < 12) return UINT32_MAX; // MAVLink v2 min frame length is 12
+        // MSGID (3 bytes) is at buf[7], buf[8], buf[9] for MAVLink v2
+        extracted_msgid = uint32_t(buf[7]) | (uint32_t(buf[8]) << 8) | (uint32_t(buf[9]) << 16);
+    } else {
+        // Did not start with a known MAVLink STX byte
+        return UINT32_MAX;
     }
-    return msgid;
+    return extracted_msgid;
 }
 
 //—slice the raw MAVLink bytes into equal-sized chunks— DEPRECIATED
