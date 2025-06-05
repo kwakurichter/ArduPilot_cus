@@ -20,6 +20,7 @@
 #if HAL_GCS_ENABLED
 
 #include "GCS.h"
+#include "SyslinkReassembler.h"
 
 #include <AC_Fence/AC_Fence.h>
 #include <AP_Compass/AP_Compass.h>
@@ -113,6 +114,8 @@ extern AP_IOMCU iomcu;
 #include <ctype.h>
 
 extern const AP_HAL::HAL& hal;
+
+static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
 
 struct GCS_MAVLINK::LastRadioStatus GCS_MAVLINK::last_radio_status;
 uint8_t GCS_MAVLINK::mavlink_active = 0;
@@ -1873,59 +1876,86 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
 
     status.packet_rx_drop_count = 0;
 
+    //uint32_t now_ms = AP_HAL::millis(); // Ensure now_ms is available
+
     const uint16_t nbytes = _port->available();
     for (uint16_t i=0; i<nbytes; i++)
     {
         const uint8_t c = (uint8_t)_port->read();
         const uint32_t protocol_timeout = 4000;
+        bool byte_handled_by_syslink = false;
+
+        // --- BEGIN SYSLINK PRE-PROCESSING FOR MAVLINK_COMM_1 ---
+        if (chan == MAVLINK_COMM_1) {
+            // Define the callback that SyslinkReassembler will use to push MAVLink bytes
+            auto mavlink_byte_pusher_lambda = 
+                [&](uint8_t mav_byte) { // Captures needed variables by reference
+                const uint8_t framing = mavlink_frame_char_buffer(channel_buffer(), channel_status(), mav_byte, &msg, &status);
+                if (framing == MAVLINK_FRAMING_OK) {
+                    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1)->MAV: Decoded MAVLink MSG ID %u\n", msg.msgid); // DEBUG
+                    hal.util->persistent_data.last_mavlink_msgid = msg.msgid;
+                    packetReceived(status, msg); // Process the MAVLink packet
+
+                    gcs_alternative_active[chan] = false; // MAVLink is active
+                    alternative.last_mavlink_ms = now_ms; // Update MAVLink activity timestamp
+                    hal.util->persistent_data.last_mavlink_msgid = 0;
+                }
+                #if AP_SCRIPTING_ENABLED
+                else if (framing == MAVLINK_FRAMING_BAD_CRC) {
+                    AP_Scripting* scripting = AP_Scripting::get_singleton();
+                    if (scripting != nullptr) {
+                        scripting->handle_message(msg, chan);
+                    }
+                }
+                #endif
+            };
+            
+            byte_handled_by_syslink = s_syslink_reassembler_for_comm1.process_byte(c, mavlink_byte_pusher_lambda);
+        }
+        // --- END SYSLINK PRE-PROCESSING ---  
         
+        if (byte_handled_by_syslink) {
+            // If Syslink logic (on MAVLINK_COMM_1) consumed or processed the byte 'c',
+            // skip the default MAVLink/alternative protocol handling for this byte.
+            // The mavlink_byte_pusher_lambda already updated alternative.last_mavlink_ms
+            // if MAVLink was successfully generated from Syslink.
+            continue;
+        }        
+        
+        // Original MAVLink / alternative protocol handling for byte 'c'
+        // This part runs if 'chan' is not MAVLINK_COMM_1, or if Syslink didn't consume the byte.
+        bool parsed_packet_std = false; // Use a different variable name
         if (alternative.handler &&
             now_ms - alternative.last_mavlink_ms > protocol_timeout) {
-            /*
-              we have an alternative protocol handler installed and we
-              haven't parsed a MAVLink packet for 4 seconds. Try
-              parsing using alternative handler
-             */
             if (alternative.handler(c, mavlink_comm_port[chan])) {
                 alternative.last_alternate_ms = now_ms;
                 gcs_alternative_active[chan] = true;
             }
-            
-            /*
-              we may also try parsing as MAVLink if we haven't had a
-              successful parse on the alternative protocol for 4s
-             */
             if (now_ms - alternative.last_alternate_ms <= protocol_timeout) {
                 continue;
             }
         }
 
-        bool parsed_packet = false;
-
-        // Try to get a new message
-        const uint8_t framing = mavlink_frame_char_buffer(channel_buffer(), channel_status(), c, &msg, &status);
-        if (framing == MAVLINK_FRAMING_OK) {
+        const uint8_t framing_std = mavlink_frame_char_buffer(channel_buffer(), channel_status(), c, &msg, &status);
+        if (framing_std == MAVLINK_FRAMING_OK) {
             hal.util->persistent_data.last_mavlink_msgid = msg.msgid;
             packetReceived(status, msg);
-            parsed_packet = true;
+            parsed_packet_std = true;
             gcs_alternative_active[chan] = false;
             alternative.last_mavlink_ms = now_ms;
             hal.util->persistent_data.last_mavlink_msgid = 0;
-
         }
-#if AP_SCRIPTING_ENABLED
-        else if (framing == MAVLINK_FRAMING_BAD_CRC) {
-            // This may be a valid message that we don't know the crc extra for, pass it to scripting which might
+        #if AP_SCRIPTING_ENABLED
+        else if (framing_std == MAVLINK_FRAMING_BAD_CRC) {
             AP_Scripting *scripting = AP_Scripting::get_singleton();
             if (scripting != nullptr) {
                 scripting->handle_message(msg, chan);
             }
         }
-#endif // AP_SCRIPTING_ENABLED
+        #endif
 
-        if (parsed_packet || i % 100 == 0) {
-            // make sure we don't spend too much time parsing mavlink messages
-            if (AP_HAL::micros() - tstart_us > max_time_us) {
+        if (parsed_packet_std || i % 100 == 0) {
+            if (AP_HAL::micros() - tstart_us > max_time_us) { // tstart_us needs to be defined earlier
                 break;
             }
         }
