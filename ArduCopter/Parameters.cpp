@@ -95,6 +95,13 @@ const AP_Param::Info Copter::var_info[] = {
     // @Bitmask: 0:Roll,1:Pitch,2:Yaw,3:AccelZ
     GSCALAR(gcs_pid_mask,           "GCS_PID_MASK",     0),
 
+    // @Param: NRF_RADIO
+    // @DisplayName: NRF radio serial port
+    // @Description: Hardware serial port of Crazyflie NRF radio
+    // @User: Standard
+    // @Bitmask: 9:disabled,0:SERIAL0,1:SERIAL1,2:SERIAL2,3:SERIAL3,4:SERIAL4,5:SERIAL5,6:SERIAL6
+    GSCALAR(nrf_radio,                "NRF_RADIO",     9),
+
 #if MODE_RTL_ENABLED
     // @Param: RTL_ALT
     // @DisplayName: RTL Altitude

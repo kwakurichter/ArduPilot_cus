@@ -610,3 +610,7 @@
 #ifndef USER_PARAMS_ENABLED
   #define USER_PARAMS_ENABLED 0
 #endif
+
+#ifndef NRF_PORT_DEFAULT
+  #define NRF_PORT_DEFAULT 9
+#endif

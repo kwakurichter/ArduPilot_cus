@@ -138,7 +138,8 @@ public:
         k_param_cli_enabled_old,        // deprecated - remove
         k_param_throttle_filt,
         k_param_throttle_behavior,
-        k_param_pilot_takeoff_alt, // 64
+        k_param_pilot_takeoff_alt,
+        k_param_nrf_port,               // 65 - for nrf driver
 
         // 65: AP_Limits Library
         k_param_limits = 65,            // deprecated - remove
@@ -458,6 +459,7 @@ public:
     AP_Int8         fs_crash_check;
     AP_Float        fs_ekf_thresh;
     AP_Int16        gcs_pid_mask;
+    AP_Int8         nrf_port;       // for nrf driver
 
 #if MODE_THROW_ENABLED
     AP_Enum<ModeThrow::PreThrowMotorState>         throw_motor_start;
