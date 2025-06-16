@@ -27,9 +27,7 @@ This provides some support code and variables for MAVLink enabled sketches
 #include "GCS.h"
 #include "GCS_MAVLink.h"
 #include "mavlink_fragment.h"
-
-#include <AP_Common/AP_Common.h>
-#include <AP_HAL/AP_HAL.h>
+#include "RadioBuffer.h"
 
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
 
@@ -139,7 +137,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         return;
     }
     // 1) Only touch the port we care about
-    if (chan == MAVLINK_COMM_1) {
+    if (chan == MAVLINK_COMM_2) {
         // pick a chunk size so that after adding ~12B header+2B checksum
         // we stay ≤ 64 bytes total
         static const int MAV_CHUNK = 52;
@@ -155,17 +153,12 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             total_syslink_fragments_for_chunk = 1;
         }
         else if (len == 0) { // No data to send
-            // Optionally, handle zero-length chunks if they are not expected
-            // or simply return if your protocol doesn't send empty Syslink messages.
-            // For now, we'll proceed, which might send a Syslink frame with empty data if chunk_len is 0
-            // and MAV_CHUNK allows for it (which it would, as this_len would be 0).
-            // Better to return if chunk_len is 0.
-            if (len == 0) return;
+
+            if (len == 0) return; // Optionally, handle zero-length chunks if they are not expected
         }
 
         while (offset < len)
         {
-            //uint8_t this_len = std::min<uint8_t>(MAV_CHUNK, len - offset);
             uint8_t this_len = std::min((uint16_t)MAV_CHUNK, (uint16_t)(len - offset));
             uint8_t length_field = 6 + this_len; // 6 for Syslink frag header + data part length
             // allocate packet buffer on the stack
@@ -204,7 +197,20 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             packet[idx++] = c1;
 
             // 5) write it immediately, while 'packet' is still in scope
-            mavlink_comm_port[chan]->write(packet, idx);
+            //mavlink_comm_port[chan]->write(packet, idx);
+
+            const bool nrf_is_ready = (hal.gpio->read(54) == 0);
+            
+            // We can send immediately if the nRF is ready AND the buffer is empty (to maintain correct order)
+            if (nrf_is_ready && RadioPacketBuffer::get_instance().is_empty()) {
+                mavlink_comm_port[chan]->write(packet, idx);
+            } else {
+                // Otherwise, the nRF is busy or there are older packets waiting. Buffer this packet.
+                if (!RadioPacketBuffer::get_instance().push(packet, idx)) {
+                    // Buffer is full. This packet is dropped.
+                    gcs().send_text(MAV_SEVERITY_ALERT, "Radio buffer full, packet dropped!\n"); // DEBUG
+                }
+            }
 
             offset += this_len;
             if (len == 0) break; // If original chunk was 0 length, send one empty syslink packet and exit

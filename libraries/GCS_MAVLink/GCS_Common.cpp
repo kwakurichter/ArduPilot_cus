@@ -21,6 +21,7 @@
 
 #include "GCS.h"
 #include "SyslinkReassembler.h"
+#include "RadioBuffer.h"
 
 #include <AC_Fence/AC_Fence.h>
 #include <AP_Compass/AP_Compass.h>
@@ -115,6 +116,11 @@ extern AP_IOMCU iomcu;
 
 extern const AP_HAL::HAL& hal;
 
+//static void drain_radio_buffer_task()
+//{
+//    RadioPacketBuffer::get_instance().drain_task();
+//}
+
 static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
 
 struct GCS_MAVLINK::LastRadioStatus GCS_MAVLINK::last_radio_status;
@@ -162,6 +168,12 @@ bool GCS_MAVLINK::init(uint8_t instance)
     if (uartstate->option_enabled(AP_HAL::UARTDriver::OPTION_MAVLINK_NO_FORWARD)) {
         set_channel_private(chan);
     }
+
+    if (chan == MAVLINK_COMM_2) {
+        RadioPacketBuffer::get_instance().register_scheduler_task();    // register the drain task to run in parallel
+    }
+
+    // hal.gpio->pinMode(NRF_FLOW_CTRL, HAL_GPIO_INPUT);        // configure RTS line as an input (already in hwdef)
 
     /*
       Now try to cope with SiK radios that may be stuck in bootloader
