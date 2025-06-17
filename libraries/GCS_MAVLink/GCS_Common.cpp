@@ -21,7 +21,6 @@
 
 #include "GCS.h"
 #include "SyslinkReassembler.h"
-#include "RadioBuffer.h"
 
 #include <AC_Fence/AC_Fence.h>
 #include <AP_Compass/AP_Compass.h>
@@ -116,11 +115,6 @@ extern AP_IOMCU iomcu;
 
 extern const AP_HAL::HAL& hal;
 
-//static void drain_radio_buffer_task()
-//{
-//    RadioPacketBuffer::get_instance().drain_task();
-//}
-
 static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
 
 struct GCS_MAVLINK::LastRadioStatus GCS_MAVLINK::last_radio_status;
@@ -210,15 +204,8 @@ bool GCS_MAVLINK::init(uint8_t instance)
         set_channel_private(chan);
     }
 
-    //if (is_nrf_radio_channel(chan)) {
-        //RadioPacketBuffer::get_instance().register_scheduler_task(chan);    // register the drain task to run in parallel
-    //    RadioPacketBuffer::get_singleton()->register_scheduler_task(chan); 
-    //}
-
-    // Register the drain task only if this channel is the NRF channel
-    if (this->is_nrf_channel) {
-        RadioPacketBuffer::get_singleton()->register_scheduler_task(chan);
-        gcs().send_text(MAV_SEVERITY_DEBUG, "INIT: Registered drain task for chan %d", (int)instance); // DEBUG
+    if (chan == MAVLINK_COMM_2) {
+        RadioPacketBuffer::get_instance().register_scheduler_task();    // register the drain task to run in parallel
     }
 
     // hal.gpio->pinMode(NRF_FLOW_CTRL, HAL_GPIO_INPUT);        // configure RTS line as an input (already in hwdef)

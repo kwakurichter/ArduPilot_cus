@@ -27,7 +27,9 @@ This provides some support code and variables for MAVLink enabled sketches
 #include "GCS.h"
 #include "GCS_MAVLink.h"
 #include "mavlink_fragment.h"
-#include "RadioBuffer.h"
+
+#include <AP_Common/AP_Common.h>
+#include <AP_HAL/AP_HAL.h>
 
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
 
@@ -161,12 +163,17 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             total_syslink_fragments_for_chunk = 1;
         }
         else if (len == 0) { // No data to send
-
-            if (len == 0) return; // Optionally, handle zero-length chunks if they are not expected
+            // Optionally, handle zero-length chunks if they are not expected
+            // or simply return if your protocol doesn't send empty Syslink messages.
+            // For now, we'll proceed, which might send a Syslink frame with empty data if chunk_len is 0
+            // and MAV_CHUNK allows for it (which it would, as this_len would be 0).
+            // Better to return if chunk_len is 0.
+            if (len == 0) return;
         }
 
         while (offset < len)
         {
+            //uint8_t this_len = std::min<uint8_t>(MAV_CHUNK, len - offset);
             uint8_t this_len = std::min((uint16_t)MAV_CHUNK, (uint16_t)(len - offset));
             uint8_t length_field = 6 + this_len; // 6 for Syslink frag header + data part length
             // allocate packet buffer on the stack

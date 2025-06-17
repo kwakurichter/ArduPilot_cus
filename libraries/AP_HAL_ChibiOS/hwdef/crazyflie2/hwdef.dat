@@ -73,8 +73,7 @@ PB6 I2C1_SCL I2C1 # E_SCL
 PB7 I2C1_SDA I2C1 # E_SCL
 
 # radio setup 
-# PA4 NRF_FLOW_CTRL INPUT # goes low when we can write to uart
-PA4 NRF_FLOW_CTRL INPUT GPIO(54)    # to reference in nrf driver
+PA4 NRF_FLOW_CTRL INPUT # goes low when we can write to uart
 #PB13 NRF_SWCLK
 #PB15 NRF_SWIO
 PC6 USART6_TX USART6 # NRF_RT
