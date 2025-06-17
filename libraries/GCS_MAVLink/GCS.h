@@ -211,6 +211,8 @@ public:
 
     bool sending_mavlink1() const;
 
+    bool is_nrf_channel = false;    // for nrf driver to store serial port flag
+
     // returns true if we are requesting any items from the GCS:
     bool requesting_mission_items() const;
 

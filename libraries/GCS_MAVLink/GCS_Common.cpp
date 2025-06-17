@@ -145,8 +145,42 @@ GCS_MAVLINK::GCS_MAVLINK(GCS_MAVLINK_Parameters &parameters,
     streamRates = parameters.streamRates;
 }
 
+// This contains the expensive logic that should only be run once per channel
+static bool is_nrf_radio_channel_check(AP_HAL::UARTDriver* port)
+{
+    gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_CHECK: Starting check..."); // DEBUG
+    if (port == nullptr) {
+        gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_CHECK: Port is null"); // DEBUG
+        return false;
+    }
+    ap_var_type param_type;
+    uint16_t param_flags;
+    AP_Param *p = AP_Param::find("NRF_PORT", &param_type, &param_flags);
+    if (p == nullptr) {
+        gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_CHECK: NRF_PORT param not found"); // DEBUG
+        return false;
+    }
+    gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_CHECK: Found param"); // DEBUG
+    int8_t nrf_port_number = ((AP_Int8 *)p)->get();
+    if (nrf_port_number > 6) {
+        gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_CHECK: NRF_PORT is disabled"); // DEBUG
+        return false;
+    }
+    AP_HAL::UARTDriver *nrf_port_driver = AP::serialmanager().get_serial_by_id(nrf_port_number);
+    if (nrf_port_driver == nullptr) {
+        gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_CHECK: NRF port driver is null"); // DEBUG
+        return false;
+    }
+    // Compare the pointer of the current port with the configured NRF port
+    bool is_match = (port == nrf_port_driver); // <-- ADD
+    //return (port == nrf_port_driver);
+    gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_CHECK: Result is %d", (int)is_match); // DEBUG
+    return is_match;
+}
+
 bool GCS_MAVLINK::init(uint8_t instance)
 {
+    gcs().send_text(MAV_SEVERITY_DEBUG, "INIT: Starting for chan %d", (int)instance); // DEBUG
     // get associated mavlink channel
     chan = (mavlink_channel_t)(MAVLINK_COMM_0 + instance);
     if (!valid_channel(chan)) {
@@ -161,6 +195,13 @@ bool GCS_MAVLINK::init(uint8_t instance)
         return false;
     }
 
+    // Perform the expensive NRF port check ONCE during initialization
+    // and store the result in new flag
+    this->is_nrf_channel = is_nrf_radio_channel_check(_port);
+    gcs().send_text(MAV_SEVERITY_DEBUG, "INIT: NRF check for chan %d is %d", (int)instance, (int)this->is_nrf_channel); // DEBUG
+
+
+
     // and init the gcs instance
 
     // whether this port is considered "private" is stored on the uart
@@ -169,8 +210,15 @@ bool GCS_MAVLINK::init(uint8_t instance)
         set_channel_private(chan);
     }
 
-    if (chan == MAVLINK_COMM_2) {
-        RadioPacketBuffer::get_instance().register_scheduler_task();    // register the drain task to run in parallel
+    //if (is_nrf_radio_channel(chan)) {
+        //RadioPacketBuffer::get_instance().register_scheduler_task(chan);    // register the drain task to run in parallel
+    //    RadioPacketBuffer::get_singleton()->register_scheduler_task(chan); 
+    //}
+
+    // Register the drain task only if this channel is the NRF channel
+    if (this->is_nrf_channel) {
+        RadioPacketBuffer::get_singleton()->register_scheduler_task(chan);
+        gcs().send_text(MAV_SEVERITY_DEBUG, "INIT: Registered drain task for chan %d", (int)instance); // DEBUG
     }
 
     // hal.gpio->pinMode(NRF_FLOW_CTRL, HAL_GPIO_INPUT);        // configure RTS line as an input (already in hwdef)

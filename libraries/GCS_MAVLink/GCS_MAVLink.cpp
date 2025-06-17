@@ -133,11 +133,19 @@ uint16_t comm_get_txspace(mavlink_channel_t chan)
  */
 void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
 {
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Chan %d, len %u", (int)chan, len); // DEBUG
+    
     if (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]) {
         return;
     }
+
     // 1) Only touch the port we care about
-    if (chan == MAVLINK_COMM_2) {
+    //if (is_nrf_radio_channel(chan)) {
+    GCS_MAVLINK *link = gcs().chan(chan);           // Get the GCS link for this channel and check its flag. This is very fast.
+    if (link != nullptr && link->is_nrf_channel) {
+        gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using NRF/Syslink path for chan %d", (int)chan); // DEBUG
+        // gcs().send_text(MAV_SEVERITY_INFO, "NRF/Syslink: Sending bytes on chan %u", (unsigned)chan); // DEBUG
+
         // pick a chunk size so that after adding ~12B header+2B checksum
         // we stay ≤ 64 bytes total
         static const int MAV_CHUNK = 52;
@@ -165,6 +173,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             uint8_t packet[64];
             uint8_t idx = 0;
 
+            //gcs().send_text(MAV_SEVERITY_INFO, "NRF/Syslink: Sending %u bytes on chan %u", (unsigned)length_field, (unsigned)chan); // DEBUG
             //gcs().send_text(MAV_SEVERITY_ALERT, "DBG frag: len=%u off=%u this_len=%u L=%u", (unsigned)len, (unsigned)offset, (unsigned)this_len, (unsigned)length_field); // DEBUG
 
             // 1) Syslink header
@@ -202,13 +211,20 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             const bool nrf_is_ready = (hal.gpio->read(54) == 0);
             
             // We can send immediately if the nRF is ready AND the buffer is empty (to maintain correct order)
-            if (nrf_is_ready && RadioPacketBuffer::get_instance().is_empty()) {
+            //if (nrf_is_ready && RadioPacketBuffer::get_instance().is_empty()) {
+            if (nrf_is_ready && RadioPacketBuffer::get_singleton()->is_empty()) {
+                gcs().send_text(MAV_SEVERITY_INFO, "NRF/Syslink: Sending %u bytes on chan %u", (unsigned)length_field, (unsigned)chan); // DEBUG
                 mavlink_comm_port[chan]->write(packet, idx);
             } else {
                 // Otherwise, the nRF is busy or there are older packets waiting. Buffer this packet.
-                if (!RadioPacketBuffer::get_instance().push(packet, idx)) {
+                //if (!RadioPacketBuffer::get_instance().push(packet, idx)) {
+                if (!RadioPacketBuffer::get_singleton()->push(packet, idx)) {
                     // Buffer is full. This packet is dropped.
                     gcs().send_text(MAV_SEVERITY_ALERT, "Radio buffer full, packet dropped!\n"); // DEBUG
+                }
+                if (!nrf_is_ready) {
+                    // nrf is not ready
+                    gcs().send_text(MAV_SEVERITY_ALERT, "NRF is not ready\n"); // DEBUG
                 }
             }
 
@@ -220,6 +236,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         return;  // skip the normal send
     }
     // otherwise the regular MAVLink send…
+    //gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using regular MAVLink path for chan %d", (int)chan); // DEBUG
     mavlink_comm_port[chan]->write(buf, len);
 }
 
