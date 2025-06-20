@@ -5,6 +5,8 @@
 #include <AP_HAL/AP_HAL_Boards.h>
 #include <AP_Networking/AP_Networking_Config.h>
 
+extern bool g_syslink_ready;    // Indicates when NRF is ready to receive
+
 // we have separate helpers disabled to make it possible
 // to select MAVLink 1.0 in the arduino GUI build
 #define MAVLINK_SEPARATE_HELPERS

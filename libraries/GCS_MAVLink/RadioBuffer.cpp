@@ -1,13 +1,9 @@
 #include <AP_HAL/AP_HAL.h>
-#include <AP_Param/AP_Param.h>
-#include <AP_SerialManager/AP_SerialManager.h>
 #include <AP_Scheduler/AP_Scheduler.h>
 #include "RadioBuffer.h"
 #include "GCS_MAVLink.h"
 #include <string.h> // For memcpy
 #include "GCS.h"
-
-RadioPacketBuffer* RadioPacketBuffer::_singleton = nullptr;
 
 extern const AP_HAL::HAL& hal;
 
@@ -16,53 +12,6 @@ extern AP_HAL::UARTDriver* mavlink_comm_port[MAVLINK_COMM_NUM_BUFFERS];
 
 // Create a single, static instance of our buffer
 //static RadioPacketBuffer g_radio_buffer;
-
-// Helper function to check if a MAVLink channel corresponds to the NRF port
-//bool is_nrf_radio_channel(mavlink_channel_t chan)
-//{
-    // Declare variables to hold the output from the find() function.
-//    ap_var_type param_type;
-//    uint16_t param_flags; // We don't use this variable, but the function requires a valid pointer.
-    // --- 1. Find the parameter by its string name ---
-    // The find() method is called with just the parameter name.
-    // Replace "NRF_PORT" with the actual 16-character (max) name you gave your parameter.
-//    AP_Param *p = AP_Param::find("NRF_PORT", &param_type, &param_flags);
-
-//    int8_t nrf_port_number = 9;
-
-    // --- 2. Check if parameter was found AND has the correct type ---
-//    if (p != nullptr) {
-        // Parameter was found and is the correct type (AP_Int8).
-        // Now, cast the generic AP_Param pointer to the specific AP_Int8 pointer and get its value.
-//        nrf_port_number = ((AP_Int8 *)p)->get();
-//    } else {
-        // The parameter either doesn't exist or is not the type we expect (e.g., AP_Int8).
-        // In either case, we can't use it, so we'll treat Syslink as disabled.
-//        return false;
-//    }
-    
-    // If the parameter is set to -1 (or any negative value), Syslink is disabled.
-//    if (nrf_port_number > 6) {
-//        return false;
-//    }
-
-    // --- 3. Get the UART driver pointer for the channel we are currently processing ---
-//    AP_HAL::UARTDriver *current_channel_driver = mavlink_comm_port[chan];
-//    if (current_channel_driver == nullptr) {
-//        return false;
-//    }
-
-    // --- 4. Get the UART driver pointer for the user-configured NRF port number ---
-    // The get_port() method on AP_SerialManager takes the logical port number (e.g., 0 for SERIAL0, 1 for SERIAL1).
-//    AP_HAL::UARTDriver *nrf_port_driver = AP::serialmanager().get_serial_by_id(nrf_port_number);
-//    if (nrf_port_driver == nullptr) {
-        // This could happen if the user sets NRF_PORT to a port that doesn't exist or isn't enabled.
-//        return false;
-//    }
-
-    // --- 5. Compare the pointers. If they are the same, this is the correct port ---
-//    return (current_channel_driver == nrf_port_driver);
-//}
 
 // Tries to add a packet to the buffer.
 bool RadioPacketBuffer::push(const uint8_t* pkt_buf, uint8_t pkt_len) {
@@ -140,7 +89,7 @@ bool RadioPacketBuffer::is_empty() {
 //    }
 //}
 
-void RadioPacketBuffer::register_scheduler_task(mavlink_channel_t chan)
+void RadioPacketBuffer::register_scheduler_task()
 {
     // Use a static bool to ensure we only ever register this task once
     static bool is_registered = false;
@@ -148,58 +97,28 @@ void RadioPacketBuffer::register_scheduler_task(mavlink_channel_t chan)
         return;
     }
 
-    // Store the channel as a member variable
-    this->_chan = chan;
-
     hal.scheduler->register_timer_process(FUNCTOR_BIND_MEMBER(&RadioPacketBuffer::drain_task, void));
     is_registered = true;
 }
 
-//void RadioPacketBuffer::register_scheduler_task(mavlink_channel_t chan)
-//{
-    // Use a member variable to ensure this is only done once for the singleton
-//    if (_is_registered) {
-//        return;
-//    }
 
-//    _chan = chan; // Store the channel
-
-    // --- Start of new code ---
-
-    // Manually create the Functor object instead of using the macro.
-    // This explicitly tells the compiler the types involved.
-//    Functor<void> functor = Functor<void>::bind<RadioPacketBuffer, &RadioPacketBuffer::drain_task>(this);
-
-    // Register the created functor.
-//    hal.scheduler->register_timer_process(functor);
-
-    // --- End of new code ---
-
-//    _is_registered = true;
-//}
-
-
-//void RadioPacketBuffer::drain_task(mavlink_channel_t chan) {
 void RadioPacketBuffer::drain_task() {
 
-    // Note: We can't use gcs().send_text() here because this task runs too fast
-    // and would flood the connection. We'll add a temporary, heavily-throttled print.
-    //static uint32_t last_print_ms = 0;
-    //uint32_t now_ms = AP_HAL::millis();
-    //if (now_ms - last_print_ms > 2000) { // Print only every 2 seconds
-    //    gcs().send_text(MAV_SEVERITY_CRITICAL, "DRAIN_TASK: Running...");
-    //    last_print_ms = now_ms;
-    //}
+    static uint32_t last_print_ms = 0;
+    uint32_t now_ms = AP_HAL::millis();
+    if (now_ms - last_print_ms > 2000) { // Print only every 2 seconds
+        gcs().send_text(MAV_SEVERITY_DEBUG, "DRAIN_TASK: Running...");  // DEBUG
+        last_print_ms = now_ms;
+    }
 
-    // Limit the drain task to run at a maximum of 200Hz (every 5ms)
-    const uint32_t now = AP_HAL::millis();
-    if (now - _last_drain_ms < 5) {
+    // Don't send anything until the handshake is complete.
+    if (!g_syslink_ready) {
         return;
     }
-    _last_drain_ms = now;
-
+    
     const bool nrf_is_ready = (hal.gpio->read(54) == 0);
 
+    // Don't send anything until the nrf is ready
     if (!nrf_is_ready) {
         return;
     }
@@ -207,8 +126,9 @@ void RadioPacketBuffer::drain_task() {
     RadioPacket packet_to_send;
     // Call the pop() method on this instance
     if (this->pop(packet_to_send)) {
-        if (mavlink_comm_port[this->_chan] != nullptr) {
-            mavlink_comm_port[this->_chan]->write(packet_to_send.buf, packet_to_send.len);
+        if (mavlink_comm_port[MAVLINK_COMM_2] != nullptr) {
+            gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using Drain path for chan %d", (int)MAVLINK_COMM_2); // DEBUG
+            mavlink_comm_port[MAVLINK_COMM_2]->write(packet_to_send.buf, packet_to_send.len);
         }
     }
 }
