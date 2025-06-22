@@ -19,6 +19,7 @@ public:
         WAIT_SYNC1,
         WAIT_SYNC2,
         READ_TYPE_LENGTH,
+        WAIT_CRTP_HEADER,
         READ_PAYLOAD_AND_CRC
     };
 

@@ -148,11 +148,36 @@
  // Helper function to calculate the Fletcher-8 checksum used by Syslink
 static void calculate_fletcher8(const uint8_t *data, uint8_t len, uint8_t &ck_a, uint8_t &ck_b)
 {
-    ck_a = 0;
-    ck_b = 0;
+    uint8_t c0 = 0;
+    uint8_t c1 = 0;
+
     for (uint8_t i = 0; i < len; i++) {
-        ck_a = (ck_a + data[i]) & 0xFF;
-        ck_b = (ck_b + ck_a) & 0xFF;
+        c0 += data[i];
+        c1 += c0;
+    }
+
+    ck_a = c0;
+    ck_b = c1;
+}
+
+static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, uint8_t size)
+{
+    if (port == nullptr) {
+        return;
+    }
+
+    port->write(data, size);
+
+    // Wait until the software transmit buffer is empty, using the tx_pending() method.
+    // This indicates the hardware has taken all the data for transmission.
+    // We add a 100ms timeout to prevent the system from hanging forever.
+    const uint32_t start_ms = AP_HAL::millis();
+    while (port->tx_pending()) {
+        if (AP_HAL::millis() - start_ms > 100) {
+            gcs().send_text(MAV_SEVERITY_WARNING, "NRF: UART TX timeout");
+            break;
+        }
+        hal.scheduler->delay(1);
     }
 }
  
@@ -162,7 +187,7 @@ static void calculate_fletcher8(const uint8_t *data, uint8_t len, uint8_t &ck_a,
         return;
     }
 
-    gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_INIT: Sending config packets..."); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "NRF_INIT: Sending config packets..."); // DEBUG
 
     uint8_t ck_a, ck_b;
 
@@ -170,22 +195,27 @@ static void calculate_fletcher8(const uint8_t *data, uint8_t len, uint8_t &ck_a,
     const uint8_t packet1_data[] = { 0x01, 0x01, 0x50 }; // Type, Length, Data
     calculate_fletcher8(packet1_data, sizeof(packet1_data), ck_a, ck_b);
     const uint8_t packet1[] = { 0xBC, 0xCF, packet1_data[0], packet1_data[1], packet1_data[2], ck_a, ck_b };
-    port->write(packet1, sizeof(packet1));
-    hal.scheduler->delay(5); // Small delay for the NRF to process
+    //port->write(packet1, sizeof(packet1));
+    //hal.scheduler->delay(5); // Small delay for the NRF to process
+    send_packet_blocking(port, packet1, sizeof(packet1));
 
     // --- Packet 2: Set Data Rate to 2M (0x02) ---
     const uint8_t packet2_data[] = { 0x02, 0x01, 0x02 }; // Type, Length, Data
     calculate_fletcher8(packet2_data, sizeof(packet2_data), ck_a, ck_b);
     const uint8_t packet2[] = { 0xBC, 0xCF, packet2_data[0], packet2_data[1], packet2_data[2], ck_a, ck_b };
-    port->write(packet2, sizeof(packet2));
-    hal.scheduler->delay(5);
+    //port->write(packet2, sizeof(packet2));
+    //hal.scheduler->delay(5);
+    send_packet_blocking(port, packet2, sizeof(packet2));
 
     // --- Packet 3: Set Radio Address to E7E7E7E701 (user configurble) ---
-    const uint8_t packet3_data[] = { 0x05, 0x05, 0xE7, 0xE7, 0xE7, 0xE7, 0x01 }; // Type, Length, Data
+    // The Crazyflie firmware expects the 5-byte address in little-endian byte order.
+    // So, 0xE7E7E7E701 is sent as {0x01, 0xE7, 0xE7, 0xE7, 0xE7}.
+    const uint8_t packet3_data[] = { 0x05, 0x05, 0x01, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
     calculate_fletcher8(packet3_data, sizeof(packet3_data), ck_a, ck_b);
     const uint8_t packet3[] = { 0xBC, 0xCF, packet3_data[0], packet3_data[1], packet3_data[2], packet3_data[3], packet3_data[4], packet3_data[5], packet3_data[6], ck_a, ck_b };
-    port->write(packet3, sizeof(packet3));
-    hal.scheduler->delay(5);
+    //port->write(packet3, sizeof(packet3));
+    //hal.scheduler->delay(5);
+    send_packet_blocking(port, packet3, sizeof(packet3));
 
     // --- Packet 4: Set Radio Power to +6dBm (0x06) (Optional) ---
     //const uint8_t packet4_data[] = { 0x07, 0x01, 0x06 }; // Type, Length, Data
@@ -194,7 +224,7 @@ static void calculate_fletcher8(const uint8_t *data, uint8_t len, uint8_t &ck_a,
     //port->write(packet4, sizeof(packet4));
     //hal.scheduler->delay(5);
 
-    gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_INIT: Config packets sent.");  // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "NRF_INIT: Config packets sent to port: %u", (int)port);  // DEBUG
 }
  
  bool GCS_MAVLINK::init(uint8_t instance)
@@ -1956,7 +1986,7 @@ static void calculate_fletcher8(const uint8_t *data, uint8_t len, uint8_t &ck_a,
  
          // --- BEGIN SYSLINK PRE-PROCESSING FOR MAVLINK_COMM_2 ---
          if (chan == MAVLINK_COMM_2) {
-             //gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_1 RAW RX: 0x%02X", (unsigned)c);  // DEBUG
+             gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_2 RAW RX: 0x%02X", (unsigned)c);  // DEBUG
 
              // Define the callback that SyslinkReassembler will use to push MAVLink bytes
              auto mavlink_byte_pusher_lambda = 

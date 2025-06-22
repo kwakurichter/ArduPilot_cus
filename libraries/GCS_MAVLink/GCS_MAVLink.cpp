@@ -141,6 +141,8 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
 
     // 1) Only touch the port we care about
     if (chan == MAVLINK_COMM_2) {
+        //mavlink_comm_port[chan]->write("\n>> nRF port (COMM_2) <<<\n"); // DEBUG
+        
         // pick a chunk size so that after adding ~12B header+2B checksum
         // we stay ≤ 64 bytes total
         static const int MAV_CHUNK = 52;
@@ -193,8 +195,8 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             // 4) Fletcher-8 over TYPE..data
             uint8_t c0=0, c1=0;
             for (uint8_t j = 2; j < idx; j++) { // Start from TYPE field (index 2)
-                c0 = (c0 + packet[j]) & 0xFF;
-                c1 = (c1 + c0)        & 0xFF;
+                c0 += packet[j];
+                c1 += c0;
             }
             packet[idx++] = c0;
             packet[idx++] = c1;
@@ -212,7 +214,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
                 // Otherwise, the nRF is busy or there are older packets waiting. Buffer this packet.
                 if (!RadioPacketBuffer::get_instance().push(packet, idx)) {
                     // Buffer is full. This packet is dropped.
-                    gcs().send_text(MAV_SEVERITY_ALERT, "Radio buffer full, packet dropped!\n"); // DEBUG
+                    gcs().send_text(MAV_SEVERITY_DEBUG, "Radio buffer full, packet dropped!\n"); // DEBUG
                 }
             }
 
