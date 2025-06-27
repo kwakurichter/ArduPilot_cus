@@ -175,7 +175,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             // 1) Syslink header
             packet[idx++] = 0xBC;
             packet[idx++] = 0xCF;
-            packet[idx++] = 0x00;            // TYPE = Radio RAW
+            packet[idx++] = 0x0B;            // TYPE = Radio MAVLink (Raw = 0x00)
             packet[idx++] = length_field; // fragment header (6 B) + data
 
             // 2) Fragment header
@@ -210,6 +210,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             if (g_syslink_ready && nrf_is_ready && RadioPacketBuffer::get_instance().is_empty()) {
                 gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using comm_send path for chan %d", (int)chan); // DEBUG
                 mavlink_comm_port[chan]->write(packet, idx);
+                g_syslink_ready = false;    // Add to reset the flag?
             } else {
                 // Otherwise, the nRF is busy or there are older packets waiting. Buffer this packet.
                 if (!RadioPacketBuffer::get_instance().push(packet, idx)) {

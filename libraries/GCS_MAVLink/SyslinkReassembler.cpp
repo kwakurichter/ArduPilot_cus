@@ -2,12 +2,13 @@
 #include "SyslinkReassembler.h"
 #include <AP_HAL/AP_HAL.h> // For AP_HAL::millis()
 #include "GCS.h" // For GCS_SEND_TEXT
+#include <AP_Common/ExpandingString.h>
 
 bool SyslinkToMAVLinkReassembler::check_fletcher8(const uint8_t* data, size_t len_for_check, uint8_t crc0_expected, uint8_t crc1_expected) {
     uint8_t c0 = 0, c1 = 0;
     for (size_t i = 0; i < len_for_check; ++i) {
-        c0 = (c0 + data[i]) & 0xFF;
-        c1 = (c1 + c0) & 0xFF;
+        c0 += data[i];
+        c1 += c0;
     }
     return (c0 == crc0_expected) && (c1 == crc1_expected);
 }
@@ -54,7 +55,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
         case ParseState::READ_TYPE_LENGTH:
             if (current_syslink_frame_buffer.size() == 3) { // Byte for TYPE received
                 syslink_type_byte = c;
-                if (syslink_type_byte != EXPECTED_SYSLINK_TYPE_MAVLINK) {
+                if ((syslink_type_byte != EXPECTED_SYSLINK_TYPE_MAVLINK) && (syslink_type_byte != EXPECTED_SYSLINK_TYPE_RADIO)) {
                     gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Bad Type %u\n", c); // DEBUG
                     reset_parser_state(); // Invalid type
                     // 'c' was consumed as part of an invalid Syslink header
@@ -67,7 +68,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                 } else {
                     syslink_payload_bytes_expected = syslink_length_field + 2; // data_slice + CRC
                     gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): HDR TYPE=%u LEN=%u\n", syslink_type_byte, syslink_length_field); // DEBUG
-                    state = ParseState::READ_PAYLOAD_AND_CRC;
+                    state = ParseState::WAIT_CRTP_HEADER;
                 }
             }
             break;
@@ -76,7 +77,8 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
         // This is the 5th byte, which is the first byte of the Syslink payload (the CRTP header)
         {
             const uint8_t port = (c >> 4) & 0x0F;
-            if (port == 0) { // 0 is the CONSOLE port
+            //if (port == 0) { // 0 is the CONSOLE port
+            if (port == 0 || port == 15 || port == 11) { // temporarily accept 15 for debugging purposes
                 // Payload must contain at least a 1-byte CRTP header and a 6-byte MAVLink fragment header.
                 if (syslink_length_field < 7) {
                     gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: MAVLink fragment length %u is too small\n", syslink_length_field); // DEBUG
@@ -84,11 +86,12 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                 }
                 else {
                     // Length is valid for MAVLink, proceed to read the payload
+                    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink: Parsing packet for CRTP Port: %u\n", port);   // DEBUG
                     state = ParseState::READ_PAYLOAD_AND_CRC;
                 }
             } else {
                 // This is for a different CRTP port, so we discard the packet
-                gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Discarding packet for CRTP Port: %u\n", port);
+                gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Discarding packet for CRTP Port: %u\n", port);    // DEBUG
                 reset_parser_state();
             }
         }
@@ -110,7 +113,16 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                 if (check_fletcher8(&frame_ptr[2], crc_check_len, crc0_expected, crc1_expected)) {
                     // CRC OK. Extract fragment and process
                     // The actual fragment data starts after SYNC1, SYNC2, TYPE, LENGTH_FIELD
-                    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Frame CRC OK\n"); // DEBUG
+                    //gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Frame CRC OK\n"); // DEBUG
+
+                    // Create an ExpandingString to build the hex dump of the full packet
+                    ExpandingString full_packet_hex_dump;
+                    full_packet_hex_dump.printf("Syslink Full Pkt OK: ");
+                    for (const uint8_t byte_val : current_syslink_frame_buffer) {
+                        full_packet_hex_dump.printf("%02X ", byte_val);
+                    }
+                    gcs().send_text(MAV_SEVERITY_DEBUG, "%s", full_packet_hex_dump.get_string()); // DEBUG
+
                     handle_complete_syslink_fragment(&frame_ptr[4], syslink_length_field, mavlink_byte_pusher);
                 } else {
                     gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Frame CRC FAIL!\n"); // DEBUG
@@ -150,7 +162,7 @@ void SyslinkToMAVLinkReassembler::handle_complete_syslink_fragment(
     gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: seq = %u (from %02X)", (unsigned)seq, fragment_header[5]); // DEBUG
 
     const uint8_t* mavlink_slice_ptr = fragment_header + 6;
-    int mavlink_slice_len = original_syslink_length_field - 1 - 6; // 1 is the CRTP header, 6 is size of fragment header
+    int mavlink_slice_len = original_syslink_length_field - 7; // 1 is the CRTP header, 6 is size of fragment header
 
     if (mavlink_slice_len < 0) {
         gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Invalid slice len %d\n", mavlink_slice_len); // DEBUG

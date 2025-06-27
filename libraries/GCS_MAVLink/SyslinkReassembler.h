@@ -13,7 +13,8 @@ class SyslinkToMAVLinkReassembler {
 public:
     static constexpr uint8_t SYSLINK_SYNC1 = 0xBC;
     static constexpr uint8_t SYSLINK_SYNC2 = 0xCF;
-    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_MAVLINK = 0x00;
+    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_RADIO = 0x00;
+    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_MAVLINK = 0x0B;
 
     enum class ParseState {
         WAIT_SYNC1,

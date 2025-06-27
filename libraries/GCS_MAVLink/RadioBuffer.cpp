@@ -129,6 +129,7 @@ void RadioPacketBuffer::drain_task() {
         if (mavlink_comm_port[MAVLINK_COMM_2] != nullptr) {
             gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using Drain path for chan %d", (int)MAVLINK_COMM_2); // DEBUG
             mavlink_comm_port[MAVLINK_COMM_2]->write(packet_to_send.buf, packet_to_send.len);
+            g_syslink_ready = false;    // Add to reset the flag?
         }
     }
 }
