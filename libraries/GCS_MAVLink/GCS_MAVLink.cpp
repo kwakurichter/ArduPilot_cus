@@ -139,94 +139,77 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         return;
     }
 
-    // 1) Only touch the port we care about
+    // This logic is for the nRF radio channel (MAVLINK_COMM_2)
     if (chan == MAVLINK_COMM_2) {
-        //mavlink_comm_port[chan]->write("\n>> nRF port (COMM_2) <<<\n"); // DEBUG
-        
-        // pick a chunk size so that after adding ~12B header+2B checksum
-        // we stay ≤ 36 bytes total
+        if (len == 0) {
+            return; // Nothing to send
+        }
+
+        // Define the chunk size for fragmentation
         static const int MAV_CHUNK = 24;
-        uint8_t offset = 0;
 
-        // This full_id is for Syslink's own fragmentation of the current buf,
-        // if buf itself needs to be split into multiple Syslink frames.
+        // Calculate how many fragments this MAVLink message will be split into
+        uint8_t total_syslink_fragments = (len + MAV_CHUNK - 1) / MAV_CHUNK;
+
+        // --- ATOMIC BUFFERING LOGIC ---
+        // Check if the radio buffer has enough space for ALL fragments of this message
+        if (RadioPacketBuffer::get_instance().free_space() < total_syslink_fragments) {
+            // Not enough space for the entire message, drop it.
+            gcs().send_text(MAV_SEVERITY_WARNING, "Radio buffer full, MAVLink msg dropped!");
+            return;
+        }
+
+        // If we get here, there is enough space. Proceed with fragmentation and buffering.
         uint16_t syslink_fragmentation_full_id = g_syslink_message_id_counter++;
-
-        // Calculate total Syslink fragments needed for *this current buf*
-        uint8_t total_syslink_fragments_for_chunk = (len + MAV_CHUNK - 1) / MAV_CHUNK;
-        if (total_syslink_fragments_for_chunk == 0 && len > 0) { // Ensure at least 1 fragment if data exists
-            total_syslink_fragments_for_chunk = 1;
-        }
-        else if (len == 0) { // No data to send
-
-            if (len == 0) return; // Optionally, handle zero-length chunks if they are not expected
-        }
+        uint8_t offset = 0;
 
         while (offset < len)
         {
             uint8_t this_len = std::min((uint16_t)MAV_CHUNK, (uint16_t)(len - offset));
-            uint8_t length_field = 6 + this_len; // 6 for Syslink frag header + data part length
-            // allocate packet buffer on the stack
-            uint8_t packet[36];
+            uint8_t length_field = 6 + this_len; // 6B fragment header + data
+            uint8_t packet[36]; // Buffer for one fragment
             uint8_t idx = 0;
-
-            //gcs().send_text(MAV_SEVERITY_ALERT, "DBG frag: len=%u off=%u this_len=%u L=%u", (unsigned)len, (unsigned)offset, (unsigned)this_len, (unsigned)length_field); // DEBUG
 
             // 1) Syslink header
             packet[idx++] = 0xBC;
             packet[idx++] = 0xCF;
-            packet[idx++] = 0x0B;            // TYPE = Radio MAVLink (Raw = 0x00)
-            packet[idx++] = length_field; // fragment header (6 B) + data
+            packet[idx++] = 0x0B; // TYPE = Radio MAVLink
+            packet[idx++] = length_field;
 
             // 2) Fragment header
-            packet[idx++] = uint8_t(syslink_fragmentation_full_id & 0xFF);   // LSB of ID for this chunk's Syslink fragmentation session
-            packet[idx++] = uint8_t(syslink_fragmentation_full_id >> 8);     // MSB
-            packet[idx++] = uint8_t(len & 0xFF);                             // LSB of total length of current chunk_buf
-            packet[idx++] = uint8_t(len >> 8);                               // MSB
-            packet[idx++] = total_syslink_fragments_for_chunk;               // Total Syslink fragments for this chunk_buf
-            packet[idx++] = uint8_t(offset / MAV_CHUNK);                     // Sequence number of this Syslink fragment (0-indexed)
+            packet[idx++] = uint8_t(syslink_fragmentation_full_id & 0xFF);
+            packet[idx++] = uint8_t(syslink_fragmentation_full_id >> 8);
+            packet[idx++] = uint8_t(len & 0xFF);
+            packet[idx++] = uint8_t(len >> 8);
+            packet[idx++] = total_syslink_fragments;
+            packet[idx++] = uint8_t(offset / MAV_CHUNK);
 
             // 3) Payload slice
-            if (this_len > 0) { // Only copy if there's data for this fragment
+            if (this_len > 0) {
                 memcpy(packet + idx, buf + offset, this_len);
             }
             idx += this_len;
-
-            // 4) Fletcher-8 over TYPE..data
+            
+            // 4) Fletcher-8 checksum
             uint8_t c0=0, c1=0;
-            for (uint8_t j = 2; j < idx; j++) { // Start from TYPE field (index 2)
+            for (uint8_t j = 2; j < idx; j++) {
                 c0 += packet[j];
                 c1 += c0;
             }
             packet[idx++] = c0;
             packet[idx++] = c1;
 
-            // 5) write it immediately, while 'packet' is still in scope
-            //mavlink_comm_port[chan]->write(packet, idx);
-
-            const bool nrf_is_ready = (hal.gpio->read(54) == 0);
-            
-            // We can send immediately if the nRF is ready AND the buffer is empty (to maintain correct order)
-            if (g_syslink_ready && nrf_is_ready && RadioPacketBuffer::get_instance().is_empty()) {
-                gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using comm_send path for chan %d", (int)chan); // DEBUG
-                mavlink_comm_port[chan]->write(packet, idx);
-                g_syslink_ready = false;    // Add to reset the flag?
-            } else {
-                // Otherwise, the nRF is busy or there are older packets waiting. Buffer this packet.
-                if (!RadioPacketBuffer::get_instance().push(packet, idx)) {
-                    // Buffer is full. This packet is dropped.
-                    gcs().send_text(MAV_SEVERITY_DEBUG, "Radio buffer full, packet dropped!\n"); // DEBUG
-                }
-            }
+            // 5) Push the fragment to the buffer. We've already confirmed space exists.
+            // We ignore the return value as we've pre-checked the space.
+            RadioPacketBuffer::get_instance().push(packet, idx);
 
             offset += this_len;
-            if (len == 0) break; // If original chunk was 0 length, send one empty syslink packet and exit
-
         }
 
-        return;  // skip the normal send
+        return; // skip the normal send
     }
-    // otherwise the regular MAVLink send…
+
+    // For all other MAVLink channels, use the regular send
     mavlink_comm_port[chan]->write(buf, len);
 }
 

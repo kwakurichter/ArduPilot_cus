@@ -8,11 +8,11 @@
 struct RadioPacket {
     uint16_t len;
     // A single Syslink packet can be up to 64 bytes
-    uint8_t buf[64];
+    uint8_t buf[36];
 };
 
 // The size of the ring buffer (how many packets it can hold)
-#define RADIO_BUFFER_SIZE 16
+#define RADIO_BUFFER_SIZE 32
 
 // A thread-safe ring buffer for radio packets
 class RadioPacketBuffer {
@@ -38,6 +38,8 @@ public:
     bool is_empty();
 
     void register_scheduler_task();
+
+    uint8_t free_space();
 
 private:
     // Make the constructor private to enforce the singleton pattern

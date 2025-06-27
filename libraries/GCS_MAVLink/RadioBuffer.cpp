@@ -133,3 +133,8 @@ void RadioPacketBuffer::drain_task() {
         }
     }
 }
+
+uint8_t RadioPacketBuffer::free_space() {
+    WITH_SEMAPHORE(sem);
+    return RADIO_BUFFER_SIZE - count;
+}
