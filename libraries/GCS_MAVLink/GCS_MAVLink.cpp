@@ -144,8 +144,8 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         //mavlink_comm_port[chan]->write("\n>> nRF port (COMM_2) <<<\n"); // DEBUG
         
         // pick a chunk size so that after adding ~12B header+2B checksum
-        // we stay ≤ 64 bytes total
-        static const int MAV_CHUNK = 52;
+        // we stay ≤ 36 bytes total
+        static const int MAV_CHUNK = 24;
         uint8_t offset = 0;
 
         // This full_id is for Syslink's own fragmentation of the current buf,
@@ -167,7 +167,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             uint8_t this_len = std::min((uint16_t)MAV_CHUNK, (uint16_t)(len - offset));
             uint8_t length_field = 6 + this_len; // 6 for Syslink frag header + data part length
             // allocate packet buffer on the stack
-            uint8_t packet[64];
+            uint8_t packet[36];
             uint8_t idx = 0;
 
             //gcs().send_text(MAV_SEVERITY_ALERT, "DBG frag: len=%u off=%u this_len=%u L=%u", (unsigned)len, (unsigned)offset, (unsigned)this_len, (unsigned)length_field); // DEBUG
