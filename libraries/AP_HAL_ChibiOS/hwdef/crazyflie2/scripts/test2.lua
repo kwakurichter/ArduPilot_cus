@@ -1,7 +1,6 @@
 -- test.lua
 
 local TAKEOFF_ALT = 1      -- metres
-local FORWARD_DIST = 3     -- metres
 
 local state = 0           -- 0=waiting for arm, 1=mode set, 2=takeoff cmd, 3=waiting climb, 4=goto, 5=rtl
 
@@ -81,22 +80,8 @@ function update()
         state = 6
     end
 
-    -- 7) move forward
-    if state == 6 then
-        local pos = ahrs:get_position()
-        if pos then
-            pos:offset(0, FORWARD_DIST)   -- north=0, east=+3 m → forward
-            vehicle:set_target_location(pos)
-            gcs:send_text(6,string.format("Goto +%dm",FORWARD_DIST))
-            state = 7
-        else
-            gcs:send_text(3,"No position")
-            return nil
-        end
-    end
-
     -- 8) RTL
-    if state == 7 then
+    if state == 6 then
         if vehicle:set_mode(6) then    -- RTL=6
             gcs:send_text(6,"Mode=RTL")
         else
