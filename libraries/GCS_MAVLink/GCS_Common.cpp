@@ -1626,42 +1626,6 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
  #endif
          deferred_messages_initialised = true;
      }
-
-    // Set stream rates low to minimize packet loss
-    //static bool custom_rates_applied[MAVLINK_COMM_NUM_BUFFERS] = {false};
-    //if (chan == MAVLINK_COMM_2 && !custom_rates_applied[chan]) {
-    //    gcs().send_text(MAV_SEVERITY_DEBUG, "NRF: Setting low stream rates for MAVLINK_COMM_2");
-
-        // Disable all default streams by setting their rates to 0 Hz
-    //    for (uint8_t i=0; i < NUM_STREAMS; i++) {
-    //        streamRates[i].set(0);
-    //    }
-        
-        // Now, selectively enable only the most critical messages at a low rate.
-        // The second parameter is the interval in milliseconds. 5000ms = 0.2Hz.
-        
-        // Send heartbeat every 5 seconds
-    //    set_ap_message_interval(MSG_HEARTBEAT, 5000);
-        
-        // Send attitude and position at 2Hz (500ms interval)
-        //set_ap_message_interval(MSG_ATTITUDE, 500);
-    //    set_ap_message_interval(MSG_LOCATION, 500);
-
-        // Send optical flow and rangefinder at 2Hz
-        //set_ap_message_interval(MSG_OPTICAL_FLOW, 500);
-        //set_ap_message_interval(MSG_RANGEFINDER, 500);        
-
-        // Send system status (including battery) at 1Hz
-        // set_ap_message_interval(MSG_SYS_STATUS, 1000);
-
-        // Explicitly disable other high-frequency messages as a safeguard
-    //    set_ap_message_interval(MSG_RAW_IMU, 0);
-    //    set_ap_message_interval(MSG_SCALED_IMU, 0);
-    //    set_ap_message_interval(MSG_SERVO_OUTPUT_RAW, 0);
-    //    set_ap_message_interval(MSG_RC_CHANNELS, 0);
-
-    //    custom_rates_applied[chan] = true;
-    //} 
  
  #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
      uint32_t retry_deferred_body_start = AP_HAL::micros();
@@ -2036,10 +2000,10 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
                         gcs().send_text(MAV_SEVERITY_DEBUG, "NRF_INIT: Syslink ready!");    // DEBUG
                      }
                     
-                     // DEBUG
-                     // hal.gpio->write(12, 1); // Turn ON LED_GREEN_R (PC2, pin 12)
-                     // hal.scheduler->delay_microseconds(500); // Wait 500 microseconds (0.5ms)
-                     // hal.gpio->write(12, 0); // Immediately turn OFF for a quick flash
+                     // DEBUG - Not working?
+                     hal.gpio->write(11, 1); // Turn ON LED_GREEN_L (PC1, pin 11)
+                     hal.scheduler->delay_microseconds(1000); // Wait 1000 microseconds (1ms)
+                     hal.gpio->write(11, 0); // Immediately turn OFF for a quick flash
                      gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1)->MAV: Decoded MAVLink MSG ID %u\n", msg.msgid); 
                      // DEBUG
 
@@ -3275,14 +3239,6 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
   */
  void GCS_MAVLINK::send_heartbeat() const
  {
-    #if HAL_HIGH_LATENCY2_ENABLED
-        // Force high latency mode for the NRF radio channel (MAVLINK_COMM_2)
-        if (is_high_latency_link || chan == MAVLINK_COMM_2) {
-            // In high latency mode, the HIGH_LATENCY2 message replaces the heartbeat
-            return;
-        }
-    #endif
-
      mavlink_msg_heartbeat_send(
          chan,
          gcs().frame_type(),
@@ -7049,38 +7005,13 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
      for (uint8_t i=0; all_stream_entries[i].ap_message_ids != nullptr; i++) {
          initialise_message_intervals_for_stream(all_stream_entries[i].stream_id);
      }
- #if HAL_HIGH_LATENCY2_ENABLED
-    // --- START: ISOLATED LED DEBUGGING ---
-    // This block only contains the LED blinking logic for our specific channel
-    if (chan == MAVLINK_COMM_2) {
-        if (is_high_latency_link) {
-            // SUCCESS on chan 2: BLINK LEFT GREEN LED THREE TIMES FAST
-            for (int i=0; i<3; i++) {
-                hal.gpio->write(11, 1); // PC1 is LED_GREEN_L on pin 11
-                hal.scheduler->delay(100);
-                hal.gpio->write(11, 0);
-                hal.scheduler->delay(100);
-            }
-        } else {
-            // This case should NOT happen based on your tests, but we leave it for completeness
-            // FAILURE on chan 2: BLINK LEFT GREEN LED ONCE SLOWLY
-            hal.gpio->write(12, 1);
-            hal.scheduler->delay(1000);
-            hal.gpio->write(12, 0);
-        }
-    }
-    // --- END: ISOLATED LED DEBUGGING ---     
-    if (is_high_latency_link) {
-        // In high latency mode, disable the standard heartbeat
-        set_mavlink_message_id_interval(MAVLINK_MSG_ID_HEARTBEAT, 0);
-        // and enable the HIGH_LATENCY2 message
-        set_mavlink_message_id_interval(MAVLINK_MSG_ID_HIGH_LATENCY2, 5000);
-    } else {
-        set_mavlink_message_id_interval(MAVLINK_MSG_ID_HEARTBEAT, 1000);
-    }
-
+#if HAL_HIGH_LATENCY2_ENABLED
+     if (!is_high_latency_link) {
+         set_mavlink_message_id_interval(MAVLINK_MSG_ID_HEARTBEAT, 1000);
+     } else {
+         set_mavlink_message_id_interval(MAVLINK_MSG_ID_HIGH_LATENCY2, 5000);
+     }
  #else
-     gcs().send_text(MAV_SEVERITY_ALERT, "MAV: WARNING - HL mode not compiled in!");    // DEBUG
      set_mavlink_message_id_interval(MAVLINK_MSG_ID_HEARTBEAT, 1000);
  #endif
  }
