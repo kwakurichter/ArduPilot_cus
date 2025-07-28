@@ -107,7 +107,7 @@ void RadioPacketBuffer::drain_task() {
     static uint32_t last_print_ms = 0;
     uint32_t now_ms = AP_HAL::millis();
     if (now_ms - last_print_ms > 2000) { // Print only every 2 seconds
-        gcs().send_text(MAV_SEVERITY_DEBUG, "DRAIN_TASK: Running...");  // DEBUG
+        // gcs().send_text(MAV_SEVERITY_DEBUG, "DRAIN_TASK: Running...");  // DEBUG
         last_print_ms = now_ms;
     }
 
@@ -116,7 +116,7 @@ void RadioPacketBuffer::drain_task() {
         return;
     }
     
-    const bool nrf_is_ready = (hal.gpio->read(54) == 0);
+    const bool nrf_is_ready = (hal.gpio->read(4) == 0);
 
     // Don't send anything until the nrf is ready
     if (!nrf_is_ready) {
@@ -127,9 +127,9 @@ void RadioPacketBuffer::drain_task() {
     // Call the pop() method on this instance
     if (this->pop(packet_to_send)) {
         if (mavlink_comm_port[MAVLINK_COMM_2] != nullptr) {
-            gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using Drain path for chan %d", (int)MAVLINK_COMM_2); // DEBUG
+            // gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using Drain path for chan %d", (int)MAVLINK_COMM_2); // DEBUG
             mavlink_comm_port[MAVLINK_COMM_2]->write(packet_to_send.buf, packet_to_send.len);
-            g_syslink_ready = false;    // Add to reset the flag?
+            // g_syslink_ready = false;    // Add to reset the flag?
         }
     }
 }

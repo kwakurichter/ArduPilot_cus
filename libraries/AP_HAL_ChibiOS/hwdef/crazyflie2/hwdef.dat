@@ -73,8 +73,8 @@ PB6 I2C1_SCL I2C1 # E_SCL
 PB7 I2C1_SDA I2C1 # E_SCL
 
 # radio setup 
-# PA4 NRF_FLOW_CTRL INPUT # goes low when we can write to uart
-PA4 NRF_FLOW_CTRL INPUT GPIO(54)    # to reference in nrf driver
+PA4 NRF_FLOW_CTRL INPUT # goes low when we can write to uart
+# PA4 NRF_FLOW_CTRL INPUT GPIO(54)    # to reference in nrf driver
 #PB13 NRF_SWCLK
 #PB15 NRF_SWIO
 PC6 USART6_TX USART6 # NRF_RT
@@ -140,6 +140,9 @@ include ../include/minimize_features.inc
 define AP_RANGEFINDER_ENABLED 1     #FlowDeck Support
 define AP_OPTICALFLOW_ENABLED 1     #FlowDeck Support
 define AP_SCRIPTING_ENABLED 1       #Lua Script Support
+
+#undef HAL_HIGH_LATENCY2_ENABLED
+#define HAL_HIGH_LATENCY2_ENABLED 1  #NRF Radio Support
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter

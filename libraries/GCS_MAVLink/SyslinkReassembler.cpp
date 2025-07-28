@@ -28,7 +28,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
         case ParseState::WAIT_SYNC1:
             if (c == SYSLINK_SYNC1) {
                 // We've already added 'c', so buffer starts with SYNC1
-                gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): SYNC detected\n"); // DEBUG
+                // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): SYNC detected\n"); // DEBUG
                 state = ParseState::WAIT_SYNC2;
             } else {
                 reset_parser_state(); // Not a start, reset
@@ -38,7 +38,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
 
         case ParseState::WAIT_SYNC2:
             if (c == SYSLINK_SYNC2 && current_syslink_frame_buffer.size() == 2 && current_syslink_frame_buffer[0] == SYSLINK_SYNC1) {
-                gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): SYNC detected\n"); // DEBUG
+                // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): SYNC detected\n"); // DEBUG
                 state = ParseState::READ_TYPE_LENGTH;
             } else { // Sequencing error or not SYNC2
                 reset_parser_state();
@@ -67,7 +67,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                     reset_parser_state(); // Invalid length
                 } else {
                     syslink_payload_bytes_expected = syslink_length_field + 2; // data_slice + CRC
-                    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): HDR TYPE=%u LEN=%u\n", syslink_type_byte, syslink_length_field); // DEBUG
+                    // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): HDR TYPE=%u LEN=%u\n", syslink_type_byte, syslink_length_field); // DEBUG
                     state = ParseState::WAIT_CRTP_HEADER;
                 }
             }
@@ -86,7 +86,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                 }
                 else {
                     // Length is valid for MAVLink, proceed to read the payload
-                    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink: Parsing packet for CRTP Port: %u\n", port);   // DEBUG
+                    // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink: Parsing packet for CRTP Port: %u\n", port);   // DEBUG
                     state = ParseState::READ_PAYLOAD_AND_CRC;
                 }
             } else {
@@ -116,12 +116,12 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                     //gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Frame CRC OK\n"); // DEBUG
 
                     // Create an ExpandingString to build the hex dump of the full packet
-                    ExpandingString full_packet_hex_dump;
-                    full_packet_hex_dump.printf("Syslink Full Pkt OK: ");
-                    for (const uint8_t byte_val : current_syslink_frame_buffer) {
-                        full_packet_hex_dump.printf("%02X ", byte_val);
-                    }
-                    gcs().send_text(MAV_SEVERITY_DEBUG, "%s", full_packet_hex_dump.get_string()); // DEBUG
+                    // ExpandingString full_packet_hex_dump;
+                    // full_packet_hex_dump.printf("Syslink Full Pkt OK: ");
+                    // for (const uint8_t byte_val : current_syslink_frame_buffer) {
+                    //    full_packet_hex_dump.printf("%02X ", byte_val);
+                    // }
+                    // gcs().send_text(MAV_SEVERITY_DEBUG, "%s", full_packet_hex_dump.get_string()); // DEBUG
 
                     handle_complete_syslink_fragment(&frame_ptr[4], syslink_length_field, mavlink_byte_pusher);
                 } else {
@@ -146,20 +146,20 @@ void SyslinkToMAVLinkReassembler::handle_complete_syslink_fragment(
     uint8_t original_syslink_length_field, // This is the value of the LENGTH_FIELD from Syslink header
     std::function<void(uint8_t mav_byte)> mavlink_byte_pusher) {
 
-    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Entered handle_frag for LEN=%d\n", original_syslink_length_field); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): RawFragHdrBytes: %02X %02X %02X %02X %02X %02X\n", frag_data_start[0], frag_data_start[1], frag_data_start[2], frag_data_start[3], frag_data_start[4], frag_data_start[5]); // DEBUG
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Entered handle_frag for LEN=%d\n", original_syslink_length_field); // DEBUG
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): RawFragHdrBytes: %02X %02X %02X %02X %02X %02X\n", frag_data_start[0], frag_data_start[1], frag_data_start[2], frag_data_start[3], frag_data_start[4], frag_data_start[5]); // DEBUG
 
     // Skip TYPE and LENGTH_FIELD to get to fragment_header
     const uint8_t* fragment_header = frag_data_start + 1; // The MAVLink fragment header now starts *after* the 1-byte CRTP header
 
     uint16_t full_id = fragment_header[0] | (fragment_header[1] << 8);
-    gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: full_id = 0x%04X (from %02X %02X)", (unsigned)full_id, fragment_header[0], fragment_header[1]); // DEBUG
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: full_id = 0x%04X (from %02X %02X)", (unsigned)full_id, fragment_header[0], fragment_header[1]); // DEBUG
     uint16_t original_mav_len = fragment_header[2] | (fragment_header[3] << 8);
-    gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: original_mav_len = %u (from %02X %02X)", (unsigned)original_mav_len, fragment_header[2], fragment_header[3]); // DEBUG
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: original_mav_len = %u (from %02X %02X)", (unsigned)original_mav_len, fragment_header[2], fragment_header[3]); // DEBUG
     uint8_t total_frags = fragment_header[4];
-    gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: total_frags = %u (from %02X)", (unsigned)total_frags, fragment_header[4]); // DEBUG
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: total_frags = %u (from %02X)", (unsigned)total_frags, fragment_header[4]); // DEBUG
     uint8_t seq = fragment_header[5];
-    gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: seq = %u (from %02X)", (unsigned)seq, fragment_header[5]); // DEBUG
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Debug: seq = %u (from %02X)", (unsigned)seq, fragment_header[5]); // DEBUG
 
     const uint8_t* mavlink_slice_ptr = fragment_header + 6;
     int mavlink_slice_len = original_syslink_length_field - 7; // 1 is the CRTP header, 6 is size of fragment header
@@ -169,8 +169,8 @@ void SyslinkToMAVLinkReassembler::handle_complete_syslink_fragment(
         return;
     }
 
-    gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Parsed Frag ID=0x%04X, Seq=%u/%u, OrigMAVLen=%u, SliceLen=%d\n", (unsigned)full_id, (unsigned)seq, (unsigned)total_frags,
-    (unsigned)original_mav_len, mavlink_slice_len); // DEBUG
+    // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Parsed Frag ID=0x%04X, Seq=%u/%u, OrigMAVLen=%u, SliceLen=%d\n", (unsigned)full_id, (unsigned)seq, (unsigned)total_frags,
+    // (unsigned)original_mav_len, mavlink_slice_len); // DEBUG
 
     FragmentBuffer& buf = reassembly_buffers[full_id]; // Creates if not exists
     if (buf.frags.empty()) { // First fragment for this ID
@@ -189,7 +189,7 @@ void SyslinkToMAVLinkReassembler::handle_complete_syslink_fragment(
 
     if (buf.frags.find(seq) == buf.frags.end()) { // Store if new
         buf.frags[seq] = uint8_t_vector(mavlink_slice_ptr, mavlink_slice_ptr + mavlink_slice_len);
-        gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Frag RX ID=%u, Seq=%u/%u, SliceLen=%d\n", full_id, seq, total_frags, mavlink_slice_len); // DEBUG
+        // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Frag RX ID=%u, Seq=%u/%u, SliceLen=%d\n", full_id, seq, total_frags, mavlink_slice_len); // DEBUG
     } else {
         // Duplicate fragment, ignore or log
     }

@@ -12,7 +12,7 @@ struct RadioPacket {
 };
 
 // The size of the ring buffer (how many packets it can hold)
-#define RADIO_BUFFER_SIZE 32
+#define RADIO_BUFFER_SIZE 200
 
 // A thread-safe ring buffer for radio packets
 class RadioPacketBuffer {
