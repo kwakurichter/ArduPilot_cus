@@ -117,11 +117,6 @@
  
  extern const AP_HAL::HAL& hal;
  
- //static void drain_radio_buffer_task()
- //{
- //    RadioPacketBuffer::get_instance().drain_task();
- //}
- 
  static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
  
  struct GCS_MAVLINK::LastRadioStatus GCS_MAVLINK::last_radio_status;
@@ -175,7 +170,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
     const uint32_t start_ms = AP_HAL::millis();
     while (port->tx_pending()) {
         if (AP_HAL::millis() - start_ms > 100) {
-            gcs().send_text(MAV_SEVERITY_WARNING, "NRF: UART TX timeout");
+            // gcs().send_text(MAV_SEVERITY_WARNING, "NRF: UART TX timeout");
             break;
         }
         hal.scheduler->delay(1);
@@ -2001,10 +1996,10 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
                      }
                     
                      // DEBUG - Not working?
-                     hal.gpio->write(11, 1); // Turn ON LED_GREEN_L (PC1, pin 11)
-                     hal.scheduler->delay_microseconds(1000); // Wait 1000 microseconds (1ms)
-                     hal.gpio->write(11, 0); // Immediately turn OFF for a quick flash
-                     gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1)->MAV: Decoded MAVLink MSG ID %u\n", msg.msgid); 
+                     //hal.gpio->write(11, 1); // Turn ON LED_GREEN_L (PC1, pin 11)
+                     //hal.scheduler->delay_microseconds(1000); // Wait 1000 microseconds (1ms)
+                     //hal.gpio->write(11, 0); // Immediately turn OFF for a quick flash
+                     //gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1)->MAV: Decoded MAVLink MSG ID %u\n", msg.msgid); 
                      // DEBUG
 
                      hal.util->persistent_data.last_mavlink_msgid = msg.msgid;

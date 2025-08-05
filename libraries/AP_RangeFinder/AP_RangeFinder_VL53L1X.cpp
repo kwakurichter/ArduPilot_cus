@@ -50,7 +50,7 @@ AP_RangeFinder_Backend *AP_RangeFinder_VL53L1X::detect(RangeFinder::RangeFinder_
     }
     AP_RangeFinder_VL53L1X *sensor = new AP_RangeFinder_VL53L1X(_state, _params, std::move(dev));
     if (!sensor) {
-        hal.console->printf("VL53L1X: Failed to allocate sensor object\n"); //DEBUG
+        // hal.console->printf("VL53L1X: Failed to allocate sensor object\n"); //DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: Failed to allocate sensor object\n"); //DEBUG
         return nullptr;
     }
@@ -59,7 +59,7 @@ AP_RangeFinder_Backend *AP_RangeFinder_VL53L1X::detect(RangeFinder::RangeFinder_
         delete sensor;
         return nullptr;
     }
-    hal.console->printf("VL53L1X: Detected and initialized successfully\n"); //DEBUG
+    // hal.console->printf("VL53L1X: Detected and initialized successfully\n"); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Detected and initialized successfully\n"); //DEBUG
     return sensor;
 }
@@ -72,31 +72,31 @@ bool AP_RangeFinder_VL53L1X::init()
     WITH_SEMAPHORE(dev->get_semaphore()); // Ensure exclusive I2C access during init
 
     // Ensure sensor is booted
-    hal.console->printf("VL53L1X: Waiting for device boot...\n"); //DEBUG
+    // hal.console->printf("VL53L1X: Waiting for device boot...\n"); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Waiting for device boot...\n"); //DEBUG
     st_status = VL53L1_WaitDeviceBooted(st_dev_ptr);
     if (st_status != VL53L1_ERROR_NONE) {
-        hal.console->printf("VL53L1X: WaitDeviceBooted failed (%d)\n", (int)st_status); // DEBUG
+        // hal.console->printf("VL53L1X: WaitDeviceBooted failed (%d)\n", (int)st_status); // DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: WaitDeviceBooted failed (%d)\n", (int)st_status); //DEBUG
         return false;
     }
 
     // Data initialization (loads NVM, etc.)
-    hal.console->printf("VL53L1X: Performing DataInit...\n"); //DEBUG
+    // hal.console->printf("VL53L1X: Performing DataInit...\n"); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Performing DataInit...\n"); //DEBUG
     st_status = VL53L1_DataInit(st_dev_ptr);
     if (st_status != VL53L1_ERROR_NONE) {
-        hal.console->printf("VL53L1X: DataInit failed (%d)\n", (int)st_status); //DEBUG
+        // hal.console->printf("VL53L1X: DataInit failed (%d)\n", (int)st_status); //DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: DataInit failed (%d)\n", (int)st_status); //DEBUG
         return false;
     }
 
     // Static initialization (applies base configuration)
-    hal.console->printf("VL53L1X: Performing StaticInit...\n"); //DEBUG
+    // hal.console->printf("VL53L1X: Performing StaticInit...\n"); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Performing StaticInit...\n"); //DEBUG
     st_status = VL53L1_StaticInit(st_dev_ptr);
     if (st_status != VL53L1_ERROR_NONE) {
-        hal.console->printf("VL53L1X: StaticInit failed (%d)\n", (int)st_status); //DEBUG
+        // hal.console->printf("VL53L1X: StaticInit failed (%d)\n", (int)st_status); //DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: StaticInit failed (%d)\n", (int)st_status); //DEBUG
         return false;
     }
@@ -108,56 +108,56 @@ bool AP_RangeFinder_VL53L1X::init()
 
     if (rf_type == RangeFinder::Type::VL53L1X_Short) {
         mode_to_set = VL53L1_DISTANCEMODE_SHORT;
-        hal.console->printf("VL53L1X: Setting Distance Mode to Short...\n"); //DEBUG
+        // hal.console->printf("VL53L1X: Setting Distance Mode to Short...\n"); //DEBUG
         gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Setting Distance Mode to Short...\n"); //DEBUG
     } else {
         // Default to Medium or Long for other VL53L1X types,
         // or use another parameter (RNGFNDx_MODE) to select.
         // For now, let's default to Medium
         mode_to_set = VL53L1_DISTANCEMODE_MEDIUM;
-        hal.console->printf("VL53L1X: Setting Distance Mode to Medium (Default)...\n"); //DEBUG
+        // hal.console->printf("VL53L1X: Setting Distance Mode to Medium (Default)...\n"); //DEBUG
         gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Setting Distance Mode to Medium (Default)...\n"); //DEBUG
     }
 
     st_status = VL53L1_SetDistanceMode(st_dev_ptr, mode_to_set);
     if (st_status != VL53L1_ERROR_NONE) {
-        hal.console->printf("VL53L1X: SetDistanceMode failed (%d)\n", (int)st_status); //DEBUG
+        // hal.console->printf("VL53L1X: SetDistanceMode failed (%d)\n", (int)st_status); //DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: SetDistanceMode failed (%d)\n", (int)st_status); //DEBUG
         return false;
     }
 
-    hal.console->printf("VL53L1X: Setting Timing Budget to %u us...\n", (unsigned)VL53L1X_TIMING_BUDGET_US); //DEBUG
+    // hal.console->printf("VL53L1X: Setting Timing Budget to %u us...\n", (unsigned)VL53L1X_TIMING_BUDGET_US); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Setting Timing Budget to %u us...\n", (unsigned)VL53L1X_TIMING_BUDGET_US); //DEBUG
     st_status = VL53L1_SetMeasurementTimingBudgetMicroSeconds(st_dev_ptr, VL53L1X_TIMING_BUDGET_US); // 25ms
     if (st_status != VL53L1_ERROR_NONE) {
-        hal.console->printf("VL53L1X: SetMeasurementTimingBudgetMicroSeconds failed (%d)\n", (int)st_status); //DEBUG
+        // hal.console->printf("VL53L1X: SetMeasurementTimingBudgetMicroSeconds failed (%d)\n", (int)st_status); //DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: SetMeasurementTimingBudgetMicroSeconds failed (%d)\n", (int)st_status); //DEBUG
         return false;
     }
 
     // Set inter-measurement period (match timing budget for continuous mode)
-    hal.console->printf("VL53L1X: Setting Inter-Measurement Period to %u ms...\n", (unsigned)VL53L1X_INTER_MEASUREMENT_MS); //DEBUG
+    // hal.console->printf("VL53L1X: Setting Inter-Measurement Period to %u ms...\n", (unsigned)VL53L1X_INTER_MEASUREMENT_MS); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Setting Inter-Measurement Period to %u ms...\n", (unsigned)VL53L1X_INTER_MEASUREMENT_MS); //DEBUG
     st_status = VL53L1_SetInterMeasurementPeriodMilliSeconds(st_dev_ptr, VL53L1X_INTER_MEASUREMENT_MS);
      if (st_status != VL53L1_ERROR_NONE) {
-        hal.console->printf("VL53L1X: SetInterMeasurementPeriodMilliSeconds failed (%d)\n", (int)st_status); //DEBUG
+        // hal.console->printf("VL53L1X: SetInterMeasurementPeriodMilliSeconds failed (%d)\n", (int)st_status); //DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: SetInterMeasurementPeriodMilliSeconds failed (%d)\n", (int)st_status); //DEBUG
         return false;
     }
 
     // --- Start Measurement ---
-    hal.console->printf("VL53L1X: Starting Measurement...\n"); //DEBUG
+    // hal.console->printf("VL53L1X: Starting Measurement...\n"); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Starting Measurement...\n"); //DEBUG
     st_status = VL53L1_StartMeasurement(st_dev_ptr);
     if (st_status != VL53L1_ERROR_NONE) {
-        hal.console->printf("VL53L1X: StartMeasurement failed (%d)\n", (int)st_status); //DEBUG
+        // hal.console->printf("VL53L1X: StartMeasurement failed (%d)\n", (int)st_status); //DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: StartMeasurement failed (%d)\n", (int)st_status); //DEBUG
         return false;
     }
 
     is_initialized = true;
     set_status(RangeFinder::Status::Good); // Set initial status
-    hal.console->printf("VL53L1X: Initialization complete.\n"); //DEBUG
+    // hal.console->printf("VL53L1X: Initialization complete.\n"); //DEBUG
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Initialization complete.\n"); //DEBUG
     return true;
 }
@@ -193,7 +193,7 @@ void AP_RangeFinder_VL53L1X::update(void)
         // Log periodically
         static uint32_t last_comm_fail_ms = 0;
         if (AP_HAL::millis() - last_comm_fail_ms > 2000) {
-            hal.console->printf("VL53L1X: GetMeasurementDataReady failed (%d)\n", (int)st_status); //DEBUG
+            // hal.console->printf("VL53L1X: GetMeasurementDataReady failed (%d)\n", (int)st_status); //DEBUG
             gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: GetMeasurementDataReady failed (%d)\n", (int)st_status); //DEBUG
             last_comm_fail_ms = AP_HAL::millis();
         }
@@ -229,7 +229,7 @@ void AP_RangeFinder_VL53L1X::update(void)
             if (st_status == VL53L1_ERROR_NONE) {
                 read_ok = true; // Mark as successful read and trigger
             } else {
-                hal.console->printf("VL53L1X: ClearInterruptAndStartMeasurement failed (%d)\n", (int)st_status); //DEBUG
+                // hal.console->printf("VL53L1X: ClearInterruptAndStartMeasurement failed (%d)\n", (int)st_status); //DEBUG
                 gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: ClearInterruptAndStartMeasurement failed (%d)\n", (int)st_status); //DEBUG
                 // Continue processing the data we got, but flag init state
                  is_initialized = false;
@@ -237,7 +237,7 @@ void AP_RangeFinder_VL53L1X::update(void)
                  set_status(RangeFinder::Status::NoData);
             }
         } else {
-             hal.console->printf("VL53L1X: GetRangingMeasurementData failed (%d)\n", (int)st_status); //DEBUG
+             // hal.console->printf("VL53L1X: GetRangingMeasurementData failed (%d)\n", (int)st_status); //DEBUG
              gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: GetRangingMeasurementData failed (%d)\n", (int)st_status); //DEBUG
              // Attempt to clear interrupt anyway to potentially recover state
              VL53L1_ClearInterruptAndStartMeasurement(st_dev_ptr);
@@ -284,8 +284,8 @@ void AP_RangeFinder_VL53L1X::update(void)
             // Measurement reported an error status by the sensor
              static uint32_t last_err_log_ms = 0;
              if (AP_HAL::millis() - last_err_log_ms > 2000) {
-                  hal.console->printf("VL53L1X: Invalid measurement status: %u\n", measurement_data.RangeStatus); //DEBUG
-                  gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Invalid measurement status: %u\n", measurement_data.RangeStatus); //DEBUG
+                  // hal.console->printf("VL53L1X: Invalid measurement status: %u\n", measurement_data.RangeStatus); //DEBUG
+                  gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: Invalid measurement status: %u\n", measurement_data.RangeStatus); //DEBUG
                   last_err_log_ms = AP_HAL::millis();
              }
             set_status(RangeFinder::Status::NoData); // Report NoData for transient sensor errors

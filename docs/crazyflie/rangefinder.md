@@ -58,7 +58,7 @@ if (_add_backend(AP_RangeFinder_VL53L1X::detect(state[instance], params[instance
 ```
 This simplifies the driver implementation as we hard-code the sensor distance mode rather than passing a separate parameter. Note that we may revert in the future if necessary.
 
-The next step is to replace the existing driver implementation and header files with the attached files.
+The next step is to replace the existing driver [implementation](../../libraries/AP_RangeFinder/AP_RangeFinder_VL53L1X.cpp) and [header](../../libraries/AP_RangeFinder/AP_RangeFinder_VL53L1X.h) files with the attached files.
 
 - Replace the following implementation and header file respectively:
 ```
@@ -66,7 +66,7 @@ path\...\libraries\AP_RangeFinder\AP_RangeFinder_VL53L1X.cpp
 
 path\...\libraries\AP_RangeFinder\AP_RangeFinder_VL53L1X.h
 ```
-As mentioned previously, the new driver uses the ST Microelectronics API directly instead of manually handling the device. The next step is thus to add the 3rd party API to the ArduPilot firmware.
+As mentioned previously, the new driver uses the ST Microelectronics API directly instead of manually handling the device. The next step is thus to add the [3rd Party API](../../libraries/vl53l1x_api) to the ArduPilot firmware.
 
 - Navigate to the libraries folder:
 ```
@@ -143,7 +143,7 @@ Build failed -> task in 'bin/arducopter' failed (exit status 1)
 Chances are you have exceeded the memory limit. Please reference the [Freeing up Memory Guide](freeing_up_memory.md) for detailed instructions on how to minimize the build size.
 
 ## Testing and Using ToF
-Once you have successfully flashed your custom firmware with range finders enabled, using the flow deck is relatively simple. Start by changing the parameter “RNGFNDX_ADDR” from 0 to 41 upon startup of your drone.
+Once you have successfully flashed your custom firmware with range finders enabled, using the flow deck is relatively simple. Start by changing the parameter “RNGFNDX_TYPE” from 0 to 16 upon startup of your drone.
 
 After changing the parameter value and saving it to memory, restart the system by either cutting power to the drone directly or sending a reboot command through MAVLink.
 

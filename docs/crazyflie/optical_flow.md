@@ -7,7 +7,7 @@ Optical flow velocity estimation works by analyzing successive frames from a dow
 
 *Gordon, Andrew. “Adventures in Optical Flow.” Technology, Thinking, Doing, 20 June 2021, www.andrewgordon.me/posts/Adventures-in-Optical-Flow/.*
 
-Because the physical distance each pixel represents depends on the drone’s height above ground, the system also uses a ToF sensor’s vertical distance reading to establish a scale factor (approximately height / focal length).
+Because the physical distance each pixel represents depends on the drone’s height above ground, the system also uses a Time of Flight (ToF) sensor’s vertical distance reading to establish a scale factor (approximately height / focal length).
 
 Multiplying the measured pixel shifts by this scale and dividing by the time between frames yields the horizontal velocity of the vehicle relative to the ground. By continuously updating with each new image and height measurement, the autopilot obtains real time, drift corrected velocity estimates even in GPS denied environments.
 
@@ -134,7 +134,7 @@ path\...\libraries\AP_OpticalFlow\AP_OpticalFlow_config.h
 #ifndef AP_OPTICALFLOW_FLOWDECK_ENABLED #define AP_OPTICALFLOW_FLOWDECK_ENABLED AP_OPTICALFLOW_BACKEND_DEFAULT_ENABLED
 ```
 Finally, we are ready to add our new driver to the optical flow library.
-- In the optical flow directory, add the attached driver implementation and header file (“AP_OpticalFlow_FlowDeck.cpp” and “AP_OpticalFlow_FlowDeck.h” respectively).
+- In the optical flow directory, add the attached driver [implementation](../../libraries/AP_OpticalFlow/AP_OpticalFlow_FlowDeck.cpp) and [header](../../libraries/AP_OpticalFlow/AP_OpticalFlow_FlowDeck.h) file (“AP_OpticalFlow_FlowDeck.cpp” and “AP_OpticalFlow_FlowDeck.h” respectively).
 ```
 path\...\libraries\AP_OpticalFlow\
 ```
@@ -153,7 +153,7 @@ If you attempt to compile your firmware and get a build failed error:
 ```
 Build failed -> task in 'bin/arducopter' failed (exit status 1)
 ```
-Chances are you have exceeded the memory limit. Please reference the [Freeing up Memory Guide](freeing_up_memory.md) for detailed instructions on how to the build size.
+Chances are you have exceeded the memory limit. Please reference the [Freeing up Memory Guide](freeing_up_memory.md) for detailed instructions on how to reduce the build size.
 
 ## Testing and Using Optical Flow
 Once you have successfully flashed your custom firmware with optical flow enabled, using the flow deck is relatively simple. Start by changing the new parameter FLOW_TYPE from 0 to 9 upon startup of your drone.

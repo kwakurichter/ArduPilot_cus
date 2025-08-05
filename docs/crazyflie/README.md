@@ -38,19 +38,30 @@ This section provides a guide to setting up a Crazyflie drone with the custom Ar
 1. **Compiling and Flashing the Firmware**
 The first step is to compile the custom ArduPilot firmware and flash it onto the Crazyflie. This process requires setting up a build environment for ArduPilot on your operating system.
 
-For detailed instructions, please refer to the [Compiling & Flashing Guide](compiling_and_flashing.md).
+    For detailed instructions, please refer to the [Compiling & Flashing Guide](compiling_and_flashing.md).
 
 2. **Enabling Onboard Sensors**
 For indoor navigation, you will need to enable the optical flow and rangefinder sensors on the Flow Deck.
 
-**Optical Flow**: For detailed instructions on enabling the PWM3901 optical flow sensor, see the [Optical Flow Guide](optical_flow.md).
+    **Optical Flow**: For detailed instructions on enabling the PWM3901 optical flow sensor, see the [Optical Flow Guide](optical_flow.md).
 
-**Rangefinder (ToF)**: To enable the VL53L1x Time-of-Flight sensor, follow the [RangeFinder Guide](rangefinder.md).
+    **Rangefinder (ToF)**: To enable the VL53L1x Time-of-Flight sensor, follow the [RangeFinder Guide](rangefinder.md).
 
-3. **Using Lua Scripting for Custom Behavior**
+3. **Enabling Radio Communication**
+To enable peer-to-peer communication and to connect to a Ground Control Station, the Crazyflie's radio system must be configured. 
+
+    This is a two-part process involving the secondary nRF51 radio MCU and the main STM32 flight controller. 
+
+    **First**, the nRF51 MCU must be flashed with a modified firmware. Please reference the [Flashing the NRF Guide](flashing_the_nrf.md).
+
+    **Second**, a MAVLink-to-Syslink translation driver must be enabled in the ArduPilot firmware. Please reference the [CrazyRadio Guide](crazyradio.md).
+
+    Note that this driver is still in active development. Currently, you will need to use a custom Ground Control Station to use the new radio driver ([Custom GCS Guide](custom_gcs_guide.md)).
+
+4. **Using Lua Scripting for Custom Behavior**
 Lua scripting allows you to add custom logic to the drone's behavior without modifying the core C++ flight code. This is ideal for implementing and testing new algorithms.
 
-To get started with Lua scripting on the Crazyflie, please see the [Lua Scripting Guide](lua_scripting.md).
+    To get started with Lua scripting on the Crazyflie, please see the [Lua Scripting Guide](lua_scripting.md).
 
 ## 💻 Development Notes
 ### Memory Optimization
@@ -69,7 +80,6 @@ This platform provides a foundation for a wide range of swarm robotics research.
 - Implementing and testing specific differential game-based defensive algorithms.
 - Integrating the AI Deck for more intensive onboard computation.
 - Developing a user-friendly interface for managing swarm experiments.
-- Porting the NRF51 MCU for onboard radio communication.
 - Implementing a peer-to-peer communication protocol for larger swarms.
 
 ## ✍️ Author

@@ -56,14 +56,14 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
             if (current_syslink_frame_buffer.size() == 3) { // Byte for TYPE received
                 syslink_type_byte = c;
                 if ((syslink_type_byte != EXPECTED_SYSLINK_TYPE_MAVLINK) && (syslink_type_byte != EXPECTED_SYSLINK_TYPE_RADIO)) {
-                    gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Bad Type %u\n", c); // DEBUG
+                    // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Bad Type %u\n", c); // DEBUG
                     reset_parser_state(); // Invalid type
                     // 'c' was consumed as part of an invalid Syslink header
                 }
             } else if (current_syslink_frame_buffer.size() == 4) { // Byte for LENGTH_FIELD received
                 syslink_length_field = c;
                 if (syslink_length_field < 1) { // We only do a basic sanity check here. A payload must have at least 1 byte for the CRTP header. The more specific length check for MAVLink packets is moved to after we've checked the port.
-                    gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Length %u too small\n", c); // DEBUG
+                    // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Length %u too small\n", c); // DEBUG
                     reset_parser_state(); // Invalid length
                 } else {
                     syslink_payload_bytes_expected = syslink_length_field + 2; // data_slice + CRC
@@ -81,7 +81,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
             if (port == 0 || port == 15 || port == 11) { // temporarily accept 15 for debugging purposes
                 // Payload must contain at least a 1-byte CRTP header and a 6-byte MAVLink fragment header.
                 if (syslink_length_field < 7) {
-                    gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: MAVLink fragment length %u is too small\n", syslink_length_field); // DEBUG
+                    // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: MAVLink fragment length %u is too small\n", syslink_length_field); // DEBUG
                     reset_parser_state();
                 }
                 else {
@@ -91,7 +91,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                 }
             } else {
                 // This is for a different CRTP port, so we discard the packet
-                gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Discarding packet for CRTP Port: %u\n", port);    // DEBUG
+                // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Discarding packet for CRTP Port: %u\n", port);    // DEBUG
                 reset_parser_state();
             }
         }
@@ -125,7 +125,7 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
 
                     handle_complete_syslink_fragment(&frame_ptr[4], syslink_length_field, mavlink_byte_pusher);
                 } else {
-                    gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Frame CRC FAIL!\n"); // DEBUG
+                    // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Frame CRC FAIL!\n"); // DEBUG
                 }
                 reset_parser_state(); // Done with this frame
             }
@@ -178,7 +178,7 @@ void SyslinkToMAVLinkReassembler::handle_complete_syslink_fragment(
         buf.total_frags = total_frags;
     } else {
         if (buf.original_len != original_mav_len || buf.total_frags != total_frags) {
-            gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Inconsistent header for ID %u\n", full_id); // DEBUG
+            // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Inconsistent header for ID %u\n", full_id); // DEBUG
             reassembly_buffers.erase(full_id);
             // Potentially start new if this is a valid first fragment
             // For now, just discard and wait for a clean sequence for this full_id
@@ -214,12 +214,12 @@ void SyslinkToMAVLinkReassembler::handle_complete_syslink_fragment(
                 for (uint8_t mav_byte : reassembled_mavlink_msg) {
                     mavlink_byte_pusher(mav_byte);
                 }
-                gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): MAVLink Reassembled! ID=%u, TotalLen=%u\n", full_id, original_mav_len); // DEBUG
+                // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): MAVLink Reassembled! ID=%u, TotalLen=%u\n", full_id, original_mav_len); // DEBUG
             } else {
-                gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Reassembled len mismatch for ID %u\n", full_id); // DEBUG
+                // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Reassembled len mismatch for ID %u\n", full_id); // DEBUG
             }
         } else {
-            gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Missing frags for ID %u on completion check\n", full_id); // DEBUG
+            // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Missing frags for ID %u on completion check\n", full_id); // DEBUG
         }
         reassembly_buffers.erase(full_id); // Clean up this assembly buffer
     }

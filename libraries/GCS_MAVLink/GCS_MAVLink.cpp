@@ -26,7 +26,6 @@ This provides some support code and variables for MAVLink enabled sketches
 
 #include "GCS.h"
 #include "GCS_MAVLink.h"
-#include "mavlink_fragment.h"
 #include "RadioBuffer.h"
 
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
@@ -155,7 +154,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         // Check if the radio buffer has enough space for ALL fragments of this message
         if (RadioPacketBuffer::get_instance().free_space() < total_syslink_fragments) {
             // Not enough space for the entire message, drop it.
-            gcs().send_text(MAV_SEVERITY_WARNING, "Radio buffer full, MAVLink msg dropped!");
+            // gcs().send_text(MAV_SEVERITY_WARNING, "Radio buffer full, MAVLink msg dropped!");
             return;
         }
 
@@ -211,32 +210,6 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
 
     // For all other MAVLink channels, use the regular send
     mavlink_comm_port[chan]->write(buf, len);
-}
-
-void comm_send_buffer_old(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
-{
-    if (!valid_channel(chan) || mavlink_comm_port[chan] == nullptr || chan_discard[chan]) {
-        return;
-    }
-#if HAL_HIGH_LATENCY2_ENABLED
-    // if it's a disabled high latency channel, don't send
-    GCS_MAVLINK *link = gcs().chan(chan);
-    if (link->is_high_latency_link && !gcs().get_high_latency_status()) {
-        return;
-    }
-#endif
-    if (gcs_alternative_active[chan]) {
-        // an alternative protocol is active
-        return;
-    }
-    const size_t written = mavlink_comm_port[chan]->write(buf, len);
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
-    if (written < len && !mavlink_comm_port[chan]->is_write_locked()) {
-        AP_HAL::panic("Short write on UART: %lu < %u", (unsigned long)written, len);
-    }
-#else
-    (void)written;
-#endif
 }
 
 /*

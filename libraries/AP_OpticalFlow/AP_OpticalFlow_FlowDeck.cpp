@@ -43,8 +43,8 @@ AP_OpticalFlow_FlowDeck::AP_OpticalFlow_FlowDeck(const char *devname, AP_Optical
 // --- Detect the sensor ---
 AP_OpticalFlow_FlowDeck *AP_OpticalFlow_FlowDeck::detect(const char *devname, AP_OpticalFlow &_frontend)
 {
-    hal.console->printf("FlowDeck::detect START\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck::detect START\n"); // DEBUG
+    // hal.console->printf("FlowDeck::detect START\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck::detect START\n"); // DEBUG
     AP_OpticalFlow_FlowDeck *sensor = new AP_OpticalFlow_FlowDeck(devname, _frontend);
     if (!sensor) {
         return nullptr;
@@ -59,15 +59,15 @@ AP_OpticalFlow_FlowDeck *AP_OpticalFlow_FlowDeck::detect(const char *devname, AP
 // --- Setup the device ---
 bool AP_OpticalFlow_FlowDeck::setup_sensor()
 {
-    hal.console->printf("FlowDeck::setup_sensor START\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck::setup_sensor START\n"); // DEBUG
+    // hal.console->printf("FlowDeck::setup_sensor START\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck::setup_sensor START\n"); // DEBUG
     if (!_dev) {
-        hal.console->printf("FlowDeck: FAILED to get SPI device\n"); // DEBUG
+        // hal.console->printf("FlowDeck: FAILED to get SPI device\n"); // DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: FAILED to get SPI device\n"); // DEBUG
         return false;
     }
-    hal.console->printf("FlowDeck: Got SPI device OK\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Got SPI device OK\n"); // DEBUG
+    // hal.console->printf("FlowDeck: Got SPI device OK\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Got SPI device OK\n"); // DEBUG
  
     // Get semaphore (threading)
     WITH_SEMAPHORE(_dev->get_semaphore());
@@ -76,8 +76,8 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     _dev->set_chip_select(false);  // HIGH (inactive)
     hal.scheduler->delay(40);  // Brief delay
 
-    hal.console->printf("FlowDeck: Resetting sensor...\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Resetting sensor...\n"); // DEBUG
+    // hal.console->printf("FlowDeck: Resetting sensor...\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Resetting sensor...\n"); // DEBUG
     // Reset sequence by toggling CS: HIGH->LOW->HIGH
     _dev->set_chip_select(false);  // HIGH (inactive)
     hal.scheduler->delay(2);  // Brief delay
@@ -93,23 +93,23 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     // Power on reset
     reg_write(0x3A, 0x5A);
     hal.scheduler->delay(5);  // delay
-    hal.console->printf("FlowDeck: Power on reset sent.\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Power on reset sent.\n"); // DEBUG
+    // hal.console->printf("FlowDeck: Power on reset sent.\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Power on reset sent.\n"); // DEBUG
     // --- End of Reset Sequence ---
 
     // --- ID Check with Retries ---
-    hal.console->printf("FlowDeck: Checking ID (will retry up to 10 times)...\n");   // DEBUG
+    // hal.console->printf("FlowDeck: Checking ID (will retry up to 10 times)...\n");   // DEBUG
     hal.console->flush();
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Checking ID (will retry up to 10 times)...\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Checking ID (will retry up to 10 times)...\n"); // DEBUG
     uint8_t id = 0;
     uint8_t id_inv = 0;
     bool id_ok = false;
     for (int i = 0; i < 10; i++) { // Loop up to 5 times
         id = reg_read(REG_ID);         // Read register 0x00
         id_inv = reg_read(REG_ID_INV); // Read register 0x5F
-        hal.console->printf("FlowDeck: Attempt %d: Read ID=0x%02X, InvID=0x%02X\n", i + 1, id, id_inv);
+        // hal.console->printf("FlowDeck: Attempt %d: Read ID=0x%02X, InvID=0x%02X\n", i + 1, id, id_inv);
         hal.console->flush();
-        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Attempt %d: Read ID=0x%02X, InvID=0x%02X\n", i + 1, id, id_inv); // DEBUG
+        gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Attempt %d: Read ID=0x%02X, InvID=0x%02X\n", i + 1, id, id_inv); // DEBUG
 
         if (id == 0x49 && id_inv == 0xB6) { // Check for expected values
             id_ok = true;
@@ -122,30 +122,30 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
 
     // Check if ID was successful after retries
     if (!id_ok) {
-         hal.console->printf("FlowDeck: ID check FAILED after multiple attempts!\n");
+         // hal.console->printf("FlowDeck: ID check FAILED after multiple attempts!\n");
          hal.console->flush();
          gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: ID check FAILED after multiple attempts!\n"); // DEBUG
          return false; // Exit setup if ID check failed
     }
-    hal.console->printf("FlowDeck: ID check OK\n");
+    // hal.console->printf("FlowDeck: ID check OK\n");
     hal.console->flush();
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: ID check OK\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: ID check OK\n"); // DEBUG
     // --- End of ID Check ---
  
     // Register periodic callback for sensor reading (every 10ms = 100Hz)
-    hal.console->printf("FlowDeck: Registering periodic callback...\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Registering periodic callback...\n"); // DEBUG
+    // hal.console->printf("FlowDeck: Registering periodic callback...\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Registering periodic callback...\n"); // DEBUG
     bool registered = _dev->register_periodic_callback(10000, FUNCTOR_BIND_MEMBER(&AP_OpticalFlow_FlowDeck::timer, void));
     if (!registered) {
-        hal.console->printf("FlowDeck: FAILED to register periodic callback\n"); // DEBUG
+        // hal.console->printf("FlowDeck: FAILED to register periodic callback\n"); // DEBUG
         gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: FAILED to register periodic callback\n"); // DEBUG
     } else {
-        hal.console->printf("FlowDeck: Periodic callback registered OK\n"); // DEBUG
-        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Periodic callback registered OK\n"); // DEBUG
+        // hal.console->printf("FlowDeck: Periodic callback registered OK\n"); // DEBUG
+        gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Periodic callback registered OK\n"); // DEBUG
     }
 
-    hal.console->printf("FlowDeck: Init Registers\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Init Registers\n"); // DEBUG
+    // hal.console->printf("FlowDeck: Init Registers\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Init Registers\n"); // DEBUG
  
     // --- Initialize sensor with required configuration ---
     // Write registers for improved performance
@@ -160,14 +160,14 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     hal.scheduler->delay(1);  // delay
     // --- End of Sensor Initialization
 
-    hal.console->printf("FlowDeck: Turn on LED\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Turn on LED\n"); // DEBUG
+    // hal.console->printf("FlowDeck: Turn on LED\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Turn on LED\n"); // DEBUG
 
     // Turn on LED
     setLED(true);
 
-    hal.console->printf("FlowDeck: Setup Done!\n"); // DEBUG
-    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Setup Done!\n"); // DEBUG
+    // hal.console->printf("FlowDeck: Setup Done!\n"); // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Setup Done!\n"); // DEBUG
      
     return true;
 }
@@ -180,8 +180,8 @@ uint8_t AP_OpticalFlow_FlowDeck::reg_read(uint8_t reg)
     bool success = _dev->read_registers(reg, &value_read, 1);   // MSB = 1
 
     if (!success) {
-        hal.console->printf("Failed to read register 0x%02X\n", reg); // Log which register failed
-        gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to read register 0x%02X\n", reg); // DEBUG
+        // hal.console->printf("Failed to read register 0x%02X\n", reg); // Log which register failed
+        // gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to read register 0x%02X\n", reg); // DEBUG
         return 0;
     }
 
@@ -196,8 +196,8 @@ void AP_OpticalFlow_FlowDeck::reg_write(uint8_t reg, uint8_t value)
     bool success = _dev->write_register(write_address, value);
 
     if (!success) {
-        hal.console->printf("Failed to write 0x%02X to register 0x%02X\n", value, reg);
-        gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to write 0x%02X to register 0x%02X\n", value, reg); // DEBUG
+        // hal.console->printf("Failed to write 0x%02X to register 0x%02X\n", value, reg);
+        // gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to write 0x%02X to register 0x%02X\n", value, reg); // DEBUG
     }
     
     hal.scheduler->delay_microseconds(50);  // Add delay in-between writes

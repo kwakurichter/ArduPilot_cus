@@ -8,7 +8,7 @@ function update()
     -- 1) wait for arm
     if state == 0 then
         if not arming:is_armed() then
-            gcs:send_text(4,"Waiting for ARM…")
+            -- gcs:send_text(4,"Waiting for ARM…")
             return update,100
         end
         state = 1
@@ -50,7 +50,7 @@ function update()
         repeat
             ned = ahrs:get_relative_position_NED_home()
             if not ned then
-                gcs:send_text(4, "Waiting for EKF local position…")
+                -- gcs:send_text(4, "Waiting for EKF local position…")
                 return update, 100   -- wait 100 ms, then check again
             end
         until ned

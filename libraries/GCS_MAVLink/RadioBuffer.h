@@ -51,7 +51,4 @@ private:
     volatile uint8_t count = 0;
 };
 
-// Declare the function that will be called by the scheduler to drain the buffer
-//void drain_radio_buffer();
-
 #endif // RADIO_BUFFER_H
