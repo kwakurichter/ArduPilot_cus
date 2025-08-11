@@ -139,10 +139,10 @@ include ../include/minimize_features.inc
 
 define AP_RANGEFINDER_ENABLED 1     #FlowDeck Support
 define AP_OPTICALFLOW_ENABLED 1     #FlowDeck Support
-define AP_SCRIPTING_ENABLED 1       #Lua Script Support
+# define AP_SCRIPTING_ENABLED 1       #Lua Script Support
 
-#undef HAL_HIGH_LATENCY2_ENABLED
-#define HAL_HIGH_LATENCY2_ENABLED 1  #NRF Radio Support
+# #undef HAL_HIGH_LATENCY2_ENABLED
+# #define HAL_HIGH_LATENCY2_ENABLED 1  #NRF Radio Support
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter
