@@ -27,6 +27,7 @@ This provides some support code and variables for MAVLink enabled sketches
 #include "GCS.h"
 #include "GCS_MAVLink.h"
 #include "RadioBuffer.h"
+#include <AP_Common/ExpandingString.h>
 
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
 
@@ -143,6 +144,78 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         if (len == 0) {
             return; // Nothing to send
         }
+
+        // --- START P2P HEARTBEAT INTERCEPTION ---
+        // Check if the message is a MAVLink Heartbeat
+        bool is_heartbeat = false;
+
+        // -- DEBUG --
+        ExpandingString hex_dump1;
+        hex_dump1.printf("Heartbeat(%u): ", len);
+        for (uint8_t i = 0; i < len; i++) {
+            hex_dump1.printf("%02X ", buf[i]);
+        }
+        gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump1.get_string());
+        // -- DEBUG --
+
+        // Check for MAVLink v2 Heartbeat (STX=0xFD, MSGID=0 at bytes 7,8,9)
+        if (buf[0] == 0xFD && buf[7] == 0 && buf[8] == 0 && buf[9] == 0) {
+            is_heartbeat = true;
+        }
+        // Check for MAVLink v1 Heartbeat (STX=0xFE, MSGID=0 at byte 5)
+        else if (buf[0] == 0xFE && buf[5] == MAVLINK_MSG_ID_HEARTBEAT) {
+            is_heartbeat = true;
+        }
+        if (is_heartbeat) {
+            // This is a heartbeat, let's wrap it for P2P
+            uint8_t p2p_packet[58]; // Buffer for the P2P packet
+            uint8_t p2p_idx = 0;
+
+            // 1. CRTP Header for P2P
+            p2p_packet[p2p_idx++] = 0xff;
+            p2p_packet[p2p_idx++] = 0x80 | (0 & 0x0f); // Port 0
+
+            // 2. Copy the MAVLink heartbeat payload
+            memcpy(&p2p_packet[p2p_idx], buf, len);
+            p2p_idx += len;
+
+            // 3. Syslink Header
+            uint8_t syslink_packet[64];
+            uint8_t syslink_idx = 0;
+            syslink_packet[syslink_idx++] = 0xBC;
+            syslink_packet[syslink_idx++] = 0xCF;
+            syslink_packet[syslink_idx++] = 0x0A; // TYPE = P2P Broadcast
+            syslink_packet[syslink_idx++] = p2p_idx; // LENGTH
+
+            // 4. Copy CRTP-wrapped MAVLink packet
+            memcpy(&syslink_packet[syslink_idx], p2p_packet, p2p_idx);
+            syslink_idx += p2p_idx;
+
+            // 5. Fletcher-8 Checksum
+            uint8_t c0=0, c1=0;
+            for (uint8_t j = 2; j < syslink_idx; j++) {
+                c0 += syslink_packet[j];
+                c1 += c0;
+            }
+            syslink_packet[syslink_idx++] = c0;
+            syslink_packet[syslink_idx++] = c1;
+
+            // 6. Push to Radio Buffer
+            RadioPacketBuffer::get_instance().push(syslink_packet, syslink_idx);
+
+            // -- DEBUG --
+            ExpandingString hex_dump;
+            hex_dump.printf("P2P Sent(%u): ", syslink_idx);
+            for (uint8_t i = 0; i < syslink_idx; i++) {
+                hex_dump.printf("%02X ", syslink_packet[i]);
+            }
+            gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump.get_string());
+            // -- DEBUG --
+
+            // Heartbeat sent via P2P, so we skip the normal GCS path
+            return;
+        }
+        // --- END P2P HEARTBEAT INTERCEPTION ---        
 
         // Define the chunk size for fragmentation
         static const int MAV_CHUNK = 24;

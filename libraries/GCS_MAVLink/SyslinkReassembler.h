@@ -15,12 +15,15 @@ public:
     static constexpr uint8_t SYSLINK_SYNC2 = 0xCF;
     static constexpr uint8_t EXPECTED_SYSLINK_TYPE_RADIO = 0x00;
     static constexpr uint8_t EXPECTED_SYSLINK_TYPE_MAVLINK = 0x0B;
+    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_P2P = 0x08;
+    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_P2P_BROADCAST = 0x0A;   
 
     enum class ParseState {
         WAIT_SYNC1,
         WAIT_SYNC2,
         READ_TYPE_LENGTH,
         WAIT_CRTP_HEADER,
+        WAIT_P2P_CRTP_HEADER,
         READ_PAYLOAD_AND_CRC
     };
 
@@ -29,7 +32,9 @@ public:
     // Processes an incoming byte.
     // Returns true if the byte 'c' was consumed by the Syslink state machine.
     // mavlink_byte_pusher: A callback to push reassembled MAVLink bytes for further parsing.
-    bool process_byte(uint8_t c, std::function<void(uint8_t mav_byte)> mavlink_byte_pusher);
+    bool process_byte(uint8_t c, 
+                    std::function<void(uint8_t mav_byte)> mavlink_byte_pusher,
+                    std::function<void(const uint8_t* p2p_payload, uint8_t len)> p2p_packet_handler);
 
 private:
     ParseState state;

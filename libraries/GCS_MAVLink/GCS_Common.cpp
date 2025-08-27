@@ -2018,8 +2018,15 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
                  }
                  #endif
              };
+             auto p2p_packet_handler_lambda =
+                [&](const uint8_t* payload, uint8_t len) {
+                // Check if the received P2P payload is a heartbeat
+                if (len > 8 && payload[0] == MAVLINK_STX && payload[5] == MAVLINK_MSG_ID_HEARTBEAT) {
+                    gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Heartbeat Received (len:%u)", len);    // DEBUG
+                }
+             };                
              
-             byte_handled_by_syslink = s_syslink_reassembler_for_comm1.process_byte(c, mavlink_byte_pusher_lambda);
+             byte_handled_by_syslink = s_syslink_reassembler_for_comm1.process_byte(c, mavlink_byte_pusher_lambda, p2p_packet_handler_lambda);
          }
          // --- END SYSLINK PRE-PROCESSING ---  
          

@@ -19,7 +19,9 @@ void SyslinkToMAVLinkReassembler::reset_parser_state() {
     syslink_payload_bytes_expected = 0;
 }
 
-bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uint8_t mav_byte)> mavlink_byte_pusher) {
+bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c,
+                                                std::function<void(uint8_t mav_byte)> mavlink_byte_pusher, 
+                                                std::function<void(const uint8_t* p2p_payload, uint8_t len)> p2p_packet_handler) {
     bool consumed_by_syslink = true; // Assume consumed initially
 
     current_syslink_frame_buffer.push_back(c);
@@ -55,7 +57,10 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
         case ParseState::READ_TYPE_LENGTH:
             if (current_syslink_frame_buffer.size() == 3) { // Byte for TYPE received
                 syslink_type_byte = c;
-                if ((syslink_type_byte != EXPECTED_SYSLINK_TYPE_MAVLINK) && (syslink_type_byte != EXPECTED_SYSLINK_TYPE_RADIO)) {
+                if ((syslink_type_byte != EXPECTED_SYSLINK_TYPE_MAVLINK) &&
+                    (syslink_type_byte != EXPECTED_SYSLINK_TYPE_RADIO) &&
+                    (syslink_type_byte != EXPECTED_SYSLINK_TYPE_P2P) &&
+                    (syslink_type_byte != EXPECTED_SYSLINK_TYPE_P2P_BROADCAST)) {
                     // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Bad Type %u\n", c); // DEBUG
                     reset_parser_state(); // Invalid type
                     // 'c' was consumed as part of an invalid Syslink header
@@ -66,12 +71,33 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                     // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink: Length %u too small\n", c); // DEBUG
                     reset_parser_state(); // Invalid length
                 } else {
-                    syslink_payload_bytes_expected = syslink_length_field + 2; // data_slice + CRC
-                    // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): HDR TYPE=%u LEN=%u\n", syslink_type_byte, syslink_length_field); // DEBUG
-                    state = ParseState::WAIT_CRTP_HEADER;
+                    if (syslink_type_byte == EXPECTED_SYSLINK_TYPE_P2P || syslink_type_byte == EXPECTED_SYSLINK_TYPE_P2P_BROADCAST) {
+                        syslink_payload_bytes_expected = syslink_length_field + 2; // data_slice + CRC
+                        state = ParseState::WAIT_P2P_CRTP_HEADER;
+                    } else {
+                        syslink_payload_bytes_expected = syslink_length_field + 2; // data_slice + CRC
+                        // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): HDR TYPE=%u LEN=%u\n", syslink_type_byte, syslink_length_field); // DEBUG
+                        state = ParseState::WAIT_CRTP_HEADER;
+                    }
                 }
             }
             break;
+
+        case ParseState::WAIT_P2P_CRTP_HEADER:
+            // The NRF adds Port and RSSI. We are now at the Port byte.
+            // We'll read Port, then RSSI, then transition to the main payload read.
+            // Frame so far: [SYNC1, SYNC2, TYPE, LEN, P2P_PORT]
+            if (current_syslink_frame_buffer.size() == 5) {
+                // This is the P2P Port byte. We can validate it if needed, but for now we just consume it.
+            }
+            // Frame so far: [SYNC1, SYNC2, TYPE, LEN, P2P_PORT, RSSI]
+            else if (current_syslink_frame_buffer.size() == 6) {
+                // This is the RSSI byte. We could store it, but for now, we just consume it.
+                // Now we are ready to read the actual MAVLink payload.
+                gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink: P2P Packet Received\n");    // DEBUG
+                state = ParseState::READ_PAYLOAD_AND_CRC;
+            }
+            break;            
 
         case ParseState::WAIT_CRTP_HEADER:
         // This is the 5th byte, which is the first byte of the Syslink payload (the CRTP header)
@@ -111,23 +137,35 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c, std::function<void(uin
                 uint8_t crc1_expected = frame_ptr[2 + crc_check_len + 1];
 
                 if (check_fletcher8(&frame_ptr[2], crc_check_len, crc0_expected, crc1_expected)) {
-                    // CRC OK. Extract fragment and process
-                    // The actual fragment data starts after SYNC1, SYNC2, TYPE, LENGTH_FIELD
-                    //gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Frame CRC OK\n"); // DEBUG
+                    if (syslink_type_byte == EXPECTED_SYSLINK_TYPE_P2P || syslink_type_byte == EXPECTED_SYSLINK_TYPE_P2P_BROADCAST) {
+                        // This is a P2P packet. Payload starts after the Syslink header, P2P Port, and RSSI.
+                        const uint8_t* p2p_mavlink_payload = &frame_ptr[6];
+                        int p2p_mavlink_len = syslink_length_field - 2; // Subtract Port and RSSI
 
-                    // Create an ExpandingString to build the hex dump of the full packet
-                    // ExpandingString full_packet_hex_dump;
-                    // full_packet_hex_dump.printf("Syslink Full Pkt OK: ");
-                    // for (const uint8_t byte_val : current_syslink_frame_buffer) {
-                    //    full_packet_hex_dump.printf("%02X ", byte_val);
-                    // }
-                    // gcs().send_text(MAV_SEVERITY_DEBUG, "%s", full_packet_hex_dump.get_string()); // DEBUG
+                        // Check if the handler is valid and the payload is not empty
+                        if (p2p_packet_handler && p2p_mavlink_len > 0) {
+                            // --- INVOKE THE P2P CALLBACK ---
+                            p2p_packet_handler(p2p_mavlink_payload, p2p_mavlink_len);
+                    } else {                        
+                        // CRC OK. Extract fragment and process
+                        // The actual fragment data starts after SYNC1, SYNC2, TYPE, LENGTH_FIELD
+                        //gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink(1): Frame CRC OK\n"); // DEBUG
 
-                    handle_complete_syslink_fragment(&frame_ptr[4], syslink_length_field, mavlink_byte_pusher);
+                        // Create an ExpandingString to build the hex dump of the full packet
+                        // ExpandingString full_packet_hex_dump;
+                        // full_packet_hex_dump.printf("Syslink Full Pkt OK: ");
+                        // for (const uint8_t byte_val : current_syslink_frame_buffer) {
+                        //    full_packet_hex_dump.printf("%02X ", byte_val);
+                        // }
+                        // gcs().send_text(MAV_SEVERITY_DEBUG, "%s", full_packet_hex_dump.get_string()); // DEBUG
+
+                        handle_complete_syslink_fragment(&frame_ptr[4], syslink_length_field, mavlink_byte_pusher);
+                    }
                 } else {
                     // gcs().send_text(MAV_SEVERITY_ALERT, "Syslink(1): Frame CRC FAIL!\n"); // DEBUG
                 }
                 reset_parser_state(); // Done with this frame
+                }
             }
             // If not yet full, just keep consuming bytes in this state.
             break;

@@ -77,9 +77,9 @@ void RadioPacketBuffer::register_scheduler_task()
 void RadioPacketBuffer::drain_task() {
 
     // Don't send anything until the handshake is complete.
-    if (!g_syslink_ready) {
-        return;
-    }
+    //if (!g_syslink_ready) {
+    //    return;
+    //}
     
     const bool nrf_is_ready = (hal.gpio->read(4) == 0);
 
