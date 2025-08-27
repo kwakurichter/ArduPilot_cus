@@ -141,144 +141,163 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
 
     // This logic is for the nRF radio channel (MAVLINK_COMM_2)
     if (chan == MAVLINK_COMM_2) {
-        if (len == 0) {
-            return; // Nothing to send
-        }
+        // --- START P2P REASSEMBLY & INTERCEPTION LOGIC ---
 
-        // --- START P2P HEARTBEAT INTERCEPTION ---
-        // Check if the message is a MAVLink Heartbeat
-        bool is_heartbeat = false;
+        // Static buffer to reassemble MAVLink chunks
+        static uint8_t p2p_mavlink_buf[MAVLINK_MAX_PACKET_LEN];
+        static uint8_t p2p_mavlink_idx = 0;
+        static uint8_t expected_mavlink_len = 0;
 
-        // -- DEBUG --
-        ExpandingString hex_dump1;
-        hex_dump1.printf("Heartbeat(%u): ", len);
-        for (uint8_t i = 0; i < len; i++) {
-            hex_dump1.printf("%02X ", buf[i]);
-        }
-        gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump1.get_string());
-        // -- DEBUG --
-
-        // Check for MAVLink v2 Heartbeat (STX=0xFD, MSGID=0 at bytes 7,8,9)
-        if (buf[0] == 0xFD && buf[7] == 0 && buf[8] == 0 && buf[9] == 0) {
-            is_heartbeat = true;
-        }
-        // Check for MAVLink v1 Heartbeat (STX=0xFE, MSGID=0 at byte 5)
-        else if (buf[0] == 0xFE && buf[5] == MAVLINK_MSG_ID_HEARTBEAT) {
-            is_heartbeat = true;
-        }
-        if (is_heartbeat) {
-            // This is a heartbeat, let's wrap it for P2P
-            uint8_t p2p_packet[58]; // Buffer for the P2P packet
-            uint8_t p2p_idx = 0;
-
-            // 1. CRTP Header for P2P
-            p2p_packet[p2p_idx++] = 0xff;
-            p2p_packet[p2p_idx++] = 0x80 | (0 & 0x0f); // Port 0
-
-            // 2. Copy the MAVLink heartbeat payload
-            memcpy(&p2p_packet[p2p_idx], buf, len);
-            p2p_idx += len;
-
-            // 3. Syslink Header
-            uint8_t syslink_packet[64];
-            uint8_t syslink_idx = 0;
-            syslink_packet[syslink_idx++] = 0xBC;
-            syslink_packet[syslink_idx++] = 0xCF;
-            syslink_packet[syslink_idx++] = 0x0A; // TYPE = P2P Broadcast
-            syslink_packet[syslink_idx++] = p2p_idx; // LENGTH
-
-            // 4. Copy CRTP-wrapped MAVLink packet
-            memcpy(&syslink_packet[syslink_idx], p2p_packet, p2p_idx);
-            syslink_idx += p2p_idx;
-
-            // 5. Fletcher-8 Checksum
-            uint8_t c0=0, c1=0;
-            for (uint8_t j = 2; j < syslink_idx; j++) {
-                c0 += syslink_packet[j];
-                c1 += c0;
-            }
-            syslink_packet[syslink_idx++] = c0;
-            syslink_packet[syslink_idx++] = c1;
-
-            // 6. Push to Radio Buffer
-            RadioPacketBuffer::get_instance().push(syslink_packet, syslink_idx);
-
-            // -- DEBUG --
-            ExpandingString hex_dump;
-            hex_dump.printf("P2P Sent(%u): ", syslink_idx);
-            for (uint8_t i = 0; i < syslink_idx; i++) {
-                hex_dump.printf("%02X ", syslink_packet[i]);
-            }
-            gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump.get_string());
-            // -- DEBUG --
-
-            // Heartbeat sent via P2P, so we skip the normal GCS path
-            return;
-        }
-        // --- END P2P HEARTBEAT INTERCEPTION ---        
-
-        // Define the chunk size for fragmentation
-        static const int MAV_CHUNK = 24;
-
-        // Calculate how many fragments this MAVLink message will be split into
-        uint8_t total_syslink_fragments = (len + MAV_CHUNK - 1) / MAV_CHUNK;
-
-        // --- ATOMIC BUFFERING LOGIC ---
-        // Check if the radio buffer has enough space for ALL fragments of this message
-        if (RadioPacketBuffer::get_instance().free_space() < total_syslink_fragments) {
-            // Not enough space for the entire message, drop it.
-            // gcs().send_text(MAV_SEVERITY_WARNING, "Radio buffer full, MAVLink msg dropped!");
+        // Append incoming data to our reassembly buffer
+        if ((p2p_mavlink_idx + len) <= MAVLINK_MAX_PACKET_LEN) {
+            memcpy(&p2p_mavlink_buf[p2p_mavlink_idx], buf, len);
+            p2p_mavlink_idx += len;
+        } else {
+            // Buffer overflow, something is wrong. Reset.
+            p2p_mavlink_idx = 0;
+            expected_mavlink_len = 0;
             return;
         }
 
-        // If we get here, there is enough space. Proceed with fragmentation and buffering.
-        uint16_t syslink_fragmentation_full_id = g_syslink_message_id_counter++;
-        uint8_t offset = 0;
-
-        while (offset < len)
-        {
-            uint8_t this_len = std::min((uint16_t)MAV_CHUNK, (uint16_t)(len - offset));
-            uint8_t length_field = 6 + this_len; // 6B fragment header + data
-            uint8_t packet[36]; // Buffer for one fragment
-            uint8_t idx = 0;
-
-            // 1) Syslink header
-            packet[idx++] = 0xBC;
-            packet[idx++] = 0xCF;
-            packet[idx++] = 0x0B; // TYPE = Radio MAVLink
-            packet[idx++] = length_field;
-
-            // 2) Fragment header
-            packet[idx++] = uint8_t(syslink_fragmentation_full_id & 0xFF);
-            packet[idx++] = uint8_t(syslink_fragmentation_full_id >> 8);
-            packet[idx++] = uint8_t(len & 0xFF);
-            packet[idx++] = uint8_t(len >> 8);
-            packet[idx++] = total_syslink_fragments;
-            packet[idx++] = uint8_t(offset / MAV_CHUNK);
-
-            // 3) Payload slice
-            if (this_len > 0) {
-                memcpy(packet + idx, buf + offset, this_len);
+        // Check if we have enough data for a MAVLink header
+        if (p2p_mavlink_idx >= 2) {
+            if (expected_mavlink_len == 0) {
+                // Determine total expected length from the MAVLink header
+                if (p2p_mavlink_buf[0] == MAVLINK_STX) { // MAVLink 2
+                    expected_mavlink_len = p2p_mavlink_buf[1] + 12; // Payload len + 12 bytes overhead
+                } else if (p2p_mavlink_buf[0] == MAVLINK_STX_MAVLINK1) { // MAVLink 1
+                    expected_mavlink_len = p2p_mavlink_buf[1] + 8; // Payload len + 8 bytes overhead
+                }
             }
-            idx += this_len;
-            
-            // 4) Fletcher-8 checksum
-            uint8_t c0=0, c1=0;
-            for (uint8_t j = 2; j < idx; j++) {
-                c0 += packet[j];
-                c1 += c0;
+
+            // Do we have the complete packet yet?
+            if (expected_mavlink_len > 0 && p2p_mavlink_idx >= expected_mavlink_len) {
+                // We have a full MAVLink packet in p2p_mavlink_buf
+                bool is_heartbeat = false;
+                if (p2p_mavlink_buf[0] == MAVLINK_STX && p2p_mavlink_buf[7] == 0 && p2p_mavlink_buf[8] == 0 && p2p_mavlink_buf[9] == 0) {
+                    is_heartbeat = true;
+                } else if (p2p_mavlink_buf[0] == MAVLINK_STX_MAVLINK1 && p2p_mavlink_buf[5] == MAVLINK_MSG_ID_HEARTBEAT) {
+                    is_heartbeat = true;
+                }
+
+                if (is_heartbeat) {
+                    // This is a heartbeat, let's wrap it for P2P
+                    uint8_t p2p_packet[58]; // Buffer for the P2P packet
+                    uint8_t p2p_idx = 0;
+
+                    // 1. CRTP Header for P2P
+                    p2p_packet[p2p_idx++] = 0xff;
+                    p2p_packet[p2p_idx++] = 0x80 | (0 & 0x0f); // Port 0
+
+                    // 2. Copy the MAVLink heartbeat payload
+                    memcpy(&p2p_packet[p2p_idx], p2p_mavlink_buf, expected_mavlink_len);
+                    p2p_idx += expected_mavlink_len;
+
+                    // 3. Syslink Header
+                    uint8_t syslink_packet[64];
+                    uint8_t syslink_idx = 0;
+                    syslink_packet[syslink_idx++] = 0xBC;
+                    syslink_packet[syslink_idx++] = 0xCF;
+                    syslink_packet[syslink_idx++] = 0x0A; // TYPE = P2P Broadcast
+                    syslink_packet[syslink_idx++] = p2p_idx; // LENGTH
+
+                    // 4. Copy CRTP-wrapped MAVLink packet
+                    memcpy(&syslink_packet[syslink_idx], p2p_packet, p2p_idx);
+                    syslink_idx += p2p_idx;
+
+                    // 5. Fletcher-8 Checksum
+                    uint8_t c0=0, c1=0;
+                    for (uint8_t j = 2; j < syslink_idx; j++) {
+                        c0 += syslink_packet[j];
+                        c1 += c0;
+                    }
+                    syslink_packet[syslink_idx++] = c0;
+                    syslink_packet[syslink_idx++] = c1;
+
+                    // 6. Push to Radio Buffer
+                    RadioPacketBuffer::get_instance().push(syslink_packet, syslink_idx);
+
+                    // -- DEBUG --
+                    //ExpandingString hex_dump;
+                    //hex_dump.printf("P2P Sent(%u): ", syslink_idx);
+                    //for (uint8_t i = 0; i < syslink_idx; i++) {
+                    //    hex_dump.printf("%02X ", syslink_packet[i]);
+                    //}
+                    //gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump.get_string());
+                    // -- DEBUG --
+
+                    // Heartbeat sent via P2P, so we skip the normal GCS path
+                    // return;
+                } else {
+                    // Define the chunk size for fragmentation
+                    static const int MAV_CHUNK = 24;
+
+                    // Calculate how many fragments this MAVLink message will be split into
+                    uint8_t total_syslink_fragments = (expected_mavlink_len + MAV_CHUNK - 1) / MAV_CHUNK;
+
+                    // --- ATOMIC BUFFERING LOGIC ---
+                    // Check if the radio buffer has enough space for ALL fragments of this message
+                    if (RadioPacketBuffer::get_instance().free_space() < total_syslink_fragments) {
+                        // Not enough space for the entire message, drop it.
+                        // gcs().send_text(MAV_SEVERITY_WARNING, "Radio buffer full, MAVLink msg dropped!");
+                        return;
+                    }
+
+                    // If we get here, there is enough space. Proceed with fragmentation and buffering.
+                    uint16_t syslink_fragmentation_full_id = g_syslink_message_id_counter++;
+                    uint8_t offset = 0;
+
+                    while (offset < expected_mavlink_len)
+                    {
+                        uint8_t this_len = std::min((uint16_t)MAV_CHUNK, (uint16_t)(expected_mavlink_len - offset));
+                        uint8_t length_field = 6 + this_len; // 6B fragment header + data
+                        uint8_t packet[36]; // Buffer for one fragment
+                        uint8_t idx = 0;
+
+                        // 1) Syslink header
+                        packet[idx++] = 0xBC;
+                        packet[idx++] = 0xCF;
+                        packet[idx++] = 0x0B; // TYPE = Radio MAVLink
+                        packet[idx++] = length_field;
+
+                        // 2) Fragment header
+                        packet[idx++] = uint8_t(syslink_fragmentation_full_id & 0xFF);
+                        packet[idx++] = uint8_t(syslink_fragmentation_full_id >> 8);
+                        packet[idx++] = uint8_t(expected_mavlink_len & 0xFF);
+                        packet[idx++] = uint8_t(expected_mavlink_len >> 8);
+                        packet[idx++] = total_syslink_fragments;
+                        packet[idx++] = uint8_t(offset / MAV_CHUNK);
+
+                        // 3) Payload slice
+                        if (this_len > 0) {
+                            memcpy(packet + idx, p2p_mavlink_buf + offset, this_len);
+                        }
+                        idx += this_len;
+                        
+                        // 4) Fletcher-8 checksum
+                        uint8_t c0=0, c1=0;
+                        for (uint8_t j = 2; j < idx; j++) {
+                            c0 += packet[j];
+                            c1 += c0;
+                        }
+                        packet[idx++] = c0;
+                        packet[idx++] = c1;
+
+                        // 5) Push the fragment to the buffer. We've already confirmed space exists.
+                        // We ignore the return value as we've pre-checked the space.
+                        RadioPacketBuffer::get_instance().push(packet, idx);
+
+                        offset += this_len;
+                    }
+                }
+
+                // Reset the buffer for the next message
+                p2p_mavlink_idx = 0;
+                expected_mavlink_len = 0;
             }
-            packet[idx++] = c0;
-            packet[idx++] = c1;
-
-            // 5) Push the fragment to the buffer. We've already confirmed space exists.
-            // We ignore the return value as we've pre-checked the space.
-            RadioPacketBuffer::get_instance().push(packet, idx);
-
-            offset += this_len;
         }
-
-        return; // skip the normal send
+        // --- END P2P REASSEMBLY & INTERCEPTION LOGIC ---
+        return; // Important: We handle all MAVLINK_COMM_2 traffic inside this block now.
     }
 
     // For all other MAVLink channels, use the regular send
