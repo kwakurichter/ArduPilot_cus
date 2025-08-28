@@ -91,10 +91,10 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c,
                 // This is the P2P Port byte. We can validate it if needed, but for now we just consume it.
             }
             // Frame so far: [SYNC1, SYNC2, TYPE, LEN, P2P_PORT, RSSI]
-            else if (current_syslink_frame_buffer.size() == 6) {
+            else if (current_syslink_frame_buffer.size() >= 6) {
                 // This is the RSSI byte. We could store it, but for now, we just consume it.
                 // Now we are ready to read the actual MAVLink payload.
-                gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink: P2P Packet Received\n");    // DEBUG
+                // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink: P2P Packet Received\n");    // DEBUG
                 state = ParseState::READ_PAYLOAD_AND_CRC;
             }
             break;            
@@ -139,8 +139,17 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c,
                 if (check_fletcher8(&frame_ptr[2], crc_check_len, crc0_expected, crc1_expected)) {
                     if (syslink_type_byte == EXPECTED_SYSLINK_TYPE_P2P || syslink_type_byte == EXPECTED_SYSLINK_TYPE_P2P_BROADCAST) {
                         // This is a P2P packet. Payload starts after the Syslink header, P2P Port, and RSSI.
-                        const uint8_t* p2p_mavlink_payload = &frame_ptr[6];
+                        const uint8_t* p2p_mavlink_payload = &frame_ptr[7];
                         int p2p_mavlink_len = syslink_length_field - 2; // Subtract Port and RSSI
+
+                        // -- DEBUG --
+                        //ExpandingString hex_dump;
+                        //hex_dump.printf("P2P Payload(%d): ", p2p_mavlink_len);
+                        //for(int i=0; i < p2p_mavlink_len; i++) {
+                        //    hex_dump.printf("%02X ", p2p_mavlink_payload[i]);
+                        //}
+                        //gcs().send_text(MAV_SEVERITY_DEBUG, "%s", hex_dump.get_string());
+                        // -- DEBUG --                        
 
                         // Check if the handler is valid and the payload is not empty
                         if (p2p_packet_handler && p2p_mavlink_len > 0) {

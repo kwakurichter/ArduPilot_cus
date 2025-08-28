@@ -2021,7 +2021,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
              auto p2p_packet_handler_lambda =
                 [&](const uint8_t* payload, uint8_t len) {
                 // Check if the received P2P payload is a heartbeat
-                if (len > 8 && payload[0] == MAVLINK_STX && payload[5] == MAVLINK_MSG_ID_HEARTBEAT) {
+                if (len > 8 && payload[0] == MAVLINK_STX && payload[7] == 0 && payload[8] == 0 && payload[9] == 0) {
                     gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Heartbeat Received (len:%u)", len);    // DEBUG
                 }
              };                
