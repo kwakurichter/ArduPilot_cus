@@ -8,7 +8,7 @@
 struct RadioPacket {
     uint16_t len;
     // A single Syslink packet can be up to 64 bytes
-    uint8_t buf[36];
+    uint8_t buf[64];
 };
 
 // The size of the ring buffer (how many packets it can hold)

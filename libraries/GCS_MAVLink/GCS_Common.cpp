@@ -253,6 +253,8 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
 
         // Send the initial config packets required by the NRF firmware
         send_syslink_config_packets(_port);
+
+        set_mavlink_message_id_interval(MAVLINK_MSG_ID_ATTITUDE, 100);
    
      }
 
@@ -1621,6 +1623,12 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
  #endif
          deferred_messages_initialised = true;
      }
+
+    // For our P2P link (MAVLINK_COMM_2), continually ensure the ATTITUDE
+    // stream is active. This prevents a GCS from disabling it on this channel.
+    if (chan == MAVLINK_COMM_2) {
+        set_mavlink_message_id_interval(MAVLINK_MSG_ID_ATTITUDE, 100); // 100ms = 10Hz
+    }
  
  #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
      uint32_t retry_deferred_body_start = AP_HAL::micros();
@@ -2021,8 +2029,22 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
              auto p2p_packet_handler_lambda =
                 [&](const uint8_t* payload, uint8_t len) {
                 // Check if the received P2P payload is a heartbeat
-                if (len > 8 && payload[0] == MAVLINK_STX && payload[7] == 0 && payload[8] == 0 && payload[9] == 0) {
-                    gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Heartbeat Received (len:%u)", len);    // DEBUG
+
+                if (payload[0] == MAVLINK_STX) {
+                    uint32_t msg_id = payload[7] | (payload[8] << 8) | (payload[9] << 16);
+
+                    if (msg_id == MAVLINK_MSG_ID_HEARTBEAT) {
+                        gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Heartbeat Received, forwarding to AI Deck...");    // DEBUG                        
+                    }
+                    if (msg_id == MAVLINK_MSG_ID_ATTITUDE) {
+                        gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Attitude Received, forwarding to AI Deck...");    // DEBUG                        
+                    }                    
+                    // --- FORWARDING LOGIC ---
+                    // Check if the target MAVLink port for the AI Deck is valid and initialized
+                    if (mavlink_comm_port[MAVLINK_COMM_1] != nullptr) {
+                        // Forward the raw MAVLink message directly to the AI Deck's serial port.
+                        mavlink_comm_port[MAVLINK_COMM_1]->write(payload, len);
+                    }
                 }
              };                
              

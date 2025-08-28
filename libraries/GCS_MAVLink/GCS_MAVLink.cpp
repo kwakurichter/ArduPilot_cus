@@ -173,14 +173,24 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
             // Do we have the complete packet yet?
             if (expected_mavlink_len > 0 && p2p_mavlink_idx >= expected_mavlink_len) {
                 // We have a full MAVLink packet in p2p_mavlink_buf
-                bool is_heartbeat = false;
-                if (p2p_mavlink_buf[0] == MAVLINK_STX && p2p_mavlink_buf[7] == 0 && p2p_mavlink_buf[8] == 0 && p2p_mavlink_buf[9] == 0) {
-                    is_heartbeat = true;
-                } else if (p2p_mavlink_buf[0] == MAVLINK_STX_MAVLINK1 && p2p_mavlink_buf[5] == MAVLINK_MSG_ID_HEARTBEAT) {
-                    is_heartbeat = true;
-                }
+                bool is_p2p_message = false;
 
-                if (is_heartbeat) {
+                // Check for MAVLink v2
+                if (p2p_mavlink_buf[0] == MAVLINK_STX) {
+                    uint32_t msg_id = p2p_mavlink_buf[7] | (p2p_mavlink_buf[8] << 8) | (p2p_mavlink_buf[9] << 16);
+                    if (msg_id == MAVLINK_MSG_ID_HEARTBEAT || msg_id == MAVLINK_MSG_ID_ATTITUDE) {
+                        is_p2p_message = true;
+                    }
+                }
+                // Check for MAVLink v1
+                else if (p2p_mavlink_buf[0] == MAVLINK_STX_MAVLINK1) {
+                    uint8_t msg_id = p2p_mavlink_buf[5];
+                    if (msg_id == MAVLINK_MSG_ID_HEARTBEAT || msg_id == MAVLINK_MSG_ID_ATTITUDE) {
+                        is_p2p_message = true;
+                    }
+                }                                
+
+                if (is_p2p_message) {
                     // This is a heartbeat, let's wrap it for P2P
                     uint8_t p2p_packet[58]; // Buffer for the P2P packet
                     uint8_t p2p_idx = 0;
