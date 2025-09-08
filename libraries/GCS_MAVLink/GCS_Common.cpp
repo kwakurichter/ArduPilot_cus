@@ -1629,6 +1629,9 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
     if (chan == MAVLINK_COMM_2) {
         set_mavlink_message_id_interval(MAVLINK_MSG_ID_ATTITUDE, 100); // 100ms = 10Hz
     }
+    if (chan == MAVLINK_COMM_1) {
+        set_mavlink_message_id_interval(MAVLINK_MSG_ID_LOCAL_POSITION_NED, 100); // 100ms = 10Hz
+    }    
  
  #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
      uint32_t retry_deferred_body_start = AP_HAL::micros();
@@ -2034,10 +2037,10 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
                     uint32_t msg_id = payload[7] | (payload[8] << 8) | (payload[9] << 16);
 
                     if (msg_id == MAVLINK_MSG_ID_HEARTBEAT) {
-                        gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Heartbeat Received, forwarding to AI Deck...");    // DEBUG                        
+                        //gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Heartbeat Received, forwarding to AI Deck...");    // DEBUG                        
                     }
                     if (msg_id == MAVLINK_MSG_ID_ATTITUDE) {
-                        gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Attitude Received, forwarding to AI Deck...");    // DEBUG                        
+                        //gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Attitude Received, forwarding to AI Deck...");    // DEBUG                        
                     }                    
                     // --- FORWARDING LOGIC ---
                     // Check if the target MAVLink port for the AI Deck is valid and initialized

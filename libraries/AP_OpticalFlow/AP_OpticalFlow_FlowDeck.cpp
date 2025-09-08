@@ -14,18 +14,20 @@
 */
 
 #include "AP_OpticalFlow_FlowDeck.h"
-#include <AP_RangeFinder/AP_RangeFinder.h>
 
 #if AP_OPTICALFLOW_FLOWDECK_ENABLED
  
 #include <AP_HAL/AP_HAL.h>
 #include <AP_AHRS/AP_AHRS.h>
+#include <AP_Math/crc.h>
 #include <utility>
 #include <stdio.h>
 #include <GCS_MAVLink/GCS.h>
 
 #define FLOW_RESOLUTION 0.1f //We do get the measurements in 10x the motion pixels (experimentally measured)
-#define OULIER_LIMIT 100
+#define OUTLIER_LIMIT 100
+#define TIMEOUT 0.3f
+#define FLOWDECK_PIXEL_SCALING      (4.2e-3)
  
 extern const AP_HAL::HAL& hal;
  
@@ -273,7 +275,7 @@ void AP_OpticalFlow_FlowDeck::read_frame_buffer(char *FBuffer)
 // --- Read X,Y motion counts ---
 void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta_y)
 {
-    reg_read(REG_MOTION);  // Motion Detection register
+    //reg_read(REG_MOTION);  // Motion Detection register
     *delta_x = ((int16_t)reg_read(0x04) << 8) | reg_read(0x03);
     hal.scheduler->delay_microseconds(50);
     *delta_y = ((int16_t)reg_read(0x06) << 8) | reg_read(0x05);
@@ -283,134 +285,97 @@ void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta
 // --- Update Measurement (Called by the scheduler at regular intervals) ---
 void AP_OpticalFlow_FlowDeck::timer()
 {
-    // hal.console->printf("FlowDeck: timer() called.\n"); // DEBUG (will very noisy)
+    // Accumulate gyro data since the last timer execution.
+    // This happens every 10ms regardless of whether we get a reading.
+    const Vector3f &gyro = AP::ahrs().get_gyro();
+    gyro_sum.x += gyro.x;
+    gyro_sum.y += gyro.y;
+    gyro_sum_count++;
 
-    // Calculate dt based on time since last timer() execution
+    // Read the motion status register
+    uint8_t motion = reg_read(REG_MOTION);
+
+    // Guard Clause: If no new data is available, exit immediately.
+    if (!(motion & 0x80)) {
+        return;
+    }
+
+    // --- DATA IS READY ---
+    // If we get here, we know new data is available.
+
+    // Calculate dt based on time since the LAST SUCCESSFUL READ
     const uint32_t now_us = AP_HAL::micros();
     float dt = (now_us - last_flow_us) * 1.0e-6f;
-    last_flow_us = now_us; // Update last_flow_us EVERY time timer() runs
+    
+    // IMPORTANT: Update last_flow_us ONLY on a successful read
+    last_flow_us = now_us; 
 
-    // Skip if dt is invalid (e.g., first run or time warp)
-    // Allow slightly larger dt here if timer callback isn't perfectly regular
-    if (!is_positive(dt) || dt > 0.1f) { // e.g., reject > 100ms dt
-        gyro_sum.zero(); // Reset gyro sum if skipping
+    // Sanity check the new dt
+    if (!is_positive(dt) || dt > TIMEOUT) {
+        // We got a measurement, but the timing is bad. Discard everything and reset.
+        gyro_sum.zero();
         gyro_sum_count = 0;
         return;
     }
 
-    // Accumulate gyro data since last timer execution
-    const Vector3f &gyro = AP::ahrs().get_gyro();
-    // Integrate gyro over the dt period
-    // (Note: averaging like before might be okay too if dt is fairly constant,
-    // but integrating is technically more correct if dt varies)
-    // For simplicity, let's stick to averaging for now, but be aware dt applies to it.
-    gyro_sum.x += gyro.x;
-    gyro_sum.y += gyro.y;
-    gyro_sum_count++;
-    // IMPORTANT: Gyro sum should now be reset AFTER _update_frontend OR if motion is not valid.
-    
-    // Attempt to read motion
-    uint8_t motion = reg_read(REG_MOTION);
+    // Now, read the delta values
+    int16_t delta_x = 0;
+    int16_t delta_y = 0;
+    read_motion_count(&delta_x, &delta_y);
+    float accpx = -delta_y;
+    float accpy = -delta_x;
 
-    // hal.console->printf("FlowDeck: motion=0x%02X\n", motion); // DEBUG
+    // Get surface quality
+    uint8_t quality = reg_read(REG_QUALITY);
 
-    if (motion == 0xB0) { // Process only if motion detected
-        // ... (read delta_x, delta_y, apply flip, check outliers as before) ...
-        int16_t delta_x = 0;
-        int16_t delta_y = 0;
-        read_motion_count(&delta_x, &delta_y);
-        int16_t accpx = -delta_y;
-        int16_t accpy = -delta_x;
-
-        // Outlier Check
-        if (abs(accpx) >= OULIER_LIMIT || abs(accpy) >= OULIER_LIMIT) {
-             // hal.console->printf("FlowDeck: Outlier detected! accpx=%d, accpy=%d\n", accpx, accpy);
-             gyro_sum.zero(); // Reset gyro sum as we are discarding this cycle's potential update
-             gyro_sum_count = 0;
-             return; // Discard this measurement and wait for the next timer() call
-        }
-
-        accpx *= FLOW_RESOLUTION;
-        accpy *= FLOW_RESOLUTION;
-
-        // Get surface quality
-        uint8_t quality = reg_read(REG_QUALITY);
-
-        // ... (calculate height_estimate, R22 as before) ...
-        // Height estimate - use rangefinder if available, otherwise use EKF height
-        float height_estimate = 1.0f;  // Default if no height source available
-        const auto *rangefinder = AP::rangefinder();
-        if (rangefinder && rangefinder->status_orient(ROTATION_PITCH_270) == RangeFinder::Status::Good) {
-            height_estimate = rangefinder->distance_orient(ROTATION_PITCH_270);
-        } else {
-            float hagl_meters = 0.0f; // Variable to store the result
-            // Call get_hagl (Quality of measuerement) and check if the returned value is valid
-            if (AP::ahrs().get_hagl(hagl_meters)) {
-                height_estimate = hagl_meters; // Use valid HAGL estimate
-            }
-            // else: Keep the default height_estimate (1.0f) if get_hagl fails
-        }
-        
-        // Ensure height is at least 0.1m to avoid division by zero
-        height_estimate = MAX(height_estimate, 0.1f);
-        
-        // Get R[2][2] which is cosine of roll * cosine of pitch
-        // This comes from the rotation matrix, in simple form:
-        float R22 = cosf(AP::ahrs().get_roll()) * cosf(AP::ahrs().get_pitch());
-
-        // Average body rates from accumulated gyro data *over the dt period*
-        float omegax_b = 0.0f;
-        float omegay_b = 0.0f;
-        if (gyro_sum_count > 0) {
-            omegax_b = gyro_sum.x / gyro_sum_count;
-            omegay_b = gyro_sum.y / gyro_sum_count;
-        }
-
-        // Apply sensor-specific constants (from Kalman filter)
-        const float Npix = 35.0f;              // Number of pixels in field of view
-        const float thetapix = radians(41.06813f);  // Aperture angle per pixel in radians
-        //const float omegaFactor = 1.25f;       // Gyro compensation factor
-        const float omegaFactor = 1.0f;       // Gyro compensation factor
-
-        // Convert raw pixel counts to flow rates using the calculated dt
-        // We're solving for velocity given the pixel movement
-        float flow_x_raw = (float)accpx * (thetapix / (Npix * dt)) * height_estimate / R22;
-        float flow_y_raw = (float)accpy * (thetapix / (Npix * dt)) * height_estimate / R22;
-
-        // Apply gyro compensation
-        float flow_x = flow_x_raw + ((omegaFactor * omegay_b) * height_estimate / R22);
-        float flow_y = flow_y_raw - ((omegaFactor * omegax_b) * height_estimate / R22);
-
-        // ... (apply flowScaler, create state struct, apply yaw) ...
-        const Vector2f flowScaler = _flowScaler();
-        float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
-        float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
-        flow_x *= flowScaleFactorX;
-        flow_y *= flowScaleFactorY;
-
-        // Prepare optical flow data
-        struct AP_OpticalFlow::OpticalFlow_state state;
-        state.surface_quality = quality;
-        state.flowRate.x = flow_x;
-        state.flowRate.y = flow_y;
-        state.bodyRate.x = omegax_b;
-        state.bodyRate.y = omegay_b;
-        _applyYaw(state.flowRate); // Apply yaw correction to the flow rate
-
-        // Update frontend
-        _update_frontend(state);
-
-        // Reset gyro sum AFTER successful update
-        gyro_sum.zero();
-        gyro_sum_count = 0;
-
-    } else {
-        // Motion not detected (motion != 0xB0)
-        // We still accumulated gyro data for this dt period, but we aren't sending an update.
-        // Reset the gyro sum so it starts fresh for the next dt period.
-        gyro_sum.zero();
-        gyro_sum_count = 0;
+    // Outlier Check
+    if (abs(accpx) >= OUTLIER_LIMIT || abs(accpy) >= OUTLIER_LIMIT) {
+         // hal.console->printf("FlowDeck: Outlier detected! accpx=%d, accpy=%d\n", accpx, accpy);
+         gyro_sum.zero(); // Reset gyro sum as we are discarding this cycle's potential update
+         gyro_sum_count = 0;
+         return; // Discard this measurement and wait for the next timer() call
     }
+
+    accpx *= FLOW_RESOLUTION;
+    accpy *= FLOW_RESOLUTION;
+
+    // Convert raw pixel counts to flow rates using the calculated dt
+    // We're solving for velocity given the pixel movement
+    float flow_x = (float)accpx * (FLOWDECK_PIXEL_SCALING / dt);
+    float flow_y = (float)accpy * (FLOWDECK_PIXEL_SCALING / dt);    
+
+    // ... (apply flowScaler, create state struct, apply yaw) ...
+    const Vector2f flowScaler = _flowScaler();
+    float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
+    float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
+    flow_x *= flowScaleFactorX;
+    flow_y *= flowScaleFactorY;
+
+    // Average body rates from the accumulated gyro data
+    float omegax_b = 0.0f;
+    float omegay_b = 0.0f;
+    if (gyro_sum_count > 0) {
+        omegax_b = gyro_sum.x / gyro_sum_count;
+        omegay_b = gyro_sum.y / gyro_sum_count;
+    }
+
+    // Prepare optical flow data
+    struct AP_OpticalFlow::OpticalFlow_state state;
+    state.surface_quality = (constrain_int16(quality, 60, 200) - 60) * 255 / 140;    // average surface quality scaled to be between 0 and 255
+    state.flowRate.x = flow_x;
+    state.flowRate.y = flow_y;
+    state.bodyRate.x = omegax_b;
+    state.bodyRate.y = omegay_b;
+    _applyYaw(state.flowRate); // Apply yaw correction to the flow rate
+
+    //gcs().send_text(MAV_SEVERITY_INFO, "OF: dx=%d q=%u fx=%.2f fy=%.2f", (int)delta_x, (unsigned)quality, (double)state.flowRate.x, (double)state.flowRate.y); // DEBUG
+    
+    // Update frontend
+    _update_frontend(state);
+
+    // IMPORTANT: Reset gyro sum ONLY AFTER a successful update.
+    gyro_sum.zero();
+    gyro_sum_count = 0;
 }
  
 // --- Update (will be called regularly by the main optical flow loop) ---
