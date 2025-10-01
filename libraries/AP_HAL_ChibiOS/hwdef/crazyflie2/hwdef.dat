@@ -106,6 +106,7 @@ FLASH_RESERVE_START_KB 64
 # SPI Device table
 # Add FlowDeck Support
 SPIDEV optflow     SPI1 DEVID0 E_CS1 MODE3 1*MHZ 1*MHZ  # Can we increase the frequency to the 2MHz max?
+SPIDEV sdcard      SPI1 DEVID1 E_CS0 MODE0 400*KHZ 25*MHZ  # Add SD card deck support
 
 # One IMU for Crazyflie 2.1 - I2C
 IMU BMI088 I2C:0:0x18 I2C:0:0x69 ROTATION_ROLL_180
@@ -128,12 +129,14 @@ define HAL_COMPASS_AUTO_ROT_DEFAULT 2
 
 define MAG_BOARD_ORIENTATION ROTATION_YAW_180
 
-# Optical Flow Sensor
-# define HAL_SPI_DEVICE_OPTFLOW SPI:optflow,0,2*MHZ,MODE3,E_CS1     # Incorrect definition
-
 # no ADC pins
 define HAL_USE_ADC FALSE
+
+# SPI Enable
 define HAL_USE_SPI TRUE     # Necessary?
+
+# Enable FAT filesystem support
+define HAL_OS_FATFS_IO 1
 
 include ../include/minimize_features.inc
 
@@ -141,8 +144,8 @@ define AP_RANGEFINDER_ENABLED 1     #FlowDeck Support
 define AP_OPTICALFLOW_ENABLED 1     #FlowDeck Support
 # define AP_SCRIPTING_ENABLED 1       #Lua Script Support
 
-# #undef HAL_HIGH_LATENCY2_ENABLED
-# #define HAL_HIGH_LATENCY2_ENABLED 1  #NRF Radio Support
+undef HAL_GYROFFT_ENABLED             #Notch Filtering Support
+define HAL_GYROFFT_ENABLED 1
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter
