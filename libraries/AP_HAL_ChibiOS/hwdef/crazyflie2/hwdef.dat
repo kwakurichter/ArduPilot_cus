@@ -140,8 +140,9 @@ define HAL_OS_FATFS_IO 1
 
 include ../include/minimize_features.inc
 
-define AP_RANGEFINDER_ENABLED 1     #FlowDeck Support
-define AP_OPTICALFLOW_ENABLED 1     #FlowDeck Support
+define AP_RANGEFINDER_ENABLED 1       #FlowDeck Support
+define AP_OPTICALFLOW_ENABLED 1       #FlowDeck Support
+define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 # define AP_SCRIPTING_ENABLED 1       #Lua Script Support
 
 undef HAL_GYROFFT_ENABLED             #Notch Filtering Support

@@ -179,6 +179,11 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
                 if (p2p_mavlink_buf[0] == MAVLINK_STX) {
                     uint32_t msg_id = p2p_mavlink_buf[7] | (p2p_mavlink_buf[8] << 8) | (p2p_mavlink_buf[9] << 16);
                     if (msg_id == MAVLINK_MSG_ID_HEARTBEAT || msg_id == MAVLINK_MSG_ID_ATTITUDE) {
+                        // Define a system and component ID for the Peer.
+                        // This identifies the Peer as the source of the MAVLink message.
+                        p2p_mavlink_buf[5] = 1;                   // System ID:
+                        p2p_mavlink_buf[6] = MAV_COMP_ID_USER1;   // Component ID: IMU
+
                         is_p2p_message = true;
                     }
                 }
@@ -186,6 +191,11 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
                 else if (p2p_mavlink_buf[0] == MAVLINK_STX_MAVLINK1) {
                     uint8_t msg_id = p2p_mavlink_buf[5];
                     if (msg_id == MAVLINK_MSG_ID_HEARTBEAT || msg_id == MAVLINK_MSG_ID_ATTITUDE) {
+                        // Define a system and component ID for the Peer.
+                        // This identifies the Peer as the source of the MAVLink message.
+                        p2p_mavlink_buf[3] = 1;                   // System ID:
+                        p2p_mavlink_buf[4] = MAV_COMP_ID_USER1;   // Component ID: IMU                        
+                        
                         is_p2p_message = true;
                     }
                 }                                

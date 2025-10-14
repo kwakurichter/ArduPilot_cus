@@ -70,6 +70,10 @@
  #include <AP_KDECAN/AP_KDECAN.h>
  #include <AP_LandingGear/AP_LandingGear.h>
  #include <AP_Landing/AP_Landing_config.h>
+
+ #define AP_BATTERY_SCRIPTING_ENABLED 1
+ #include <AP_BattMonitor/AP_BattMonitor.h>
+ #include <AP_BattMonitor/AP_BattMonitor_Backend.h>
  
  #include "MissionItemProtocol_Waypoints.h"
  #include "MissionItemProtocol_Rally.h"
@@ -1993,13 +1997,15 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
  
          // --- BEGIN SYSLINK PRE-PROCESSING FOR MAVLINK_COMM_2 ---
          if (chan == MAVLINK_COMM_2) {
-             // gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_2 RAW RX: 0x%02X", (unsigned)c);  // DEBUG
+             //gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_2 RAW RX: 0x%02X", (unsigned)c);  // DEBUG
 
              // Define the callback that SyslinkReassembler will use to push MAVLink bytes
              auto mavlink_byte_pusher_lambda = 
                  [&](uint8_t mav_byte) { // Captures needed variables by reference
                  const uint8_t framing = mavlink_frame_char_buffer(channel_buffer(), channel_status(), mav_byte, &msg, &status);
                  if (framing == MAVLINK_FRAMING_OK) {
+                     // gcs().send_text(MAV_SEVERITY_DEBUG, "MSGID: %.2u Received\n", msg.msgid);    // DEBUG 
+
                      // This is the first successful packet from the NRF. The handshake is complete.
                      if (!g_syslink_ready) {
                         g_syslink_ready = true;
@@ -2015,6 +2021,54 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
 
                      hal.util->persistent_data.last_mavlink_msgid = msg.msgid;
                      packetReceived(status, msg); // Process the MAVLink packet
+
+                     // Update Battery Data sent from NRF51
+                     if (msg.msgid == MAVLINK_MSG_ID_BATTERY_STATUS) {
+                        // gcs().send_text(MAV_SEVERITY_CRITICAL, "Battery status received\n");    // DEBUG 
+
+                        // Get a reference to the main battery monitor object
+                        AP_BattMonitor &battery_mon = AP::battery();                        
+                        
+                        // 1. Decode the incoming MAVLink message
+                        mavlink_battery_status_t batt_status;
+                        mavlink_msg_battery_status_decode(&msg, &batt_status);
+
+                        // 2. Create and populate the state struct that the scripting backend expects
+                        BattMonitorScript_State script_state{};                 
+
+                        // Voltage: MAVLink is in mV, struct expects V
+                        script_state.voltage = batt_status.voltages[0] / 1000.0f;        
+
+                        // Temperature: MAVLink is in cdegC, struct expects degC
+                        if (batt_status.temperature != INT16_MAX) {
+                            script_state.temperature = batt_status.temperature / 100.0f;
+                        } else {
+                            script_state.temperature = NAN;
+                        }
+
+                        // Correctly copy only the available voltage data (10 cells)
+                        memcpy(script_state.cell_voltages, batt_status.voltages, sizeof(batt_status.voltages));
+
+                        // Also copy the extended voltage data (cells 11-14)
+                        memcpy(&script_state.cell_voltages[10], batt_status.voltages_ext, sizeof(batt_status.voltages_ext));
+
+                        script_state.cell_count = 1;
+
+                        // Set other fields to "unknown"
+                        script_state.current_amps = NAN;
+                        script_state.consumed_mah = NAN;
+                        script_state.capacity_remaining_pct = UINT8_MAX;
+                        script_state.consumed_wh = NAN;
+                        script_state.cycle_count = UINT16_MAX;
+
+                        // Set health status
+                        script_state.healthy = true;                    
+                        
+                        // 3. Call the handler to inject the data into the battery monitor system
+                        battery_mon.handle_scripting(0, script_state);
+
+                        // gcs().send_text(MAV_SEVERITY_DEBUG, "VBAT: %.2f V, %.2f C", (double)script_state.voltage, (double)script_state.temperature);    // DEBUG  
+                     }
  
                      gcs_alternative_active[chan] = false; // MAVLink is active
                      alternative.last_mavlink_ms = now_ms; // Update MAVLink activity timestamp

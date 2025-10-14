@@ -14,9 +14,10 @@ public:
     static constexpr uint8_t SYSLINK_SYNC1 = 0xBC;
     static constexpr uint8_t SYSLINK_SYNC2 = 0xCF;
     static constexpr uint8_t EXPECTED_SYSLINK_TYPE_RADIO = 0x00;
-    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_MAVLINK = 0x0B;
+    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_RADIO_MAVLINK = 0x0B;
     static constexpr uint8_t EXPECTED_SYSLINK_TYPE_P2P = 0x08;
-    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_P2P_BROADCAST = 0x0A;   
+    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_P2P_BROADCAST = 0x0A;
+    static constexpr uint8_t EXPECTED_SYSLINK_TYPE_SYS_MAVLINK = 0x31;   
 
     enum class ParseState {
         WAIT_SYNC1,
