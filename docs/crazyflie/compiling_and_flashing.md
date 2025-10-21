@@ -76,6 +76,10 @@ Before we can flash the firmware to the Crazyflie drone, we need to manually put
     - The M2 LED should begin blinking slowly. Keep holding the power button until the M2 LED begins to blink faster (around 3 seconds).
     - Release the power button.
 
+    <video width="600" controls>
+      <source src="images/compiling_and_flashing/bootloader-second.mp4" type="video/mp4">
+    </video>
+
 ### Flash the Custom Firmware
 With STM32CubeProgrammer open and the Crazyflie in bootloader mode, we start by connecting the drone to the flashing software.
 

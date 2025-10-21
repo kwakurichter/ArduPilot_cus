@@ -2067,7 +2067,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
                         // 3. Call the handler to inject the data into the battery monitor system
                         battery_mon.handle_scripting(0, script_state);
 
-                        // gcs().send_text(MAV_SEVERITY_DEBUG, "VBAT: %.2f V, %.2f C", (double)script_state.voltage, (double)script_state.temperature);    // DEBUG  
+                        gcs().send_text(MAV_SEVERITY_DEBUG, "VBAT: %.2f V, %.2f C", (double)script_state.voltage, (double)script_state.temperature);    // DEBUG  
                      }
  
                      gcs_alternative_active[chan] = false; // MAVLink is active

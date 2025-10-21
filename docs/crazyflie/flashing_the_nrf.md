@@ -571,6 +571,9 @@ Note that the Crazyflie must be flashed with the Bitcraze firmware for this to w
         - Plug the usb cable into the drone.
         - The M2 LED should begin blinking slowly.
         - Release the power button.
+          <video width="600" controls>
+            <source src="images/quick_start_guide/bootloader-first.mp4" type="video/mp4">
+          </video>
 
 ### Compile and Flash
 Once you are ready to flash:
@@ -588,6 +591,9 @@ make clean
 ```
 make cload
 ```
+
+![Flashing the NRF](images/flashing_the_nrf/flashing.png)
+
 - After the firmware is finished flashing, the Crazyflie should automatically reboot.
 
 Your NRF is now flashed with your custom firmware. Note that flashing the NRF with this method does not affect the firmware that is present on the main STM32 microcontroller.
