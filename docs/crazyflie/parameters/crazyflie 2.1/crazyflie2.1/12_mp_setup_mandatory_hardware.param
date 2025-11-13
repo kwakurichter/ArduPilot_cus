@@ -1,0 +1,80 @@
+AHRS_TRIM_X,0  # Make sure to calibrate your IMU upon flashing.
+AHRS_TRIM_Y,0  # Make sure to calibrate your IMU upon flashing.
+ATC_ACCEL_P_MAX,207000  # Based on 1.5 inch prop size.
+ATC_ACCEL_R_MAX,207000  # Based on 1.5 inch prop size.
+ATC_ACCEL_Y_MAX,34200  # Based on 1.5 inch prop size.
+ATC_RAT_PIT_FLTD,70  # INS_GYRO_FILTER/2
+ATC_RAT_PIT_FLTT,70  # INS_GYRO_FILTER/2
+ATC_RAT_RLL_FLTD,70  # INS_GYRO_FILTER/2
+ATC_RAT_RLL_FLTT,70  # INS_GYRO_FILTER/2
+ATC_RAT_YAW_FLTE,2
+ATC_RAT_YAW_FLTT,70  # INS_GYRO_FILTER/2
+COMPASS_ORIENT,0  # No Compass.
+FENCE_ACTION,0  # Disable Fence.
+FENCE_ALT_MAX,100  # Disable Fence.
+FENCE_ENABLE,0  # Disable Fence.
+FENCE_RADIUS,300  # Disable Fence.
+FLTMODE1,0
+FLTMODE2,2
+FLTMODE3,5
+FLTMODE4,4
+FLTMODE5,9
+FLTMODE6,6
+FRAME_CLASS,1  # Crazyflie 2.1
+FRAME_TYPE,1  # Crazyflie 2.1
+INS_ACC2SCAL_X,1  # Make sure to calibrate your accelerometer.
+INS_ACC2SCAL_Y,1  # Make sure to calibrate your accelerometer.
+INS_ACC2SCAL_Z,1  # Make sure to calibrate your accelerometer.
+INS_ACC3SCAL_X,1  # Make sure to calibrate your accelerometer.
+INS_ACC3SCAL_Y,1  # Make sure to calibrate your accelerometer.
+INS_ACC3SCAL_Z,1  # Make sure to calibrate your accelerometer.
+INS_ACCSCAL_X,1  # Make sure to calibrate your accelerometer.
+INS_ACCSCAL_Y,1  # Make sure to calibrate your accelerometer.
+INS_ACCSCAL_Z,1  # Make sure to calibrate your accelerometer.
+INS_GYRO_FILTER,140  # Tuned value.
+INS_USE3,0
+MOT_BAT_VOLT_MAX,4.2  # One cell battery.
+MOT_BAT_VOLT_MIN,3.3  # One cell battery.
+MOT_SPIN_ARM,0.1  # Default
+MOT_SPIN_MAX,0.95  # Default
+MOT_SPIN_MIN,0.15  # Default
+MOT_THST_EXPO,0.45  # Based on Bitcraze data.
+MOT_THST_HOVER,0.5  # Initial guess.
+RC1_DZ,30  # To make manual flying usable.
+RC1_MAX,2000
+RC1_MIN,1000
+RC1_TRIM,1500
+RC10_MAX,2000
+RC10_MIN,1000
+RC10_TRIM,1500
+RC2_DZ,30  # To make manual flying usable.
+RC2_MAX,2000
+RC2_MIN,1000
+RC2_TRIM,1500
+RC3_DZ,10  # To make manual flying usable.
+RC3_MAX,2000
+RC3_MIN,1000
+RC3_TRIM,1500
+RC4_DZ,30  # To make manual flying usable.
+RC4_MAX,2000
+RC4_MIN,1000
+RC4_TRIM,1500
+RC5_MAX,2000
+RC5_MIN,1000
+RC5_TRIM,1500
+RC6_MAX,2000
+RC6_MIN,1000
+RC6_TRIM,1500
+RC7_MAX,2000
+RC7_MIN,1000
+RC7_TRIM,1500
+RC8_MAX,2000
+RC8_MIN,1000
+RC8_TRIM,1500
+RC9_MAX,2000
+RC9_MIN,1000
+RC9_TRIM,1500
+SERVO1_FUNCTION,33
+SERVO2_FUNCTION,34
+SERVO3_FUNCTION,35
+SERVO4_FUNCTION,36

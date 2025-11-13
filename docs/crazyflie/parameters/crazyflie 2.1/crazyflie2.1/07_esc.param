@@ -1,0 +1,25 @@
+ATC_RAT_PIT_SMAX,0  # Default.
+ATC_RAT_RLL_SMAX,0  # Default.
+ATC_RAT_YAW_SMAX,0  # Default.
+MOT_HOVER_LEARN,2  # So that it can tune the throttle controller on 20_throttle_controller.param file
+MOT_PWM_MAX,2000  # Standard PWM control.
+MOT_PWM_MIN,1000  # Standard PWM control.
+MOT_PWM_TYPE,0  # Specified in component editor window
+MOT_SPOOL_TIME,0.5  # Default.
+NTF_BUZZ_TYPES,5  # Not configured.
+NTF_LED_TYPES,123079  # Not configured.
+PSC_ACCZ_SMAX,0  # Default.
+SERVO1_MAX,2000  # Standard PWM control.
+SERVO1_MIN,1000  # Standard PWM control.
+SERVO1_TRIM,1500  # Default.
+SERVO2_MAX,2000  # Standard PWM control.
+SERVO2_MIN,1000  # Standard PWM control.
+SERVO2_TRIM,1500  # Default.
+SERVO3_MAX,2000  # Standard PWM control.
+SERVO3_MIN,1000  # Standard PWM control.
+SERVO3_TRIM,1500  # Default.
+SERVO4_MAX,2000  # Standard PWM control.
+SERVO4_MIN,1000  # Standard PWM control.
+SERVO4_TRIM,1500  # Default.
+TKOFF_RPM_MIN,0  # Default.
+TKOFF_SLEW_TIME,2  # Default.

@@ -1,0 +1,188 @@
+{
+    "Format version": 0,
+    "Components": {
+        "Flight Controller": {
+            "Product": {
+                "Manufacturer": "STMicroelectronics",
+                "Model": "STM32F405",
+                "URL": "https://www.st.com/en/microcontrollers-microprocessors/stm32f405-415.html",
+                "Version": ""
+            },
+            "Firmware": {
+                "Type": "ArduCopter",
+                "Version": "4.6.x"
+            },
+            "Specifications": {
+                "MCU Series": "STM32F405"
+            },
+            "Notes": ""
+        },
+        "Frame": {
+            "Product": {
+                "Manufacturer": "Bitcraze",
+                "Model": "crazyflie 2.1",
+                "URL": "https://www.bitcraze.io/products/old-products/crazyflie-2-1/",
+                "Version": ""
+            },
+            "Specifications": {
+                "TOW min Kg": 0.029,
+                "TOW max Kg": 0.044
+            },
+            "Notes": ""
+        },
+        "RC Controller": {
+            "Product": {
+                "Manufacturer": "",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Firmware": {
+                "Type": "",
+                "Version": ""
+            },
+            "Notes": "There is no RC Controller currently"
+        },
+        "RC Transmitter": {
+            "Product": {
+                "Manufacturer": "",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Firmware": {
+                "Type": "",
+                "Version": ""
+            },
+            "Notes": "There is no RC Controller currently"
+        },
+        "RC Receiver": {
+            "Product": {
+                "Manufacturer": "",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Firmware": {
+                "Type": "",
+                "Version": ""
+            },
+            "FC Connection": {
+                "Type": "RCin/SBUS",
+                "Protocol": "All"
+            },
+            "Notes": "There is no RC Controller currently"
+        },
+        "Telemetry": {
+            "Product": {
+                "Manufacturer": "Bitcraze",
+                "Model": "AI Deck",
+                "URL": "https://www.bitcraze.io/products/ai-deck/",
+                "Version": "1.1"
+            },
+            "Firmware": {
+                "Type": "",
+                "Version": ""
+            },
+            "FC Connection": {
+                "Type": "SERIAL1",
+                "Protocol": "MAVLink2"
+            },
+            "Notes": ""
+        },
+        "Battery Monitor": {
+            "Product": {
+                "Manufacturer": "Nordic",
+                "Model": "nRF51822",
+                "URL": "",
+                "Version": ""
+            },
+            "Firmware": {
+                "Type": "",
+                "Version": ""
+            },
+            "FC Connection": {
+                "Type": "other",
+                "Protocol": "Scripting"
+            },
+            "Notes": ""
+        },
+        "Battery": {
+            "Product": {
+                "Manufacturer": "",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Specifications": {
+                "Chemistry": "Lipo",
+                "Volt per cell max": 4.2,
+                "Volt per cell low": 3.6,
+                "Volt per cell crit": 3.55,
+                "Number of cells": 1,
+                "Capacity mAh": 250
+            },
+            "Notes": ""
+        },
+        "ESC": {
+            "Product": {
+                "Manufacturer": "",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Firmware": {
+                "Type": "",
+                "Version": ""
+            },
+            "FC Connection": {
+                "Type": "Main Out",
+                "Protocol": "Normal"
+            },
+            "Notes": ""
+        },
+        "Motors": {
+            "Product": {
+                "Manufacturer": "",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Specifications": {
+                "Poles": 14
+            },
+            "Notes": ""
+        },
+        "Propellers": {
+            "Product": {
+                "Manufacturer": "Bitcraze",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Specifications": {
+                "Diameter_inches": 1.5
+            },
+            "Notes": ""
+        },
+        "GNSS Receiver": {
+            "Product": {
+                "Manufacturer": "",
+                "Model": "",
+                "URL": "",
+                "Version": ""
+            },
+            "Firmware": {
+                "Type": "",
+                "Version": ""
+            },
+            "FC Connection": {
+                "Type": "None",
+                "Protocol": "None"
+            },
+            "Notes": ""
+        }
+    },
+    "Program version": "2.7.2",
+    "Configuration template": "empty_4.6.x"
+}

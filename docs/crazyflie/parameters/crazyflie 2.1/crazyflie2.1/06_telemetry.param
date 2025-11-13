@@ -1,0 +1,5 @@
+SERIAL1_BAUD,115  # Use the AI Deck to forward MAVLink telemetry
+SERIAL1_PROTOCOL,2  # All ports need to be configured for MAVLink to enable custom telemtry driver.
+SERIAL2_BAUD,57  # Set to 1000 to enable NRF51 P2P Comms.
+SERIAL2_PROTOCOL,2  # All ports need to be configured for MAVLink to enable custom telemtry driver.
+SERIAL3_PROTOCOL,2  # All ports need to be configured for MAVLink to enable custom telemtry driver.

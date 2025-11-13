@@ -1,0 +1,18 @@
+EK3_FLOW_DELAY,10  # Default
+EK3_SRC_OPTIONS,1  # Default
+EK3_SRC1_POSXY,0  # No GPS
+EK3_SRC1_POSZ,2  # FlowDeck external deck must be mounted.
+EK3_SRC1_VELXY,5  # FlowDeck external deck must be mounted.
+EK3_SRC1_VELZ,0  # No GPS
+EK3_SRC1_YAW,0  # No Compass
+EK3_SRC2_POSXY,0  # Default
+EK3_SRC2_POSZ,0  # Default
+EK3_SRC2_VELXY,0  # Default
+EK3_SRC2_VELZ,0  # Default
+EK3_SRC2_YAW,0  # Default
+FLOW_ORIENT_YAW,0  # Default
+FLOW_POS_X,0  # Default
+FLOW_POS_Y,0  # Default
+FLOW_POS_Z,0  # Default
+FLOW_TYPE,0  # Change to 9 for FlowDeck and reboot.
+RNGFND1_ADDR,41  # FlowDeck external deck must be mounted.

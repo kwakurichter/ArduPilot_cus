@@ -1,0 +1,15 @@
+ARMING_CHECK,1  # Perform all arming checks. If you have a problem fix its source. Do NOT change this
+EK3_SRC1_POSXY,0  # No GPS
+EK3_SRC1_POSZ,2  # FlowDeck external board must be mounted.
+EK3_SRC1_VELXY,5  # FlowDeck external board must be mounted.
+EK3_SRC1_VELZ,0  # No GPS
+EK3_SRC1_YAW,0  # No Compass
+FENCE_TYPE,7
+FS_EKF_ACTION,1
+INS_ACCEL_FILTER,10  # Tuned Value.
+INS_POS1_X,0  # Make sure to calibrate gyroscope upon setup.
+INS_POS1_Y,0  # Make sure to calibrate gyroscope upon setup.
+INS_POS2_X,0  # Make sure to calibrate gyroscope upon setup.
+INS_POS2_Y,0  # Make sure to calibrate gyroscope upon setup.
+SCHED_LOOP_RATE,400
+SCR_ENABLE,1  # Use lua scripting for VTOL-Quicktune, MagFit automation and wind speed estimation automation

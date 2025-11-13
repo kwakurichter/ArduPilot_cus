@@ -41,6 +41,7 @@
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_Common/ExpandingString.h>
 #include <GCS_MAVLink/GCS.h>
+#include <AP_Logger/AP_Logger.h>
 
 #if AP_SIM_ENABLED
 #include <AP_HAL/SIMState.h>
@@ -1067,6 +1068,9 @@ void RCOutput::set_group_mode(pwm_group &group)
 #ifdef HAL_WITH_BIDIR_DSHOT
     memset(group.bdshot.erpm, 0, 4*sizeof(uint16_t));
 #endif
+    AP::logger().Write_MessageF("RCOU: set_group_mode enter t=%u mode=%u started=%u ch_mask=0x%lx en=0x%lx", (unsigned)group.timer_id, (unsigned)group.current_mode, (unsigned)group.pwm_started, (unsigned long)group.ch_mask, (unsigned long)group.en_mask);  // DEBUG
+    gcs().send_text(MAV_SEVERITY_ALERT, "RCOU: set_group_mode t=%u mode=%u", (unsigned)group.timer_id, (unsigned)group.current_mode);    // DEBUG
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: set_group_mode t=%u mode=%u", (unsigned)group.timer_id, (unsigned)group.current_mode);    // DEBUG
     switch (group.current_mode) {
     case MODE_PWM_BRUSHED:
         // force zero output initially
@@ -1120,8 +1124,19 @@ void RCOutput::set_group_mode(pwm_group &group)
 
     case MODE_PWM_DSHOT150 ... MODE_PWM_DSHOT1200: {
 #if HAL_DSHOT_ENABLED
+        gcs().send_text(MAV_SEVERITY_ALERT, "RCOU: DShot case t=%u", (unsigned)group.timer_id); // DEBUG
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: DShot case t=%u", (unsigned)group.timer_id);    // DEBUG
+        // Crazyflie 2.1 Brushless: motor outputs are open-drain → ESC expects LOW pulses
+        const bool is_tim2 = (group.timer_id == 2);
         const uint32_t rate = protocol_bitrate(group.current_mode);
         bool active_high = is_bidir_dshot_enabled(group) ? false : true;
+        // CF2.1-Brushless: motor pads are OD → ESC expects LOW pulses
+        if (is_tim2) {
+            active_high = true;
+            AP::logger().Write_Message("RCOU: forcing ACTIVE-HIGH on TIM2");   // DEBUG
+            gcs().send_text(MAV_SEVERITY_ALERT, "RCOU: ACTIVE-HIGH on TIM2");  // DEBUG
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: ACTIVE-HIGH on TIM2");     // DEBUG
+        }
         bool at_least_freq = false;
         // calculate min time between pulses
         const uint32_t pulse_send_time_us = 1000000UL * dshot_bit_length / rate;
@@ -1131,12 +1146,52 @@ void RCOutput::set_group_mode(pwm_group &group)
             at_least_freq = true;
         }
 
-        // configure timer driver for DMAR at requested rate
-        if (!setup_group_DMA(group, rate, DSHOT_BIT_WIDTH_TICKS, active_high,
-                             MAX(DSHOT_BUFFER_LENGTH, GCR_TELEMETRY_BUFFER_LEN), pulse_send_time_us, at_least_freq)) {
+        // --- CALL DMA SETUP ---
+        const bool ok = setup_group_DMA(group, rate, DSHOT_BIT_WIDTH_TICKS, active_high,
+                                        MAX(DSHOT_BUFFER_LENGTH, GCR_TELEMETRY_BUFFER_LEN),
+                                        pulse_send_time_us, at_least_freq);
+
+        // --- PRINT RESULT ---
+        if (!ok) {
+            GCS_SEND_TEXT(MAV_SEVERITY_ALERT, "RCOU: TIM%u DMA FAIL (rate=%u ah=%u)", (unsigned)group.timer_id, (unsigned)rate, (unsigned)active_high);
             group.current_mode = MODE_PWM_NORMAL;
             break;
+        } else {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: TIM%u DMA OK (rate=%u ah=%u)", (unsigned)group.timer_id, (unsigned)rate, (unsigned)active_high);
         }
+        // --- release the gate for TIM2 now ---
+        if (is_tim2) {
+            // 1. FORCE PINS TO OPEN DRAIN & TIM2 (AF1)
+            // This fixes the Push-Pull issue seen in hwdef.h and overrides System Timer/JTAG conflicts.
+            
+            // Motor 1 (PA1)
+            palSetPadMode(GPIOA, 1, PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST);
+            
+            // Motor 2 (PB11)
+            palSetPadMode(GPIOB, 11, PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST);
+            
+            // Motor 3 (PA15)
+            palSetPadMode(GPIOA, 15, PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST);
+            
+            // Motor 4 (PB10)
+            palSetPadMode(GPIOB, 10, PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST);
+
+            // 2. RESET SEQUENCE
+            // Ensure PC15 is Open Drain
+            palSetPadMode(GPIOC, 15, PAL_MODE_OUTPUT_OPENDRAIN);            
+                
+            // 3. Wait briefly to ensure the Timer/DMA is outputting a clean "Idle Low" signal
+            hal.scheduler->delay(100); 
+
+            // 5. Release Reset (High) to wake up ESCs
+            palWritePad(GPIOC, 15, 1);    
+
+            // 5. Wait for ESC bootloader/init before sending commands (Bitcraze protocol detection time)
+            hal.scheduler->delay(50);
+
+            gcs().send_text(MAV_SEVERITY_ALERT, "ESC Pin Reset Sent.\n");   // DEBUG
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ESC Pin Reset Sent.\n");   // DEBUG
+        }        
         if (is_bidir_dshot_enabled(group)) {
             group.dshot_pulse_send_time_us = pulse_send_time_us;
             // to all intents and purposes the pulse time of send and receive are the same
@@ -1162,6 +1217,9 @@ void RCOutput::set_group_mode(pwm_group &group)
         // nothing needed
         break;
     }
+
+    AP::logger().Write_MessageF("RCOU: after switch t=%u mode=%u", (unsigned)group.timer_id, (unsigned)group.current_mode); // DEBUG
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: after switch t=%u mode=%u", (unsigned)group.timer_id, (unsigned)group.current_mode); // DEBUG
 
     set_freq_group(group);
 
@@ -1199,6 +1257,8 @@ void RCOutput::set_output_mode(uint32_t mask, const enum output_mode mode)
         // redo it if using DMA
         if (group.current_mode != thismode) {
             group.current_mode = thismode;
+            AP::logger().Write_MessageF("RCOU: set_output_mode t=%u want=%u", (unsigned)group.timer_id, (unsigned)thismode);    // DEBUG
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: set_output_mode t=%u want=%u", (unsigned)group.timer_id, (unsigned)thismode);    // DEBUG
             set_group_mode(group);
         }
     }
@@ -1628,6 +1688,12 @@ void RCOutput::fill_DMA_buffer_dshot(dmar_uint_t *buffer, uint8_t stride, uint16
  */
 void RCOutput::dshot_send(pwm_group &group, rcout_timer_t cycle_start_us, rcout_timer_t timeout_period_us)
 {
+    static uint8_t first[RCOutput::NUM_GROUPS] = {};
+    const uint8_t idx = (&group - pwm_group_list);
+    if (!first[idx]) { first[idx]=1;
+        AP::logger().Write_MessageF("RCOU: first dshot_send t=%u", (unsigned)group.timer_id);   // DEBUG
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: first dshot_send t=%u", (unsigned)group.timer_id);   // DEBUG
+    }
 #if HAL_DSHOT_ENABLED
     if (soft_serial_waiting() || !is_dshot_send_allowed(group.dshot_state)) {
         // doing serial output or DMAR input, don't send DShot pulses

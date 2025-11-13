@@ -1,0 +1,25 @@
+FFT_ATT_REF,15  # Initial Tune
+FFT_BW_HOVER,20.13  # Initial Tune
+FFT_ENABLE,1  # Use FFT for Notch Filtering
+FFT_FREQ_HOVER,80.74  # Initial Tune
+FFT_HMNC_FIT,10  # Initial Tune
+FFT_HMNC_PEAK,0  # Default
+FFT_MAXHZ,495  # Initial Tune
+FFT_MINHZ,80  # Initial Tune
+FFT_NUM_FRAMES,0  # Default
+FFT_OPTIONS,1  # Use FFT for Notch Filtering
+FFT_SAMPLE_MODE,0  # Default
+FFT_SNR_REF,10  # Initial Tune
+FFT_THR_REF,0.35  # Initial Tune
+FFT_WINDOW_OLAP,0.5  # Initial Tune
+FFT_WINDOW_SIZE,256  # Limited to 256 due to f405 FC
+INS_FAST_SAMPLE,1
+INS_GYRO_RATE,1
+INS_HNTCH_ATT,40  # Default
+INS_HNTCH_BW,85  # Initial Tune
+INS_HNTCH_ENABLE,1  # Use the first notch filter to filter the noise created by the motors/propellers
+INS_HNTCH_FREQ,80  # Initial Tune
+INS_HNTCH_HMNCS,3
+INS_HNTCH_MODE,4  # No RPM sensor so use FFT
+INS_HNTCH_OPTS,1
+INS_HNTCH_REF,1

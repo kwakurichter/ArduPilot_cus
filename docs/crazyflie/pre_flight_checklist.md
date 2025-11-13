@@ -57,6 +57,8 @@ This final checklist will ensure your first flight doesn't end in disaster.
 
 - Restart your drone.
 
+Alternatively, you can use the [parameter template](parameters/crazyflie%202.1/) and configure the drone manually by installing [ArduPilot Methodic Configurator](https://github.com/ArduPilot/MethodicConfigurator) on your PC and following the on-screen instructions.
+
 5. Calibrate Sensors (i.e. accelerometer, gyroscope, barometer).
 - Plug your assembled drone into your computer with the micro USB cable.
 - Open your GCS (Ground Control Station) of choice.

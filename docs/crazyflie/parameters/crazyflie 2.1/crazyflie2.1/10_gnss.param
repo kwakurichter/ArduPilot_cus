@@ -1,0 +1,10 @@
+BRD_SAFETY_DEFLT,0  # Disabled for convienience.
+COMPASS_ORIENT,0  # No Compass
+GPS_AUTO_SWITCH,1  # No GPS
+GPS1_GNSS_MODE,0  # No GPS
+GPS1_POS_X,0  # No GPS
+GPS1_POS_Y,0  # No GPS
+GPS1_POS_Z,0  # No GPS
+GPS1_TYPE,0  # No GPS
+NTF_LED_TYPES,123079  # Not Configured.
+WPNAV_RADIUS,200  # Not Configured.

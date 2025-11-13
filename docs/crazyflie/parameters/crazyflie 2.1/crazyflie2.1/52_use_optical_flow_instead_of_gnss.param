@@ -1,0 +1,6 @@
+EK3_SRC_OPTIONS,0  # Turn off to enable RangeFinder as alt source.
+EK3_SRC1_POSXY,0  # No GPS
+EK3_SRC1_POSZ,2  # FlowDeck external deck must be mounted.
+EK3_SRC1_VELXY,5  # FlowDeck external deck must be mounted.
+EK3_SRC1_VELZ,0  # No GPS
+EK3_SRC1_YAW,0  # No Compass
