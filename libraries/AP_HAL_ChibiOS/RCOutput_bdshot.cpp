@@ -22,6 +22,8 @@
 #include <AP_InternalError/AP_InternalError.h>
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
+#include <GCS_MAVLink/GCS.h>
+#include <AP_Logger/AP_Logger.h>
 
 #if HAL_WITH_IO_MCU
 #include <AP_IOMCU/AP_IOMCU.h>
@@ -77,6 +79,10 @@ void RCOutput::set_bidir_dshot_mask(uint32_t mask)
 
 bool RCOutput::bdshot_setup_group_ic_DMA(pwm_group &group)
 {
+    // GCS_SEND_TEXT(MAV_SEVERITY_ALERT, "BDshot: bdshot_setup_group_ic_DMA CALLED");   // DEBUG
+    // AP::logger().Write_MessageF("BDshot: bdshot_setup_group_ic_DMA CALLED");   // DEBUG
+    // gcs().send_text(MAV_SEVERITY_ALERT, "BDshot: bdshot_setup_group_ic_DMA CALLED");    // DEBUG
+
     // check if already allocated
     if (group.has_ic_dma()) {
         return true;
@@ -123,9 +129,16 @@ bool RCOutput::bdshot_setup_group_ic_DMA(pwm_group &group)
             // on F103 the line mode has to be managed manually
             // PAL_MODE_STM32_ALTERNATE_PUSHPULL is 50Mhz, similar to the medieum speed on other MCUs
             palSetLineMode(group.pal_lines[i], PAL_MODE_STM32_ALTERNATE_PUSHPULL);
+// #ifdef HAL_CF21_BRUSHLESS
+//            GCS_SEND_TEXT(MAV_SEVERITY_ALERT, "BDshot: Pin Set.\n");    // DEBUG
+
+            // Crazyflie 2.1 BL requires Open Drain for its external pull-up design
+//            palSetLineMode(group.pal_lines[i], PAL_MODE_ALTERNATE(group.alt_functions[i])
+//            | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_PUPDR_PULLDOWN |
 #else
             palSetLineMode(group.pal_lines[i], PAL_MODE_ALTERNATE(group.alt_functions[i])
                 | PAL_STM32_OTYPE_PUSHPULL | PAL_STM32_PUPDR_PULLUP |
+// #endif
 #ifdef PAL_STM32_OSPEED_MID1
                 PAL_STM32_OSPEED_MID1
 #elif defined(PAL_STM32_OSPEED_MEDIUM)
@@ -245,12 +258,23 @@ void RCOutput::bdshot_ic_dma_deallocate(Shared_DMA *ctx)
 // setup bdshot for sending and receiving the next pulse
 void RCOutput::bdshot_prepare_for_next_pulse(pwm_group& group)
 {
+    // static uint32_t last_debug_ms = 0;
+    // uint32_t now1 = AP_HAL::millis();
+    // if (now1 - last_debug_ms > 1000) { // Throttle to 1 second
+    //    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BDshot: prepare_pulse running. Enabled=%u, State=%u", (unsigned)group.bdshot.enabled, (unsigned)group.dshot_state);   // DEBUG
+    //    AP::logger().Write_MessageF("BDshot: prepare_pulse running. Enabled=%u, State=%u", (unsigned)group.bdshot.enabled, (unsigned)group.dshot_state);   // DEBUG
+    //    gcs().send_text(MAV_SEVERITY_INFO, "BDshot: prepare_pulse running. Enabled=%u, State=%u", (unsigned)group.bdshot.enabled, (unsigned)group.dshot_state);    // DEBUG
+        
+    //    last_debug_ms = now1;
+    // }    
+
     // assume that we won't be able to get the input capture lock
     group.bdshot.enabled = false;
 
     uint32_t active_channels = group.ch_mask & group.en_mask;
     // now grab the input capture lock if we are able, we can only enable bi-dir on a group basis
-    if (((_bdshot.mask & active_channels) == active_channels) && group.has_ic()) {
+    // if (((_bdshot.mask & active_channels) == active_channels) && group.has_ic()) {
+    if (((_bdshot.mask & active_channels) != 0) && group.has_ic()) {
         if (group.has_shared_ic_up_dma()) {
             // no locking required
             group.bdshot.enabled = true;
@@ -285,6 +309,21 @@ void RCOutput::bdshot_prepare_for_next_pulse(pwm_group& group)
         }
     } else if (group.dshot_state == DshotState::RECV_FAILED) {
         _bdshot.erpm_errors[group.bdshot.curr_telem_chan]++;
+
+       // group.dshot_state = DshotState::IDLE;
+
+        // static uint32_t last_fail_print = 0;
+        // uint32_t now = AP_HAL::millis();
+        // if (now - last_fail_print > 1000) {
+            // Print the actual number of bytes received (likely 0)
+        //    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BDshot Fail: Size=%u (Expected 21)", (unsigned)group.bdshot.dma_tx_size);
+                        
+            // If we actually got data but it failed, print the first byte to check for noise
+        //    if (group.bdshot.dma_tx_size > 0) {
+        //        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Raw: %u %u %u", (unsigned)group.bdshot.dma_buffer_copy[0], (unsigned)group.bdshot.dma_buffer_copy[1], (unsigned)group.bdshot.dma_buffer_copy[2]);
+        //    }
+        //    last_fail_print = now;
+        // }
     }
 
     if (group.bdshot.enabled) {
@@ -295,6 +334,18 @@ void RCOutput::bdshot_prepare_for_next_pulse(pwm_group& group)
             pwmStart(group.pwm_drv, &group.pwm_cfg);
             group.pwm_started = true;
         }
+
+// #ifdef HAL_CF21_BRUSHLESS
+        // if (group.timer_id == 2) {
+        //     uint32_t mode = PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST | PAL_STM32_PUPDR_PULLDOWN;
+            
+            // Force ALL motor pins (Indices are safe here)
+        //    palSetPadMode(GPIOA, 1, mode);  // M1
+        //    palSetPadMode(GPIOB, 11, mode); // M2
+        //    palSetPadMode(GPIOA, 15, mode); // M3
+        //    palSetPadMode(GPIOB, 10, mode); // M4
+        // }
+// #endif            
 
         // we can be more precise for capture timer
         group.bdshot.telempsc = (uint16_t)(lrintf(((float)group.pwm_drv->clock / bdshot_get_output_rate_hz(group.current_mode) + 0.01f)/TELEM_IC_SAMPLE) - 1);
@@ -339,6 +390,22 @@ void RCOutput::bdshot_receive_pulses_DMAR(pwm_group* group)
     group->pwm_drv->tim->PSC = group->bdshot.telempsc;
 
     group->dshot_state = DshotState::RECV_START;
+
+// Re-force the pin to Open Drain + Pull-Up right before listening.
+// This fixes the pwmStart() override that sets it back to Push-Pull.
+//#ifdef HAL_CF21_BRUSHLESS
+//    if (group->timer_id == 2) {
+//        uint32_t motor_mode = PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST  |   PAL_STM32_PUPDR_PULLUP;
+
+//        palSetPadMode(GPIOA, 15, motor_mode);
+
+//        palSetPadMode(GPIOB, 11, motor_mode);
+
+//        palSetPadMode(GPIOA, 1, motor_mode);
+
+//        palSetPadMode(GPIOB, 10, motor_mode);
+//    }
+//#endif
 
     //TOGGLE_PIN_CH_DEBUG(54, curr_ch);
     group->pwm_drv->tim->ARR = 0xFFFF;  // count forever
@@ -392,7 +459,8 @@ void RCOutput::bdshot_config_icu_dshot(stm32_tim_t* TIMx, uint8_t chan, uint8_t 
         /* Disable the Channel 1: Reset the CC1E Bit */
         TIMx->CCER &= (uint32_t)~TIM_CCER_CC1E;
 
-        const uint32_t CCMR1_FILT = TIM_CCMR1_IC1F_1;   // 4 samples per output transition
+        // const uint32_t CCMR1_FILT = TIM_CCMR1_IC1F_1;   // 4 samples per output transition
+        const uint32_t CCMR1_FILT = 0;
         // Select the Input and set the filter and the prescaler value
         if (chan == 0) {
             MODIFY_REG(TIMx->CCMR1,
@@ -414,7 +482,8 @@ void RCOutput::bdshot_config_icu_dshot(stm32_tim_t* TIMx, uint8_t chan, uint8_t 
         // Disable the Channel 2: Reset the CC2E Bit
         TIMx->CCER &= (uint32_t)~TIM_CCER_CC2E;
 
-        const uint32_t CCMR1_FILT = TIM_CCMR1_IC2F_1;
+        // const uint32_t CCMR1_FILT = TIM_CCMR1_IC2F_1;
+        const uint32_t CCMR1_FILT = 0;
         // Select the Input and set the filter and the prescaler value
         if (chan == 0) {
             MODIFY_REG(TIMx->CCMR1,
@@ -437,7 +506,8 @@ void RCOutput::bdshot_config_icu_dshot(stm32_tim_t* TIMx, uint8_t chan, uint8_t 
         // Disable the Channel 3: Reset the CC3E Bit
         TIMx->CCER &= (uint32_t)~TIM_CCER_CC3E;
 
-        const uint32_t CCMR2_FILT = TIM_CCMR2_IC3F_1;
+        // const uint32_t CCMR2_FILT = TIM_CCMR2_IC3F_1;
+        const uint32_t CCMR2_FILT = 0;
         // Select the Input and set the filter and the prescaler value
         if (chan == 2) {
             MODIFY_REG(TIMx->CCMR2,
@@ -460,7 +530,8 @@ void RCOutput::bdshot_config_icu_dshot(stm32_tim_t* TIMx, uint8_t chan, uint8_t 
         // Disable the Channel 4: Reset the CC4E Bit
         TIMx->CCER &= (uint32_t)~TIM_CCER_CC4E;
 
-        const uint32_t CCMR2_FILT = TIM_CCMR2_IC4F_1;
+        // const uint32_t CCMR2_FILT = TIM_CCMR2_IC4F_1;
+        const uint32_t CCMR2_FILT = 0;
         // Select the Input and set the filter and the prescaler value
         if (chan == 2) {
             MODIFY_REG(TIMx->CCMR2,
@@ -699,6 +770,13 @@ uint32_t RCOutput::bdshot_get_output_rate_hz(const enum output_mode mode)
 // see https://github.com/betaflight/betaflight/pull/8554#issuecomment-512507625 for a description of the protocol
 uint32_t RCOutput::bdshot_decode_telemetry_packet(dmar_uint_t* buffer, uint32_t count)
 {
+    // Print the number of DMA transfers received.
+    // If "count" is 0 or 1, the DMA timed out and received nothing. We expect 21 transfers for a full packet.
+    // static uint32_t last_debug_ms = 0;
+
+    // GCS_SEND_TEXT(MAV_SEVERITY_ALERT, "BDshot: DMA count=%u", (unsigned)count);     // DEBUG
+    // AP::logger().Write_MessageF("BDshot: DMA count=%u", (unsigned)count);   // DEBUG
+
     uint32_t value = 0;
     uint32_t bits = 0;
     uint32_t len;
@@ -723,6 +801,13 @@ uint32_t RCOutput::bdshot_decode_telemetry_packet(dmar_uint_t* buffer, uint32_t 
     }
 
     if (bits != 21U) {
+        // uint32_t now = AP_HAL::millis();    // Get the current time in milliseconds
+        // if (now - last_debug_ms > 1000) {
+        //    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BDshot: Bad bits! Got %u, expected 21", (unsigned)bits);      // DEBUG
+        //    AP::logger().Write_MessageF("BDshot: Bad bits! Got %u, expected 21", (unsigned)bits);   // DEBUG
+        //    gcs().send_text(MAV_SEVERITY_INFO, "BDshot: Bad bits! Got %u, expected 21", (unsigned)bits);    // DEBUG
+        // }
+
         return INVALID_ERPM;
     }
 
@@ -740,8 +825,24 @@ uint32_t RCOutput::bdshot_decode_telemetry_packet(dmar_uint_t* buffer, uint32_t 
     csum = csum ^ (csum >> 4U); // xor nibbles
 
     if ((csum & 0xfU) != 0xfU) {
+        // uint32_t now = AP_HAL::millis();
+
+        // if (now - last_debug_ms > 1000) {
+        //    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BDshot: Checksum Failed! Val=0x%08X", (unsigned)decodedValue);    // DEBUG
+        //    AP::logger().Write_MessageF("BDshot: Checksum Failed! Val=0x%08X", (unsigned)decodedValue);   // DEBUG
+        //    gcs().send_text(MAV_SEVERITY_INFO, "BDshot: Checksum Failed! Val=0x%08X", (unsigned)decodedValue);    // DEBUG
+        // }
+        
         return INVALID_ERPM;
     }
+
+    // uint32_t now = AP_HAL::millis();
+    // if (now - last_debug_ms > 1000) {
+    //    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "BDshot: Checksum OK! Val=0x%08X", (unsigned)decodedValue);    // DEBUG
+    //    AP::logger().Write_MessageF("BDshot: Checksum OK! Val=0x%08X", (unsigned)decodedValue);   // DEBUG
+    //    gcs().send_text(MAV_SEVERITY_INFO, "BDshot: Checksum OK! Val=0x%08X", (unsigned)decodedValue);    // DEBUG
+    // }
+
     decodedValue >>= 4;
 
     return decodedValue;

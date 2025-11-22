@@ -20,8 +20,8 @@ FLASH_SIZE_KB 1024
 # STDOUT_BAUDRATE 115200
 
 # usart2
-PA2 USART2_TX USART2 # E_TX2
-PA3 USART2_RX USART2 # E_RX2
+PA2 USART2_TX USART2 NODMA # E_TX2
+PA3 USART2_RX USART2 NODMA # E_RX2
 
 # external SPI on SPI1
 PA5 SPI1_SCK SPI1  # E_SCK
@@ -42,10 +42,10 @@ PA13 JTMS-SWDIO SWD
 PA14 JTCK-SWCLK SWD
 
 # Brushless Motor setup
-PA1   TIM2_CH2  TIM2  PWM(1)  OD  SPEED_VERYHIGH   # M1
-PB11  TIM2_CH4  TIM2  PWM(2)  OD  SPEED_VERYHIGH   # M2
-PA15  TIM2_CH1  TIM2  PWM(3)  OD  SPEED_VERYHIGH   # M3
-PB10  TIM2_CH3  TIM2  PWM(4)  OD  SPEED_VERYHIGH   # M4
+PA1   TIM2_CH2  TIM2  PWM(1)  OD  SPEED_VERYHIGH PULLUP BIDIR   # M1
+PB11  TIM2_CH4  TIM2  PWM(2)  OD  SPEED_VERYHIGH PULLUP         # M2
+PA15  TIM2_CH1  TIM2  PWM(3)  OD  SPEED_VERYHIGH PULLUP BIDIR   # M3
+PB10  TIM2_CH3  TIM2  PWM(4)  OD  SPEED_VERYHIGH PULLUP         # M4
 
 PC15 BRUSHLESS_RESET OUTPUT LOW OD GPIO(95)  SPEED_VERYHIGH     # Brushless ESC Reset Pin
 
@@ -84,8 +84,8 @@ PC6 USART6_TX USART6 # NRF_RT
 PC7 USART6_RX USART6 # NRF_RX
 
 # USART3 for telemetry
-PC10 USART3_TX USART3 # E_TX1
-PC11 USART3_RX USART3 # E_RX1
+PC10 USART3_TX USART3 NODMA # E_TX1
+PC11 USART3_RX USART3 NODMA # E_RX1
 
 # setup I2C order
 I2C_ORDER I2C3 I2C1
@@ -140,10 +140,19 @@ include ../include/minimize_features.inc
 define AP_RANGEFINDER_ENABLED 1       #FlowDeck Support
 define AP_OPTICALFLOW_ENABLED 1       #FlowDeck Support
 define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
-# define AP_SCRIPTING_ENABLED 1       #Lua Script Support
+# define AP_SCRIPTING_ENABLED 1        #Lua Script Support
+# define AP_BLHELI_ENABLED 1           #BLHeli ESC Support
 
 undef HAL_GYROFFT_ENABLED             #Notch Filtering Support
 define HAL_GYROFFT_ENABLED 1
+
+#undef HAL_DSHOT_ENABLED               
+# define HAL_DSHOT_ENABLED 1            #BLHeli ESC Support
+
+# define HAL_WITH_BIDIR_DSHOT 1         #RPM telemetry
+define HAL_CF21_BRUSHLESS              #BDSHOT support
+
+# define HAL_BARO_ALLOW_INIT_NO_BARO     #Indoor Flight
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter

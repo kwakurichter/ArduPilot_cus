@@ -23,6 +23,7 @@
 #define MODE_THROW_ENABLED    0            // disable throw mode support
 #define MODE_ZIGZAG_ENABLED   0            // disable zigzag mode support
 #define OSD_ENABLED           0            // disable on-screen-display support
+#define MODE_ADAPTIVE_ENABLED 0            // disable L1 Adaptive Controller
 
 // features below are disabled by default on all boards
 //#define CAL_ALWAYS_REBOOT                         // flight controller will reboot after compass or accelerometer calibration completes

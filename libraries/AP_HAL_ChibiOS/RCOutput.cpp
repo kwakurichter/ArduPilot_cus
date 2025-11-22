@@ -1130,6 +1130,7 @@ void RCOutput::set_group_mode(pwm_group &group)
         const bool is_tim2 = (group.timer_id == 2);
         const uint32_t rate = protocol_bitrate(group.current_mode);
         bool active_high = is_bidir_dshot_enabled(group) ? false : true;
+#ifdef HAL_CF21_BRUSHLESS         
         // CF2.1-Brushless: motor pads are OD → ESC expects LOW pulses
         if (is_tim2) {
             active_high = true;
@@ -1137,6 +1138,7 @@ void RCOutput::set_group_mode(pwm_group &group)
             gcs().send_text(MAV_SEVERITY_ALERT, "RCOU: ACTIVE-HIGH on TIM2");  // DEBUG
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: ACTIVE-HIGH on TIM2");     // DEBUG
         }
+#endif        
         bool at_least_freq = false;
         // calculate min time between pulses
         const uint32_t pulse_send_time_us = 1000000UL * dshot_bit_length / rate;
@@ -1158,11 +1160,14 @@ void RCOutput::set_group_mode(pwm_group &group)
             break;
         } else {
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: TIM%u DMA OK (rate=%u ah=%u)", (unsigned)group.timer_id, (unsigned)rate, (unsigned)active_high);
-        }
+        }  
+#ifdef HAL_CF21_BRUSHLESS           
         // --- release the gate for TIM2 now ---
         if (is_tim2) {
             // 1. FORCE PINS TO OPEN DRAIN & TIM2 (AF1)
             // This fixes the Push-Pull issue seen in hwdef.h and overrides System Timer/JTAG conflicts.
+            // The Pull-Up is REQUIRED for Bi-Directional DShot to work on Open Drain hardware.
+            // It pulls the line High when the FC releases it, allowing the ESC to pull it Low.            
             
             // Motor 1 (PA1)
             palSetPadMode(GPIOA, 1, PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST);
@@ -1191,7 +1196,8 @@ void RCOutput::set_group_mode(pwm_group &group)
 
             gcs().send_text(MAV_SEVERITY_ALERT, "ESC Pin Reset Sent.\n");   // DEBUG
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ESC Pin Reset Sent.\n");   // DEBUG
-        }        
+#endif            
+        }    
         if (is_bidir_dshot_enabled(group)) {
             group.dshot_pulse_send_time_us = pulse_send_time_us;
             // to all intents and purposes the pulse time of send and receive are the same

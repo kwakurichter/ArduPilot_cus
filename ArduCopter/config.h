@@ -247,6 +247,107 @@
 //////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////////
+// Adaptive mode - allow vehicle to run adaptive controller
+#ifndef MODE_ADAPTIVE_ENABLED
+# define MODE_ADAPTIVE_ENABLED 1
+#endif
+
+// default ACRL controller parameters (SITL)
+#ifndef GEOCTRL_KPX_DEFAULT
+ #define GEOCTRL_KPX_DEFAULT          18.0f
+#endif
+
+#ifndef GEOCTRL_KPY_DEFAULT
+ #define GEOCTRL_KPY_DEFAULT          18.0f
+#endif
+
+#ifndef GEOCTRL_KPZ_DEFAULT
+ #define GEOCTRL_KPZ_DEFAULT          27.6f
+#endif
+
+#ifndef GEOCTRL_KVX_DEFAULT
+ #define GEOCTRL_KVX_DEFAULT          4.0f
+#endif
+
+#ifndef GEOCTRL_KVY_DEFAULT
+ #define GEOCTRL_KVY_DEFAULT          4.0f
+#endif
+
+#ifndef GEOCTRL_KVZ_DEFAULT
+ #define GEOCTRL_KVZ_DEFAULT          6.0f
+#endif
+
+#ifndef GEOCTRL_KRX_DEFAULT
+ #define GEOCTRL_KRX_DEFAULT          5.4f
+#endif
+
+#ifndef GEOCTRL_KRY_DEFAULT
+ #define GEOCTRL_KRY_DEFAULT          5.4f
+#endif
+
+#ifndef GEOCTRL_KRZ_DEFAULT
+ #define GEOCTRL_KRZ_DEFAULT          0.092f
+#endif
+
+#ifndef GEOCTRL_KOX_DEFAULT
+ #define GEOCTRL_KOX_DEFAULT          0.6f
+#endif
+
+#ifndef GEOCTRL_KOY_DEFAULT
+ #define GEOCTRL_KOY_DEFAULT          0.6f
+#endif
+
+#ifndef GEOCTRL_KOZ_DEFAULT
+ #define GEOCTRL_KOZ_DEFAULT          0.023f
+#endif
+
+#ifndef L1ENABLE_DEFAULT
+ #define L1ENABLE_DEFAULT          0
+#endif
+
+#ifndef ASV_DEFAULT
+ #define ASV_DEFAULT          -5.0
+#endif
+
+#ifndef ASOMEGA_DEFAULT
+ #define ASOMEGA_DEFAULT          -10.0
+#endif
+
+#ifndef CTOFFQ1THRUST_DEFAULT
+ #define CTOFFQ1THRUST_DEFAULT          10.0
+#endif
+
+#ifndef CTOFFQ1MOMENT_DEFAULT
+ #define CTOFFQ1MOMENT_DEFAULT          10.0
+#endif
+
+#ifndef CTOFFQ2MOMENT_DEFAULT
+ #define CTOFFQ2MOMENT_DEFAULT          2.0
+#endif
+
+#ifndef CIRCSPEED_DEFAULT
+ #define CIRCSPEED_DEFAULT          0.3
+#endif
+
+#ifndef CIRCRADIUSX_DEFAULT
+ #define CIRCRADIUSX_DEFAULT          2.0
+#endif
+
+#ifndef CIRCRADIUSY_DEFAULT
+ #define CIRCRADIUSY_DEFAULT          1.0
+#endif
+
+#ifndef TRAJINDEX_DEFAULT
+ #define TRAJINDEX_DEFAULT          0.0
+#endif
+
+#ifndef LANDFLAG_DEFAULT
+ #define LANDFLAG_DEFAULT          0.0
+#endif
+
+//////////////////////////////////////////////////////////////////////////////
+
+//////////////////////////////////////////////////////////////////////////////
 // Weathervane - allow vehicle to yaw into wind
 #ifndef WEATHERVANE_ENABLED
 # define WEATHERVANE_ENABLED 1

@@ -210,7 +210,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
     // --- Packet 3: Set Radio Address to E7E7E7E701 (user configurble) ---
     // The Crazyflie firmware expects the 5-byte address in little-endian byte order.
     // So, 0xE7E7E7E701 is sent as {0x01, 0xE7, 0xE7, 0xE7, 0xE7}.
-    const uint8_t packet3_data[] = { 0x05, 0x05, 0x01, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
+    const uint8_t packet3_data[] = { 0x05, 0x05, 0x02, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
     calculate_fletcher8(packet3_data, sizeof(packet3_data), ck_a, ck_b);
     const uint8_t packet3[] = { 0xBC, 0xCF, packet3_data[0], packet3_data[1], packet3_data[2], packet3_data[3], packet3_data[4], packet3_data[5], packet3_data[6], ck_a, ck_b };
     //port->write(packet3, sizeof(packet3));
@@ -2067,7 +2067,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
                         // 3. Call the handler to inject the data into the battery monitor system
                         battery_mon.handle_scripting(0, script_state);
 
-                        gcs().send_text(MAV_SEVERITY_DEBUG, "VBAT: %.2f V, %.2f C", (double)script_state.voltage, (double)script_state.temperature);    // DEBUG  
+                        // gcs().send_text(MAV_SEVERITY_DEBUG, "VBAT: %.2f V, %.2f C", (double)script_state.voltage, (double)script_state.temperature);    // DEBUG  
                      }
  
                      gcs_alternative_active[chan] = false; // MAVLink is active
