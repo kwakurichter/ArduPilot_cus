@@ -108,7 +108,7 @@ FLASH_RESERVE_START_KB 64
 
 # SPI Device table
 # Add FlowDeck Support
-SPIDEV optflow     SPI1 DEVID0 E_CS1 MODE3 1*MHZ 1*MHZ  # Can we increase the frequency to the 2MHz max?
+SPIDEV optflow     SPI1 DEVID0 E_CS1 MODE3 2*MHZ 2*MHZ
 SPIDEV sdcard      SPI1 DEVID1 E_CS0 MODE0 400*KHZ 25*MHZ  # Add SD card deck support
 
 # One IMU for Crazyflie 2.1 - I2C

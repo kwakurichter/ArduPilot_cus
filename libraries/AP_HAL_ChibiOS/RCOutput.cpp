@@ -1127,11 +1127,11 @@ void RCOutput::set_group_mode(pwm_group &group)
         gcs().send_text(MAV_SEVERITY_ALERT, "RCOU: DShot case t=%u", (unsigned)group.timer_id); // DEBUG
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCOU: DShot case t=%u", (unsigned)group.timer_id);    // DEBUG
         // Crazyflie 2.1 Brushless: motor outputs are open-drain → ESC expects LOW pulses
-        const bool is_tim2 = (group.timer_id == 2);
         const uint32_t rate = protocol_bitrate(group.current_mode);
         bool active_high = is_bidir_dshot_enabled(group) ? false : true;
 #ifdef HAL_CF21_BRUSHLESS         
         // CF2.1-Brushless: motor pads are OD → ESC expects LOW pulses
+        const bool is_tim2 = (group.timer_id == 2);
         if (is_tim2) {
             active_high = true;
             AP::logger().Write_Message("RCOU: forcing ACTIVE-HIGH on TIM2");   // DEBUG
@@ -1196,7 +1196,7 @@ void RCOutput::set_group_mode(pwm_group &group)
 
             gcs().send_text(MAV_SEVERITY_ALERT, "ESC Pin Reset Sent.\n");   // DEBUG
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "ESC Pin Reset Sent.\n");   // DEBUG
-#endif            
+         
         }    
         if (is_bidir_dshot_enabled(group)) {
             group.dshot_pulse_send_time_us = pulse_send_time_us;
@@ -1204,6 +1204,7 @@ void RCOutput::set_group_mode(pwm_group &group)
             // for dshot600 this is roughly 26us + 30us + 26us = 82us
             group.dshot_pulse_time_us = pulse_send_time_us + pulse_send_time_us + 30;
         }
+#endif        
 #endif
         break;
     }

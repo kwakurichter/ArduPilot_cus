@@ -37,7 +37,10 @@ AP_OpticalFlow_FlowDeck::AP_OpticalFlow_FlowDeck(const char *devname, AP_Optical
     last_flow_us(0),
     last_update_ms(0),
     gyro_sum(0,0),
-    gyro_sum_count(0)
+    gyro_sum_count(0),
+    flow_sum(0,0),
+    flow_dt(0),
+    qual_sum(0)
 {
     _dev = std::move(hal.spi->get_device(devname));
 }
@@ -281,113 +284,133 @@ void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta
     *delta_y = ((int16_t)reg_read(0x06) << 8) | reg_read(0x05);
     hal.scheduler->delay_microseconds(50);
 }
+
+// --- Read X,Y motion counts, quality all at the same time ---
+bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality)
+{
+    // The Motion Burst register is 0x16 (See Datasheet Page 11, Table 9)
+    // We read 6 bytes: Motion, Obs, DxL, DxH, DyL, DyH, Squal
+    uint8_t raw_data[12];
+
+    // Read 7 bytes starting from register 0x16
+    // usage: read_registers(start_reg, buffer, length)
+    if (!_dev->read_registers(0x16, raw_data, 12)) {
+        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Failed to read to Burst register\n"); // DEBUG
+        return false;
+    }
+
+    //static uint8_t debug_ticker = 0;
+    //if (debug_ticker++ % 50 == 0) { // Print every 50th sample (5Hz) Print bytes in Hex to verify alignment M=Motion, O=Obs?, XL=XLow, XH=XHigh, YL=YLow, YH=YHigh, SQ=Squal
+    //    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", raw_data[0], raw_data[1], raw_data[2], raw_data[3], raw_data[4], raw_data[5], raw_data[6], raw_data[7], raw_data[8], raw_data[9]);   // DEBUG
+    //}
+
+    // Parse the data
+    uint8_t motion = raw_data[0];
+    int16_t dx = ((int16_t)raw_data[3] << 8) | raw_data[2];
+    int16_t dy = ((int16_t)raw_data[5] << 8) | raw_data[4];
+    quality = raw_data[6];
+
+    // Check if motion occurred. Even if bit 7 is 0, we should still return the deltas (which might be 0) to keep the integration valid.
+    if (!(motion & 0x80)) {
+        // you can return true with 0 deltas if you prefer but keeping raw values is usually better for integration
+    }
+    
+    delta_x = dx;
+    delta_y = dy;
+
+    return true;
+}
  
 // --- Update Measurement (Called by the scheduler at regular intervals) ---
 void AP_OpticalFlow_FlowDeck::timer()
 {
-    // Accumulate gyro data since the last timer execution.
-    // This happens every 10ms regardless of whether we get a reading.
-    const Vector3f &gyro = AP::ahrs().get_gyro();
-    gyro_sum.x += gyro.x;
-    gyro_sum.y += gyro.y;
-    gyro_sum_count++;
-
-    // Read the motion status register
-    uint8_t motion = reg_read(REG_MOTION);
-
-    // Guard Clause: If no new data is available, exit immediately.
-    if (!(motion & 0x80)) {
-        return;
-    }
-
-    // --- DATA IS READY ---
-    // If we get here, we know new data is available.
-
-    // Calculate dt based on time since the LAST SUCCESSFUL READ
-    const uint32_t now_us = AP_HAL::micros();
+    // 1. Calculate dt for this specific sample
+    uint32_t now_us = AP_HAL::micros();
     float dt = (now_us - last_flow_us) * 1.0e-6f;
-    
-    // IMPORTANT: Update last_flow_us ONLY on a successful read
-    last_flow_us = now_us; 
 
-    // Sanity check the new dt
-    if (!is_positive(dt) || dt > TIMEOUT) {
-        // We got a measurement, but the timing is bad. Discard everything and reset.
-        gyro_sum.zero();
-        gyro_sum_count = 0;
+    // Sanity check dt
+    if (dt > 0.5f) { // Reset if too much time has passed (e.g. initialization)
+        last_flow_us = now_us;
         return;
     }
 
-    // Now, read the delta values
+    // 2. Perform Burst Read
     int16_t delta_x = 0;
     int16_t delta_y = 0;
-    read_motion_count(&delta_x, &delta_y);
-    float accpx = -delta_y;
-    float accpy = -delta_x;
+    uint8_t quality = 0;
 
-    // Get surface quality
-    uint8_t quality = reg_read(REG_QUALITY);
+    if (read_motion_burst(delta_x, delta_y, quality)) {
+        // Successful read
+        last_flow_us = now_us;
 
-    // Outlier Check
-    if (abs(accpx) >= OUTLIER_LIMIT || abs(accpy) >= OUTLIER_LIMIT) {
-         // hal.console->printf("FlowDeck: Outlier detected! accpx=%d, accpy=%d\n", accpx, accpy);
-         gyro_sum.zero(); // Reset gyro sum as we are discarding this cycle's potential update
-         gyro_sum_count = 0;
-         return; // Discard this measurement and wait for the next timer() call
+        // 3. Accumulate Raw Data
+        // We only accumulate if the data is valid, or we can accumulate everything and filter in update(). Accumulating everything is usually safer for integration.
+        flow_sum.x += delta_x;
+        flow_sum.y += delta_y;
+        flow_dt += dt;
+        qual_sum += quality;    // Store quality for reporting (averaged or latest)
+        
+        // Accumulate Gyro Data for compensation
+        const Vector3f &gyro = AP::ahrs().get_gyro();
+        gyro_sum.x += gyro.x;
+        gyro_sum.y += gyro.y;
+        gyro_sum_count++;
+        
+    } else {
+        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Burst Read Failed\n"); // DEBUG
     }
-
-    accpx *= FLOW_RESOLUTION;
-    accpy *= FLOW_RESOLUTION;
-
-    // Convert raw pixel counts to flow rates using the calculated dt
-    // We're solving for velocity given the pixel movement
-    float flow_x = (float)accpx * (FLOWDECK_PIXEL_SCALING / dt);
-    float flow_y = (float)accpy * (FLOWDECK_PIXEL_SCALING / dt);    
-
-    // ... (apply flowScaler, create state struct, apply yaw) ...
-    const Vector2f flowScaler = _flowScaler();
-    float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
-    float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
-    flow_x *= flowScaleFactorX;
-    flow_y *= flowScaleFactorY;
-
-    // Average body rates from the accumulated gyro data
-    float omegax_b = 0.0f;
-    float omegay_b = 0.0f;
-    if (gyro_sum_count > 0) {
-        omegax_b = gyro_sum.x / gyro_sum_count;
-        omegay_b = gyro_sum.y / gyro_sum_count;
-    }
-
-    // Prepare optical flow data
-    struct AP_OpticalFlow::OpticalFlow_state state;
-    state.surface_quality = (constrain_int16(quality, 60, 200) - 60) * 255 / 140;    // average surface quality scaled to be between 0 and 255
-    state.flowRate.x = flow_x;
-    state.flowRate.y = flow_y;
-    state.bodyRate.x = omegax_b;
-    state.bodyRate.y = omegay_b;
-    _applyYaw(state.flowRate); // Apply yaw correction to the flow rate
-
-    //gcs().send_text(MAV_SEVERITY_INFO, "OF: dx=%d q=%u fx=%.2f fy=%.2f", (int)delta_x, (unsigned)quality, (double)state.flowRate.x, (double)state.flowRate.y); // DEBUG
-    
-    // Update frontend
-    _update_frontend(state);
-
-    // IMPORTANT: Reset gyro sum ONLY AFTER a successful update.
-    gyro_sum.zero();
-    gyro_sum_count = 0;
 }
  
 // --- Update (will be called regularly by the main optical flow loop) ---
 void AP_OpticalFlow_FlowDeck::update()
 {
-    // Most of the work is done in timer()
-    // only needed for compatibility with the frontend API
-    uint32_t now = AP_HAL::millis();
-    if (now - last_update_ms < 100) {  // Limit updates to 10Hz (Necessary?)
+    // Return if no sufficient time has accumulated to avoid div-by-zero or noise
+    if (flow_dt < 1.0e-1f) { // wait for at least 100ms of data
         return;
     }
-    last_update_ms = now;
+
+    struct AP_OpticalFlow::OpticalFlow_state state = {};
+
+    // 1. Calculate Scaler
+    const Vector2f flowScaler = _flowScaler();
+    float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
+    float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
+
+    // 2. Calculate Flow Rate (Velocity)
+    // Velocity = (Accumulated Pixels * Scaling) / Accumulated Time
+    // Invert X/Y here to match frame
+    float flow_x_rad = (float)(-flow_sum.x) * FLOWDECK_PIXEL_SCALING;
+    float flow_y_rad = (float)(-flow_sum.y) * FLOWDECK_PIXEL_SCALING;
+
+    // 3. Apply the Parameter Scaler
+    flow_x_rad *= flowScaleFactorX;
+    flow_y_rad *= flowScaleFactorY;    
+
+    state.flowRate.x = flow_x_rad / flow_dt;
+    state.flowRate.y = flow_y_rad / flow_dt;
+
+    // 4. Calculate Body Rate (Average Gyro)
+    if (gyro_sum_count > 0) {
+        state.bodyRate.x = gyro_sum.x / gyro_sum_count;
+        state.bodyRate.y = gyro_sum.y / gyro_sum_count;
+    } else {
+        state.bodyRate.zero();
+    }
+
+    // 5. Surface Quality
+    state.surface_quality = constrain_int16((qual_sum / gyro_sum_count), 0, 255);
+
+    // 6. Final Processing
+    _applyYaw(state.flowRate);
+    _update_frontend(state);
+
+    // 7. Reset Accumulators
+    flow_sum.x = 0;
+    flow_sum.x = 0;
+    flow_dt = 0;
+    qual_sum = 0;
+    gyro_sum.zero();
+    gyro_sum_count = 0;
 }
 
 // --- Init ---

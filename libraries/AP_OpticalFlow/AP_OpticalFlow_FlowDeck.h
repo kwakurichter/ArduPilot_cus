@@ -48,6 +48,9 @@ private:
 
     // read raw motion data
     void read_motion_count(int16_t *delta_x, int16_t *delta_y);
+
+    // read raw motion data and quality at the same time
+    bool read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality);
     
     // For Camera Use
     void enable_frame_buffer();
@@ -61,6 +64,10 @@ private:
     uint32_t last_update_ms;          // system time of last update
     Vector2f gyro_sum;                // sum of gyro sensor values since last frame
     uint16_t gyro_sum_count;          // number of gyro samples in sum
+    Vector2f flow_sum;
+    float flow_dt;
+    uint32_t qual_sum;
+
 };
 
 #endif // AP_OPTICALFLOW_FLOWDECK_ENABLED
