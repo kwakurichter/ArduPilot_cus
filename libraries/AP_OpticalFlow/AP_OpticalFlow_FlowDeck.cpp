@@ -288,27 +288,49 @@ void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta
 // --- Read X,Y motion counts, quality all at the same time ---
 bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality)
 {
-    // The Motion Burst register is 0x16 (See Datasheet Page 11, Table 9)
-    // We read 6 bytes: Motion, Obs, DxL, DxH, DyL, DyH, Squal
-    uint8_t raw_data[12];
+    // 0x02: Motion
+    // 0x03: Delta X L
+    // 0x04: Delta X H
+    // 0x05: Delta Y L
+    // 0x06: Delta Y H
+    // 0x07: Squal
 
-    // Read 7 bytes starting from register 0x16
-    // usage: read_registers(start_reg, buffer, length)
-    if (!_dev->read_registers(0x16, raw_data, 12)) {
-        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Failed to read to Burst register\n"); // DEBUG
-        return false;
-    }
+    uint8_t raw_data[6];
 
-    //static uint8_t debug_ticker = 0;
-    //if (debug_ticker++ % 50 == 0) { // Print every 50th sample (5Hz) Print bytes in Hex to verify alignment M=Motion, O=Obs?, XL=XLow, XH=XHigh, YL=YLow, YH=YHigh, SQ=Squal
-    //    gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n", raw_data[0], raw_data[1], raw_data[2], raw_data[3], raw_data[4], raw_data[5], raw_data[6], raw_data[7], raw_data[8], raw_data[9]);   // DEBUG
-    //}
+    // 1. Read Motion (0x02)
+    if (!_dev->read_registers(0x02, &raw_data[0], 1)) return false;
+    uint8_t motion = raw_data[0];
+
+    // Safety delay per datasheet (t_SRR = 20us). This ensures the sensor is ready for the next address.
+    hal.scheduler->delay_microseconds(20);
+
+    // 2. Read Delta X Low (0x03)
+    if (!_dev->read_registers(0x03, &raw_data[1], 1)) return false;
+    uint8_t xl = raw_data[1];
+    hal.scheduler->delay_microseconds(20);
+
+    // 3. Read Delta X High (0x04)
+    if (!_dev->read_registers(0x04, &raw_data[2], 1)) return false;
+    uint8_t xh = raw_data[2];
+    hal.scheduler->delay_microseconds(20);
+
+    // 4. Read Delta Y Low (0x05)
+    if (!_dev->read_registers(0x05, &raw_data[3], 1)) return false;
+    uint8_t yl = raw_data[3];
+    hal.scheduler->delay_microseconds(20);
+
+    // 5. Read Delta Y High (0x06)
+    if (!_dev->read_registers(0x06, &raw_data[4], 1)) return false;
+    uint8_t yh = raw_data[4];
+    hal.scheduler->delay_microseconds(20);
+
+    // 6. Read SQUAL (0x07)
+    if (!_dev->read_registers(0x07, &raw_data[5], 1)) return false;
+    quality = raw_data[5];
 
     // Parse the data
-    uint8_t motion = raw_data[0];
-    int16_t dx = ((int16_t)raw_data[3] << 8) | raw_data[2];
-    int16_t dy = ((int16_t)raw_data[5] << 8) | raw_data[4];
-    quality = raw_data[6];
+    int16_t dx = ((int16_t)xh << 8) | xl;
+    int16_t dy = ((int16_t)yh << 8) | yl;
 
     // Check if motion occurred. Even if bit 7 is 0, we should still return the deltas (which might be 0) to keep the integration valid.
     if (!(motion & 0x80)) {
@@ -406,7 +428,7 @@ void AP_OpticalFlow_FlowDeck::update()
 
     // 7. Reset Accumulators
     flow_sum.x = 0;
-    flow_sum.x = 0;
+    flow_sum.y = 0;
     flow_dt = 0;
     qual_sum = 0;
     gyro_sum.zero();

@@ -1391,6 +1391,17 @@ void NavEKF3_core::selectHeightForFusion()
     } else {
         hgtTimeout = false;
     }
+
+    // DEBUG PRINT
+    // static uint32_t last_print = 0;
+    // if (imuSampleTime_ms - last_print > 1000) { // Print 1 times a sec
+    //     GCS_SEND_TEXT(MAV_SEVERITY_DEBUG, "HgtSrc:%d Fuse:%d Alt:%.2f Rng:%.2f", 
+    //         (int)activeHgtSource, 
+    //         (int)fuseHgtData, 
+    //         (double)-stateStruct.position.z, 
+    //         (double)rangeDataDelayed.rng);
+    //     last_print = imuSampleTime_ms;    
+    //     }
 }
 
 #if EK3_FEATURE_BODY_ODOM
