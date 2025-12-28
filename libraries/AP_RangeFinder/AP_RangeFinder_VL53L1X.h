@@ -13,21 +13,12 @@
 // --- Include ST API Headers ---
 // Wrap C headers in extern "C" when included from C++
 extern "C" {
-  //#include "vl53l1_platform.h" // Should include platform specifics like VL53L1_DevData_t
-  //#include "vl53l1_types.h"
-  //#include "vl53l1_error_codes.h"
-  //#include "vl53l1_ll_device.h" // Provides VL53L1_LLDriverData_t definition
-  //#include "vl53l1_def.h"       // Provides enums like VL53L1_DistanceModes, VL53L1_RangeStatus
-  //#include "vl53l1_api.h"       // Provides high-level API function prototypes
   #include "vl53l1x_api/platform/inc/vl53l1_platform.h"
-  //#include "vl53l1x_api/core/inc/vl53l1_types.h"
   #include "vl53l1x_api/core/inc/vl53l1_error_codes.h"
   #include "vl53l1x_api/core/inc/vl53l1_ll_device.h"
   #include "vl53l1x_api/core/inc/vl53l1_def.h"
-  //#include "vl53l1x_api/core/inc/vl53l1_api_core.h" // <-- ADD THIS LINE
   #include "vl53l1x_api/core/inc/vl53l1_api.h"
 }
-// --- End ST API Headers ---
 
 
 class AP_RangeFinder_VL53L1X : public AP_RangeFinder_Backend
@@ -52,13 +43,6 @@ protected:
 private:
     // ArduPilot I2C device handle
     AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev;
-
-    // Instance of the ST API Low-Level Driver structure
-    // This holds all the state and configuration for the sensor.
-    //VL53L1_LLDriverData_t st_ll_data;
-
-    // Pointer to the device structure (used as handle for ST API calls)
-    //VL53L1_DEV st_dev_ptr = &st_ll_data;
 
     /* Full ST device wrapper – contains LL driver data plus user fields */
     VL53L1_Dev_t st_dev;
