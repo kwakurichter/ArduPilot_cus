@@ -148,7 +148,10 @@ define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 undef HAL_GYROFFT_ENABLED             #Notch Filtering Support
 define HAL_GYROFFT_ENABLED 1
 
-# define HAL_BARO_ALLOW_INIT_NO_BARO    #Indoor Flight
+define HAL_VISUALODOM_ENABLED 1        #OptiTrack Support
+define EK3_FEATURE_EXTERNAL_NAV 1      #OptiTrack Support
+undef MODE_GUIDED_NOGPS_ENABLED
+define MODE_GUIDED_NOGPS_ENABLED 1
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter

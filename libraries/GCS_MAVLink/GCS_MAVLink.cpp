@@ -130,6 +130,82 @@ uint16_t comm_get_txspace(mavlink_channel_t chan)
     return link->txspace();
 }
 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // e.g. 0xA7
+    uint8_t  peer_id;       // who sent it
+    uint32_t time_boot_ms;  // copied from MAVLink ATTITUDE
+    int16_t  roll_cd;       // roll  in centi-deg
+    int16_t  pitch_cd;      // pitch in centi-deg
+    int16_t  yaw_cd;        // yaw   in centi-deg (wrap to [-18000, +18000] recommended)
+    int16_t  rollrate_cds;  // rollspeed  in centi-deg/s
+    int16_t  pitchrate_cds; // pitchspeed in centi-deg/s
+    int16_t  yawrate_cds;   // yawspeed   in centi-deg/s
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_att_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_att_v1_t) == 20, "p2p packet must be 20 bytes");
+
+
+static inline float wrap_pi(float a) {
+    while (a >  M_PI) a -= 2.0f*M_PI;
+    while (a < -M_PI) a += 2.0f*M_PI;
+    return a;
+}
+
+static inline int16_t to_cdeg(float radians)
+{
+    // radians -> centi-degrees
+    const float cd = radians * (180.0f / (float)M_PI) * 100.0f;
+    const int32_t v = (int32_t)lrintf(cd);
+    return (int16_t)constrain_int32(v, -32768, 32767);
+}
+
+static inline int16_t to_cdeg_per_s(float rad_s)
+{
+    const float cds = rad_s * (180.0f / (float)M_PI) * 100.0f;
+    const int32_t v = (int32_t)lrintf(cds);
+    return (int16_t)constrain_int32(v, -32768, 32767);
+}
+
+static inline void fletcher8(const uint8_t *buf, uint8_t len, uint8_t *c0, uint8_t *c1)
+{
+    uint8_t a = 0, b = 0;
+    for (uint8_t i = 0; i < len; i++) {
+        a += buf[i];
+        b += a;
+    }
+    *c0 = a;
+    *c1 = b;
+}
+
+static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
+{
+    if (len_with_crc < 3) return false;
+    uint8_t c0, c1;
+    fletcher8(buf, len_with_crc - 2, &c0, &c1);
+    return (c0 == buf[len_with_crc - 2]) && (c1 == buf[len_with_crc - 1]);
+}
+
+static void build_p2p_att_packet(p2p_att_v1_t &pkt, uint8_t peer_id, const mavlink_attitude_t &att)
+{
+    pkt.stx = 0xA7;
+    pkt.peer_id = peer_id;
+    pkt.time_boot_ms = att.time_boot_ms;
+
+    pkt.roll_cd  = to_cdeg(att.roll);
+    pkt.pitch_cd = to_cdeg(att.pitch);
+    pkt.yaw_cd   = to_cdeg(wrap_pi(att.yaw));           // keep yaw in [-180, 180]
+
+    pkt.rollrate_cds  = to_cdeg_per_s(att.rollspeed);
+    pkt.pitchrate_cds = to_cdeg_per_s(att.pitchspeed);
+    pkt.yawrate_cds   = to_cdeg_per_s(att.yawspeed);
+
+    fletcher8((const uint8_t*)&pkt, sizeof(pkt) - 2, &pkt.c0, &pkt.c1);
+}
+
 /*
   send a buffer out a MAVLink channel
  */
@@ -145,8 +221,8 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
 
         // Static buffer to reassemble MAVLink chunks
         static uint8_t p2p_mavlink_buf[MAVLINK_MAX_PACKET_LEN];
-        static uint8_t p2p_mavlink_idx = 0;
-        static uint8_t expected_mavlink_len = 0;
+        static uint16_t p2p_mavlink_idx = 0;
+        static uint16_t expected_mavlink_len = 0;
 
         // Append incoming data to our reassembly buffer
         if ((p2p_mavlink_idx + len) <= MAVLINK_MAX_PACKET_LEN) {
@@ -175,30 +251,43 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
                 // We have a full MAVLink packet in p2p_mavlink_buf
                 bool is_p2p_message = false;
 
-                // Check for MAVLink v2
-                if (p2p_mavlink_buf[0] == MAVLINK_STX) {
-                    uint32_t msg_id = p2p_mavlink_buf[7] | (p2p_mavlink_buf[8] << 8) | (p2p_mavlink_buf[9] << 16);
-                    if (msg_id == MAVLINK_MSG_ID_HEARTBEAT || msg_id == MAVLINK_MSG_ID_ATTITUDE) {
-                        // Define a system and component ID for the Peer.
-                        // This identifies the Peer as the source of the MAVLink message.
-                        p2p_mavlink_buf[5] = 1;                   // System ID:
-                        p2p_mavlink_buf[6] = MAV_COMP_ID_USER1;   // Component ID: IMU
+                // 1) Parse the full frame we already buffered
+                mavlink_message_t in_msg {};
+                mavlink_status_t  st {};
+                bool parsed = false;                
+
+                // Feed the already-complete packet into the MAVLink parser
+                for (uint16_t i = 0; i < expected_mavlink_len; i++) {
+                    if (mavlink_parse_char(MAVLINK_COMM_0, p2p_mavlink_buf[i], &in_msg, &st)) {
+                        parsed = true;
+                        break;
+                    }
+                }                
+
+                if (parsed) {
+                    const uint32_t msgid = in_msg.msgid; // works for MAVLink1 and MAVLink2
+                    if (msgid == MAVLINK_MSG_ID_ATTITUDE) {
+
+                        const int PEER_ID = 21;
+
+                        // Decode MAVLink ATTITUDE payload
+                        mavlink_attitude_t att {};
+                        mavlink_msg_attitude_decode(&in_msg, &att);
+
+                        // Build 20-byte custom packet
+                        p2p_att_v1_t pkt {};
+                        build_p2p_att_packet(pkt, PEER_ID, att);   // peer_id = who YOU want to claim as source
+
+                        // Overwrite the reassembly buffer with our custom packet bytes
+                        static_assert(sizeof(p2p_att_v1_t) == 20, "p2p_att_v1_t must be 20 bytes");
+                        memcpy(p2p_mavlink_buf, &pkt, sizeof(pkt));
+
+                        expected_mavlink_len = sizeof(pkt);
+                        p2p_mavlink_idx      = expected_mavlink_len;
 
                         is_p2p_message = true;
                     }
-                }
-                // Check for MAVLink v1
-                else if (p2p_mavlink_buf[0] == MAVLINK_STX_MAVLINK1) {
-                    uint8_t msg_id = p2p_mavlink_buf[5];
-                    if (msg_id == MAVLINK_MSG_ID_HEARTBEAT || msg_id == MAVLINK_MSG_ID_ATTITUDE) {
-                        // Define a system and component ID for the Peer.
-                        // This identifies the Peer as the source of the MAVLink message.
-                        p2p_mavlink_buf[3] = 1;                   // System ID:
-                        p2p_mavlink_buf[4] = MAV_COMP_ID_USER1;   // Component ID: IMU                        
-                        
-                        is_p2p_message = true;
-                    }
-                }                                
+                }                         
 
                 if (is_p2p_message) {
                     // This is a heartbeat, let's wrap it for P2P
@@ -243,7 +332,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
                     //for (uint8_t i = 0; i < syslink_idx; i++) {
                     //    hex_dump.printf("%02X ", syslink_packet[i]);
                     //}
-                    //gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump.get_string());
+                    //gcs().send_text(MAV_SEVERITY_DEBUG, "%s", hex_dump.get_string());
                     // -- DEBUG --
 
                     // Heartbeat sent via P2P, so we skip the normal GCS path

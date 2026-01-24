@@ -210,7 +210,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
     // --- Packet 3: Set Radio Address to E7E7E7E701 (user configurble) ---
     // The Crazyflie firmware expects the 5-byte address in little-endian byte order.
     // So, 0xE7E7E7E701 is sent as {0x01, 0xE7, 0xE7, 0xE7, 0xE7}.
-    const uint8_t packet3_data[] = { 0x05, 0x05, 0x02, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
+    const uint8_t packet3_data[] = { 0x05, 0x05, 0x03, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
     calculate_fletcher8(packet3_data, sizeof(packet3_data), ck_a, ck_b);
     const uint8_t packet3[] = { 0xBC, 0xCF, packet3_data[0], packet3_data[1], packet3_data[2], packet3_data[3], packet3_data[4], packet3_data[5], packet3_data[6], ck_a, ck_b };
     //port->write(packet3, sizeof(packet3));
@@ -2085,24 +2085,18 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
              };
              auto p2p_packet_handler_lambda =
                 [&](const uint8_t* payload, uint8_t len) {
-                // Check if the received P2P payload is a heartbeat
 
-                if (payload[0] == MAVLINK_STX) {
-                    uint32_t msg_id = payload[7] | (payload[8] << 8) | (payload[9] << 16);
+                    // -- DEBUG --
+                    //ExpandingString hex_dump;
+                    //hex_dump.printf("P2P Received(%u): ", len);
+                    //for (uint8_t k = 0; k < len; k++) {
+                    //    hex_dump.printf("%02X ", payload[k]);
+                    //}
+                    //gcs().send_text(MAV_SEVERITY_DEBUG, "%s", hex_dump.get_string());
+                    // -- DEBUG --  
 
-                    if (msg_id == MAVLINK_MSG_ID_HEARTBEAT) {
-                        //gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Heartbeat Received, forwarding to AI Deck...");    // DEBUG                        
-                    }
-                    if (msg_id == MAVLINK_MSG_ID_ATTITUDE) {
-                        //gcs().send_text(MAV_SEVERITY_DEBUG, "P2P Attitude Received, forwarding to AI Deck...");    // DEBUG                        
-                    }                    
-                    // --- FORWARDING LOGIC ---
-                    // Check if the target MAVLink port for the AI Deck is valid and initialized
-                    if (mavlink_comm_port[MAVLINK_COMM_1] != nullptr) {
-                        // Forward the raw MAVLink message directly to the AI Deck's serial port.
-                        mavlink_comm_port[MAVLINK_COMM_1]->write(payload, len);
-                    }
-                }
+                    // Forward the raw MAVLink message directly to the AI Deck's serial port.
+                    mavlink_comm_port[MAVLINK_COMM_1]->write(payload, len);                                                                  
              };                
              
              byte_handled_by_syslink = s_syslink_reassembler_for_comm1.process_byte(c, mavlink_byte_pusher_lambda, p2p_packet_handler_lambda);

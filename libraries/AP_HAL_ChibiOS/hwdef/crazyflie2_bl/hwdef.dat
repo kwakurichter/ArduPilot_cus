@@ -153,6 +153,9 @@ define HAL_GYROFFT_ENABLED 1
 define HAL_CF21_BRUSHLESS              #BDSHOT support
 
 define HAL_VISUALODOM_ENABLED 1        #OptiTrack Support
+define EK3_FEATURE_EXTERNAL_NAV 1      #OptiTrack Support
+undef MODE_GUIDED_NOGPS_ENABLED
+define MODE_GUIDED_NOGPS_ENABLED 1
 
 # This is a board that's not really intended for anything other than copter
 AUTOBUILD_TARGETS Copter
