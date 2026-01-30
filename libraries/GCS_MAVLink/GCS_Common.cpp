@@ -1969,6 +1969,43 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
      }
      handle_message(msg);
  }
+
+ #pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // e.g. 0xA7
+    uint8_t  peer_id;       // who sent it
+    uint32_t time_boot_ms;  // copied from MAVLink ATTITUDE
+    int16_t  roll_cd;       // roll  in centi-deg
+    int16_t  pitch_cd;      // pitch in centi-deg
+    int16_t  yaw_cd;        // yaw   in centi-deg (wrap to [-18000, +18000] recommended)
+    int16_t  rollrate_cds;  // rollspeed  in centi-deg/s
+    int16_t  pitchrate_cds; // pitchspeed in centi-deg/s
+    int16_t  yawrate_cds;   // yawspeed   in centi-deg/s
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_att_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_att_v1_t) == 20, "p2p packet must be 20 bytes");
+
+static inline void fletcher8(const uint8_t *buf, uint8_t len, uint8_t *c0, uint8_t *c1)
+{
+    uint8_t a = 0, b = 0;
+    for (uint8_t i = 0; i < len; i++) {
+        a += buf[i];
+        b += a;
+    }
+    *c0 = a;
+    *c1 = b;
+}
+
+static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
+{
+    if (len_with_crc < 3) return false;
+    uint8_t c0, c1;
+    fletcher8(buf, len_with_crc - 2, &c0, &c1);
+    return (c0 == buf[len_with_crc - 2]) && (c1 == buf[len_with_crc - 1]);
+}
  
  void
  GCS_MAVLINK::update_receive(uint32_t max_time_us)
@@ -2096,7 +2133,28 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
                     // -- DEBUG --  
 
                     // Forward the raw MAVLink message directly to the AI Deck's serial port.
-                    mavlink_comm_port[MAVLINK_COMM_1]->write(payload, len);                                                                  
+                    mavlink_comm_port[MAVLINK_COMM_1]->write(payload, len);  
+                    
+                    if (len >= sizeof(p2p_att_v1_t) && payload[0] == 0xA7) {
+
+                        p2p_att_v1_t pkt;
+                        memcpy(&pkt, payload, sizeof(pkt));
+
+                        // verify your Fletcher c0/c1 here before logging (recommended)
+                        if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
+
+                            AP::logger().Write("P2P", "TimeUS,PID,TBootMS,Rcd,Pcd,Ycd,RRcd,PRcd,YRcd", "QBIhhhhhh",
+                                        AP_HAL::micros64(),
+                                        pkt.peer_id,
+                                        pkt.time_boot_ms,
+                                        pkt.roll_cd,
+                                        pkt.pitch_cd,
+                                        pkt.yaw_cd,
+                                        pkt.rollrate_cds,
+                                        pkt.pitchrate_cds,
+                                        pkt.yawrate_cds);
+                        }                        
+                    }
              };                
              
              byte_handled_by_syslink = s_syslink_reassembler_for_comm1.process_byte(c, mavlink_byte_pusher_lambda, p2p_packet_handler_lambda);
