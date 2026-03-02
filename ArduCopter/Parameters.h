@@ -698,6 +698,10 @@ public:
 
 #if MODE_GUIDED_ENABLED
     AP_Float guided_timeout;
+    AP_Float guided_kp_pos;
+    AP_Float guided_kp_vel;
+    AP_Float guided_ki_vel;
+    AP_Float guided_filt;
 #endif
 
     AP_Int8                 surftrak_mode;
