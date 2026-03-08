@@ -698,16 +698,23 @@ public:
 
 #if MODE_GUIDED_ENABLED
     AP_Float guided_timeout;
-    AP_Float guided_kp_pos;
-    AP_Float guided_kp_vel;
-    AP_Float guided_ki_vel;
-    AP_Float guided_filt;
 #endif
 
     AP_Int8                 surftrak_mode;
     AP_Int8                 failsafe_dr_enable;
     AP_Int16                failsafe_dr_timeout;
     AP_Float                surftrak_tc;
+
+#if MODE_GUIDED_ENABLED
+    AP_Float guided_kp_pos;
+    AP_Float guided_kp_vel;
+    AP_Float guided_ki_vel;
+    AP_Float guided_filt;
+    AP_Float guided_tkoff_alt;
+    AP_Float guided_v_max;
+    AP_Float guided_i_max;
+    AP_Float guided_hov_time;
+#endif
 
     // ramp time of throttle during take-off
     AP_Float takeoff_throttle_slew_time;

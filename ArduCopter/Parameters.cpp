@@ -1219,37 +1219,6 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("GUID_TIMEOUT", 46, ParametersG2, guided_timeout, 3.0),
 
-    // @Param: GUID_KP_POS
-    // @DisplayName: Guided mode position P gain
-    // @Description: Guided mode position P gain for AI Deck companion computer
-    // @Units: 1/s
-    // @Range: 0.1 5
-    // @User: Advanced
-    AP_GROUPINFO("GUID_KP_POS", 47, ParametersG2, guided_kp_pos, 1.2),
-
-    // @Param: GUID_KP_VEL
-    // @DisplayName: Guided mode velocity P gain
-    // @Description: Guided mode velocity P gain for AI Deck companion computer
-    // @Units: 1/s
-    // @Range: 0.1 5
-    // @User: Advanced
-    AP_GROUPINFO("GUID_KP_VEL", 48, ParametersG2, guided_kp_vel, 2.0),
-
-    // @Param: GUID_KI_VEL
-    // @DisplayName: Guided mode velocity I gain
-    // @Description: Guided mode velocity I gain for AI Deck companion computer
-    // @Units: 1/s
-    // @Range: 0.1 5
-    // @User: Advanced
-    AP_GROUPINFO("GUID_KI_VEL", 49, ParametersG2, guided_ki_vel, 0.4),
-
-    // @Param: GUID_FILT
-    // @DisplayName: Guided mode low-pass filter cutoff
-    // @Description: Guided mode low-pass filter cutoff for AI Deck companion computer
-    // @Units: 
-    // @Range: 0.1 5
-    // @User: Advanced
-    AP_GROUPINFO("GUID_FILT", 50, ParametersG2, guided_filt, 0.35),
 #endif
 
     // ACRO_PR_RATE (47), ACRO_Y_RATE (48), PILOT_Y_RATE (49) and PILOT_Y_EXPO (50) moved to command model class
@@ -1470,6 +1439,72 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @User: Advanced
     // @Range: 1 10
     AP_GROUPINFO("FSTRATE_DIV", 10, ParametersG2, att_decimation, 1),
+#endif
+
+#if MODE_GUIDED_ENABLED
+    // @Param: GUID_KP_POS
+    // @DisplayName: Guided mode position P gain
+    // @Description: Guided mode position P gain for AI Deck companion computer
+    // @Units: 1/s
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("GUID_KP_POS", 20, ParametersG2, guided_kp_pos, 1.2),
+
+    // @Param: GUID_KP_VEL
+    // @DisplayName: Guided mode velocity P gain
+    // @Description: Guided mode velocity P gain for AI Deck companion computer
+    // @Units: 1/s
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("GUID_KP_VEL", 21, ParametersG2, guided_kp_vel, 2.0),
+
+    // @Param: GUID_KI_VEL
+    // @DisplayName: Guided mode velocity I gain
+    // @Description: Guided mode velocity I gain for AI Deck companion computer
+    // @Units: 1/s
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("GUID_KI_VEL", 22, ParametersG2, guided_ki_vel, 0.4),
+
+    // @Param: GUID_FILT
+    // @DisplayName: Guided mode low-pass filter cutoff
+    // @Description: Guided mode low-pass filter cutoff for AI Deck companion computer
+    // @Units: 
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("GUID_FILT", 23, ParametersG2, guided_filt, 0.35),
+
+    // @Param: GUID_TKOFF_ALT
+    // @DisplayName: Guided mode takeoff altitude
+    // @Description: Choose target takeoff altitude for guided mode
+    // @Units: m
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("GUID_TKOFF_ALT", 24, ParametersG2, guided_tkoff_alt, 1.0),    
+
+    // @Param: GUID_V_MAX
+    // @DisplayName: Guided mode velocity max
+    // @Description: Guided mode max target horizontal velocity
+    // @Units: m/s
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("GUID_V_MAX", 25, ParametersG2, guided_v_max, 1.0),    
+    
+    // @Param: GUID_I_MAX
+    // @DisplayName: Guided mode integral max
+    // @Description: Guided mode max integrator velocity
+    // @Units: m/s
+    // @Range: 0.1 5
+    // @User: Advanced
+    AP_GROUPINFO("GUID_I_MAX", 26, ParametersG2, guided_i_max, 0.5),        
+
+    // @Param: GUID_HOV_TIME
+    // @DisplayName: Guided mode hover time
+    // @Description: Guided mode hover period
+    // @Units: s
+    // @Range: 
+    // @User: Advanced
+    AP_GROUPINFO("GUID_HOV_TIME", 27, ParametersG2, guided_hov_time, 12.0),         
 #endif
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
