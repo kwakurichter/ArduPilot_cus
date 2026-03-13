@@ -29,11 +29,48 @@ This provides some support code and variables for MAVLink enabled sketches
 #include "RadioBuffer.h"
 #include <AP_Common/ExpandingString.h>
 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;          // 0xA8 for mission-state packet
+    uint8_t  peer_id;      // source id
+    uint16_t seq;          // sequence number for dedupe
+    uint8_t  st;           // mission state/event
+    uint16_t val;          // optional value (wp idx, substate, etc.)
+    uint32_t time_ms;      // timestamp
+    uint8_t  c0;           // Fletcher-8
+    uint8_t  c1;           // Fletcher-8
+} p2p_mstate_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_mstate_v1_t) <= 13, "p2p packet must be 13 bytes");
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // 0xA7
+    uint8_t  peer_id;       // who sent it
+    uint32_t time_boot_ms;  // copied from MAVLink ATTITUDE
+    int16_t  roll_cd;       // roll  in centi-deg
+    int16_t  pitch_cd;      // pitch in centi-deg
+    int16_t  yaw_cd;        // yaw   in centi-deg (wrap to [-18000, +18000] recommended)
+    int16_t  rollrate_cds;  // rollspeed  in centi-deg/s
+    int16_t  pitchrate_cds; // pitchspeed in centi-deg/s
+    int16_t  yawrate_cds;   // yawspeed   in centi-deg/s
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_att_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_att_v1_t) == 20, "p2p packet must be 20 bytes");
+
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
 
 extern const AP_HAL::HAL& hal;
 
 bool g_syslink_ready = false; // The flag to indicate NRF is ready
+
+static HAL_Semaphore g_mstate_sem;
+static bool g_mstate_pending = false;
+static p2p_mstate_v1_t g_mstate_pkt{};
 
 #ifdef MAVLINK_SEPARATE_HELPERS
 // Shut up warnings about missing declarations; TODO: should be fixed on
@@ -130,25 +167,6 @@ uint16_t comm_get_txspace(mavlink_channel_t chan)
     return link->txspace();
 }
 
-#pragma pack(push, 1)
-typedef struct {
-    uint8_t  stx;           // e.g. 0xA7
-    uint8_t  peer_id;       // who sent it
-    uint32_t time_boot_ms;  // copied from MAVLink ATTITUDE
-    int16_t  roll_cd;       // roll  in centi-deg
-    int16_t  pitch_cd;      // pitch in centi-deg
-    int16_t  yaw_cd;        // yaw   in centi-deg (wrap to [-18000, +18000] recommended)
-    int16_t  rollrate_cds;  // rollspeed  in centi-deg/s
-    int16_t  pitchrate_cds; // pitchspeed in centi-deg/s
-    int16_t  yawrate_cds;   // yawspeed   in centi-deg/s
-    uint8_t  c0;            // Fletcher-8
-    uint8_t  c1;            // Fletcher-8
-} p2p_att_v1_t;
-#pragma pack(pop)
-
-static_assert(sizeof(p2p_att_v1_t) == 20, "p2p packet must be 20 bytes");
-
-
 static inline float wrap_pi(float a) {
     while (a >  M_PI) a -= 2.0f*M_PI;
     while (a < -M_PI) a += 2.0f*M_PI;
@@ -206,6 +224,157 @@ static void build_p2p_att_packet(p2p_att_v1_t &pkt, uint8_t peer_id, const mavli
     fletcher8((const uint8_t*)&pkt, sizeof(pkt) - 2, &pkt.c0, &pkt.c1);
 }
 
+void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms)
+{
+    p2p_mstate_v1_t pkt{};
+    pkt.stx     = 0xA8;
+    pkt.peer_id = src_id;
+    pkt.seq     = seq;
+    pkt.st      = st;
+    pkt.val     = val;
+    pkt.time_ms = time_ms;
+
+    fletcher8((const uint8_t*)&pkt, sizeof(pkt) - 2, &pkt.c0, &pkt.c1);
+
+    WITH_SEMAPHORE(g_mstate_sem);
+    g_mstate_pkt = pkt;
+    g_mstate_pending = true;   // flag for COMM_2 pipeline
+}
+
+static void p2p_send_broadcast_payload(const uint8_t *payload, uint8_t payload_len)
+{
+    if (payload_len > 58) {
+        return; // must fit (60 - 2 CRTP header)
+    }
+
+    // 1) CRTP header + payload
+    uint8_t p2p_packet[58];
+    uint8_t p2p_idx = 0;
+    p2p_packet[p2p_idx++] = 0xFF;
+    p2p_packet[p2p_idx++] = 0x80 | (0 & 0x0F); // Port 0
+    memcpy(&p2p_packet[p2p_idx], payload, payload_len);
+    p2p_idx += payload_len;
+
+    // 2) Syslink header + CRTP payload
+    uint8_t syslink_packet[64];
+    uint8_t syslink_idx = 0;
+    syslink_packet[syslink_idx++] = 0xBC;
+    syslink_packet[syslink_idx++] = 0xCF;
+    syslink_packet[syslink_idx++] = 0x0A;      // P2P Broadcast
+    syslink_packet[syslink_idx++] = p2p_idx;   // length
+    memcpy(&syslink_packet[syslink_idx], p2p_packet, p2p_idx);
+    syslink_idx += p2p_idx;
+
+    // 3) Fletcher-8 checksum
+    uint8_t c0 = 0, c1 = 0;
+    for (uint8_t j = 2; j < syslink_idx; j++) {
+        c0 += syslink_packet[j];
+        c1 += c0;
+    }
+    syslink_packet[syslink_idx++] = c0;
+    syslink_packet[syslink_idx++] = c1;
+
+    // 4) push
+    RadioPacketBuffer::get_instance().push(syslink_packet, syslink_idx);
+}
+
+static void p2p_flush_pending_mission_state()
+{
+    p2p_mstate_v1_t pkt;
+    {
+        WITH_SEMAPHORE(g_mstate_sem);
+        if (!g_mstate_pending) {
+            return;
+        }
+        pkt = g_mstate_pkt;
+        g_mstate_pending = false;
+    }
+
+    // optional: only send if the radio buffer has space for 1 packet
+    if (RadioPacketBuffer::get_instance().free_space() < 1) {
+        // If you prefer "retry later", re-set pending here instead of dropping
+        return;
+    }
+
+    p2p_send_broadcast_payload((const uint8_t*)&pkt, sizeof(pkt));
+}
+
+static uint8_t get_peer_id_from_param()
+{
+    // cache lookup (find is not free)
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    if (p == nullptr) {
+        p = AP_Param::find("GUID_PEER_ID", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 21; // fallback (or 0)
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:
+        v = ((AP_Int8*)p)->get();
+        break;
+    case AP_PARAM_INT16:
+        v = ((AP_Int16*)p)->get();
+        break;
+    case AP_PARAM_INT32:
+        v = ((AP_Int32*)p)->get();
+        break;
+    default:
+        return 21; // wrong type -> fallback
+    }
+
+    // clamp to byte
+    if (v < 0)   v = 0;
+    if (v > 255) v = 255;
+    //gcs().send_text(MAV_SEVERITY_ALERT, "P2P: Peer ID=%.ld",v);
+    return (uint8_t)v;
+}
+
+static uint32_t get_p2p_stream_from_param()
+{
+    // cache lookup (find is not free)
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    if (p == nullptr) {
+        p = AP_Param::find("GUID_P2P_STREAM", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 0; // fallback
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:
+        v = ((AP_Int8*)p)->get();
+        break;
+    case AP_PARAM_INT16:
+        v = ((AP_Int16*)p)->get();
+        break;
+    case AP_PARAM_INT32:
+        v = ((AP_Int32*)p)->get();
+        break;
+    default:
+        return 0; // wrong type -> fallback
+    }
+
+    // clamp to byte
+    if (v < 0)   v = 0;
+    if (v > 2147483647) v = 2147483647;
+    //gcs().send_text(MAV_SEVERITY_ALERT, "P2P: P2P Stream=%.ld",v);
+    return (uint32_t)v;
+}
+
+enum : uint32_t {
+    P2P_TX_ATTITUDE      = 1U << 0,
+    P2P_TX_MISSION_STATE = 1U << 1,
+    // Add more messages
+};
+
 /*
   send a buffer out a MAVLink channel
  */
@@ -217,6 +386,17 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
 
     // This logic is for the nRF radio channel (MAVLINK_COMM_2)
     if (chan == MAVLINK_COMM_2) {
+        // get P2P stream bitmask
+        const uint32_t P2P_MASK = get_p2p_stream_from_param();
+        bool p2p_att = false;
+
+        if (P2P_MASK & P2P_TX_ATTITUDE) {
+            p2p_att = true;
+        }
+        if (P2P_MASK & P2P_TX_MISSION_STATE) {
+            p2p_flush_pending_mission_state();
+        }        
+
         // --- START P2P REASSEMBLY & INTERCEPTION LOGIC ---
 
         // Static buffer to reassemble MAVLink chunks
@@ -268,7 +448,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
                     const uint32_t msgid = in_msg.msgid; // works for MAVLink1 and MAVLink2
                     if (msgid == MAVLINK_MSG_ID_ATTITUDE) {
 
-                        const int PEER_ID = 21;
+                        const uint8_t PEER_ID = get_peer_id_from_param();
 
                         // Decode MAVLink ATTITUDE payload
                         mavlink_attitude_t att {};
@@ -285,7 +465,11 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
                         expected_mavlink_len = sizeof(pkt);
                         p2p_mavlink_idx      = expected_mavlink_len;
 
-                        is_p2p_message = true;
+                        if (p2p_att) {
+                            is_p2p_message = true;
+                        } else {
+                            is_p2p_message = false;
+                        }
                     }
                 }                         
 

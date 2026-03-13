@@ -1448,6 +1448,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: 1/s
     // @Range: 0.1 5
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("GUID_KP_POS", 20, ParametersG2, guided_kp_pos, 1.2),
 
     // @Param: GUID_KP_VEL
@@ -1456,6 +1457,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: 1/s
     // @Range: 0.1 5
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("GUID_KP_VEL", 21, ParametersG2, guided_kp_vel, 2.0),
 
     // @Param: GUID_KI_VEL
@@ -1464,6 +1466,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: 1/s
     // @Range: 0.1 5
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("GUID_KI_VEL", 22, ParametersG2, guided_ki_vel, 0.4),
 
     // @Param: GUID_FILT
@@ -1472,6 +1475,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: 
     // @Range: 0.1 5
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("GUID_FILT", 23, ParametersG2, guided_filt, 0.35),
 
     // @Param: GUID_TKOFF_ALT
@@ -1480,6 +1484,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: m
     // @Range: 0.1 5
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("GUID_TKOFF_ALT", 24, ParametersG2, guided_tkoff_alt, 1.0),    
 
     // @Param: GUID_V_MAX
@@ -1488,6 +1493,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: m/s
     // @Range: 0.1 5
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("GUID_V_MAX", 25, ParametersG2, guided_v_max, 1.0),    
     
     // @Param: GUID_I_MAX
@@ -1496,6 +1502,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: m/s
     // @Range: 0.1 5
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("GUID_I_MAX", 26, ParametersG2, guided_i_max, 0.5),        
 
     // @Param: GUID_HOV_TIME
@@ -1504,7 +1511,33 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Units: s
     // @Range: 
     // @User: Advanced
-    AP_GROUPINFO("GUID_HOV_TIME", 27, ParametersG2, guided_hov_time, 12.0),         
+    // @RebootRequired: True
+    AP_GROUPINFO("GUID_HOV_TIME", 27, ParametersG2, guided_hov_time, 12.0), 
+    
+    // @Param: GUID_PEER_ID
+    // @DisplayName: Guided mode peer ID
+    // @Description: Guided mode peer ID for swarming
+    // @Units:
+    // @Range: 
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("GUID_PEER_ID", 28, ParametersG2, guided_peer_id, 0),     
+
+    // @Param: GUID_P2P_STREAM
+    // @DisplayName: Guided P2P Stream
+    // @Description: Guided mode peer to peer message stream bitmask
+    // @Bitmask: 0:Attitude, 1:MissionState, 2:Reserved2, 3:Reserved3
+    // @User: Advanced
+    AP_GROUPINFO("GUID_P2P_STREAM", 29, ParametersG2, guided_p2p_stream, 0),   
+    
+    // @Param: GUID_CF_ID
+    // @DisplayName: Guided mode Crazyflie ID
+    // @Description: Guided mode Crazyflie ID for nRF51
+    // @Units:
+    // @Range: 0-255
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("GUID_CF_ID", 30, ParametersG2, guided_cf_id, 231),         
 #endif
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION

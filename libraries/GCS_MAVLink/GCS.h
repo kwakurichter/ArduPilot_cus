@@ -538,6 +538,8 @@ protected:
 
     void handle_heartbeat(const mavlink_message_t &msg) const;
 
+    void handle_ai_deck_mission_statustext(const mavlink_message_t &msg);
+
     virtual bool persist_streamrates() const { return false; }
     void handle_request_data_stream(const mavlink_message_t &msg);
 

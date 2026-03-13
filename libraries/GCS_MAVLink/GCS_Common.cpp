@@ -83,6 +83,9 @@
  #include <AP_Vehicle/AP_Vehicle_config.h>
  
  #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <AP_Param/AP_Param.h>
  
  #if AP_RADIO_ENABLED
  #include <AP_Radio/AP_Radio.h>
@@ -120,6 +123,7 @@
  #include <ctype.h>
  
  extern const AP_HAL::HAL& hal;
+ extern void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms);
  
  static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
  
@@ -143,6 +147,31 @@
      _port = &uart;
  
      streamRates = parameters.streamRates;
+ }
+
+ static uint8_t get_cf_addr_byte3_param()
+ {
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    // Retry until it exists
+    if (p == nullptr) {
+        p = AP_Param::find("GUID_CF_ID", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 0x01; // default LSB for E7E7E7E701
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:  v = ((AP_Int8*)p)->get();  break;
+    case AP_PARAM_INT16: v = ((AP_Int16*)p)->get(); break;
+    case AP_PARAM_INT32: v = ((AP_Int32*)p)->get(); break;
+    default: return 0x01;
+    }
+
+    v = constrain_int32(v, 0, 255);
+    return (uint8_t)v;
  }
 
  // Helper function to calculate the Fletcher-8 checksum used by Syslink
@@ -210,7 +239,8 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
     // --- Packet 3: Set Radio Address to E7E7E7E701 (user configurble) ---
     // The Crazyflie firmware expects the 5-byte address in little-endian byte order.
     // So, 0xE7E7E7E701 is sent as {0x01, 0xE7, 0xE7, 0xE7, 0xE7}.
-    const uint8_t packet3_data[] = { 0x05, 0x05, 0x03, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
+    uint8_t packet3_data[] = { 0x05, 0x05, 0x01, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
+    packet3_data[2] = get_cf_addr_byte3_param();    // LSB (the “01” in E7E7E7E701)
     calculate_fletcher8(packet3_data, sizeof(packet3_data), ck_a, ck_b);
     const uint8_t packet3[] = { 0xBC, 0xCF, packet3_data[0], packet3_data[1], packet3_data[2], packet3_data[3], packet3_data[4], packet3_data[5], packet3_data[6], ck_a, ck_b };
     //port->write(packet3, sizeof(packet3));
@@ -223,6 +253,15 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
     //const uint8_t packet4[] = { 0xBC, 0xCF, packet4_data[0], packet4_data[1], packet4_data[2], ck_a, ck_b };
     //port->write(packet4, sizeof(packet4));
     //hal.scheduler->delay(5);
+
+    // -- DEBUG --
+    ExpandingString hex_dump;
+    hex_dump.printf("NRF_INIT: (%u): ", 7);
+    for (uint8_t k = 0; k < 7; k++) {
+        hex_dump.printf("%02X ", packet3_data[k]);
+    }
+    gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump.get_string());
+    // -- DEBUG --      
 
     gcs().send_text(MAV_SEVERITY_ALERT, "NRF_INIT: Config packets sent to port: %u", (int)port);  // DEBUG
 }
@@ -1971,6 +2010,21 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
  }
 
  #pragma pack(push, 1)
+ typedef struct {
+     uint8_t  stx;          // 0xA8 for mission-state packet
+     uint8_t  peer_id;      // source id
+     uint16_t seq;          // sequence number for dedupe
+     uint8_t  st;           // mission state/event
+     uint16_t val;          // optional value (wp idx, substate, etc.)
+     uint32_t time_ms;      // timestamp
+     uint8_t  c0;           // Fletcher-8
+     uint8_t  c1;           // Fletcher-8
+ } p2p_mstate_v1_t;
+ #pragma pack(pop)
+
+ static_assert(sizeof(p2p_mstate_v1_t) <= 13, "p2p packet must be 13 bytes"); 
+
+ #pragma pack(push, 1)
 typedef struct {
     uint8_t  stx;           // e.g. 0xA7
     uint8_t  peer_id;       // who sent it
@@ -2140,10 +2194,10 @@ static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
                         p2p_att_v1_t pkt;
                         memcpy(&pkt, payload, sizeof(pkt));
 
-                        // verify your Fletcher c0/c1 here before logging (recommended)
+                        // verify your Fletcher c0/c1 here before logging
                         if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
 
-                            AP::logger().Write("P2P", "TimeUS,PID,TBootMS,Rcd,Pcd,Ycd,RRcd,PRcd,YRcd", "QBIhhhhhh",
+                            AP::logger().Write("P2PA", "TimeUS,PID,TBootMS,Rcd,Pcd,Ycd,RRcd,PRcd,YRcd", "QBIhhhhhh",
                                         AP_HAL::micros64(),
                                         pkt.peer_id,
                                         pkt.time_boot_ms,
@@ -2154,6 +2208,22 @@ static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
                                         pkt.pitchrate_cds,
                                         pkt.yawrate_cds);
                         }                        
+                    }
+                    if (len >= sizeof(p2p_mstate_v1_t) && payload[0] == 0xA8) {
+                        p2p_mstate_v1_t pkt;
+                        memcpy(&pkt, payload, sizeof(pkt));
+
+                        // verify your Fletcher c0/c1 here before logging
+                        if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
+
+                            AP::logger().Write("P2PM", "TimeUS,PID,seq,st,val,TimeMS", "QBHBHI",
+                                        AP_HAL::micros64(),
+                                        pkt.peer_id,
+                                        pkt.seq,
+                                        pkt.st,
+                                        pkt.val,
+                                        pkt.time_ms);
+                        }            
                     }
              };                
              
@@ -4485,6 +4555,100 @@ static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
          gcs().sysid_myggcs_seen(AP_HAL::millis());
      }
  }
+
+ static bool parse_u32_key(const char* text, const char* key, uint32_t &out)
+ {
+     const char* p = strstr(text, key);
+     if (!p) return false;
+
+     p += strlen(key);
+     if (*p != '=') return false;
+     p++;
+
+     char* end = nullptr;
+     unsigned long v = strtoul(p, &end, 10);
+     if (end == p) return false;
+
+     out = (uint32_t)v;
+     return true;
+ }
+
+ static uint8_t get_peer_id_from_param()
+ {
+    // cache lookup (find is not free)
+     static AP_Param *p = nullptr;
+     static enum ap_var_type t = AP_PARAM_NONE;
+
+     if (p == nullptr) {
+         p = AP_Param::find("GUID_PEER_ID", &t, nullptr);
+     }
+     if (p == nullptr) {
+         return 21; // fallback (or 0)
+     }
+
+     int32_t v = 0;
+     switch (t) {
+     case AP_PARAM_INT8:
+         v = ((AP_Int8*)p)->get();
+         break;
+     case AP_PARAM_INT16:
+         v = ((AP_Int16*)p)->get();
+         break;
+     case AP_PARAM_INT32:
+         v = ((AP_Int32*)p)->get();
+         break;
+     default:
+         return 21; // wrong type -> fallback
+     }
+
+     // clamp to byte
+     if (v < 0)   v = 0;
+     if (v > 255) v = 255;
+     //gcs().send_text(MAV_SEVERITY_ALERT, "P2P: Peer ID =%.ld",v);
+     return (uint8_t)v;
+ }
+
+ void GCS_MAVLINK::handle_ai_deck_mission_statustext(const mavlink_message_t &msg)
+ {
+     mavlink_statustext_t st{};
+     mavlink_msg_statustext_decode(&msg, &st);
+
+     // If we ever send chunked statustext, ignore non-first chunks for now:
+     if (st.chunk_seq != 0) {
+         return;
+     }
+
+     // Make a safe, null-terminated string copy
+     char text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN + 1];
+     memcpy(text, st.text, MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN);
+     text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN] = '\0';
+
+     // Fast reject: must start with "MS1,"
+     if (strncmp(text, "MS1,", 4) != 0) {
+         return;
+     }
+
+     // Parse fields (accept strict "MS1,st=%u,val=%u,seq=%u")
+     uint32_t st_u = 0, val_u = 0, seq_u = 0;
+     // Require st + seq; val optional
+     if (!parse_u32_key(text, "st", st_u))  return;
+     if (!parse_u32_key(text, "seq", seq_u)) return;
+     (void)parse_u32_key(text, "val", val_u);
+
+     // Clamp to your intended sizes
+     const uint8_t  st8  = (uint8_t)st_u;
+     const uint16_t val16 = (uint16_t)val_u;
+     const uint16_t seq16 = (uint16_t)seq_u;
+
+     // Choose a source id
+     const uint8_t src_id = get_peer_id_from_param();
+
+     // include a timestamp
+     const uint32_t now_ms = AP_HAL::millis();
+
+     // Queue it for transmission via COMM_2 pipeline
+     p2p_queue_mission_state(src_id, seq16, st8, val16, now_ms);
+ }
  
  /*
    handle messages which don't require vehicle specific data
@@ -4634,6 +4798,12 @@ static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
  #endif
  
      case MAVLINK_MSG_ID_STATUSTEXT:
+         // keep existing logging behavior
+         if (chan == MAVLINK_COMM_1) {
+            handle_ai_deck_mission_statustext(msg);
+         }
+
+         // keep existing logging behavior
          handle_statustext(msg);
          break;
  

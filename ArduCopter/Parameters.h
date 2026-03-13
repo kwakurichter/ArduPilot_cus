@@ -714,6 +714,9 @@ public:
     AP_Float guided_v_max;
     AP_Float guided_i_max;
     AP_Float guided_hov_time;
+    AP_Int8  guided_peer_id;
+    AP_Int32 guided_p2p_stream;
+    AP_Int8  guided_cf_id;
 #endif
 
     // ramp time of throttle during take-off
