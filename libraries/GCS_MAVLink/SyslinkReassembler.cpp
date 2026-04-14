@@ -1,4 +1,3 @@
-// SyslinkReassembler.cpp
 #include "SyslinkReassembler.h"
 #include <AP_HAL/AP_HAL.h> // For AP_HAL::millis()
 #include "GCS.h" // For GCS_SEND_TEXT
@@ -137,7 +136,6 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c,
                 uint8_t crc0_expected = frame_ptr[2 + crc_check_len];
                 uint8_t crc1_expected = frame_ptr[2 + crc_check_len + 1];
 
-                // Create an ExpandingString to build the hex dump of the full packet
                 //ExpandingString full_packet_hex_dump;
                 //full_packet_hex_dump.printf("Syslink Full Pkt: ");
                 //for (const uint8_t byte_val : current_syslink_frame_buffer) {

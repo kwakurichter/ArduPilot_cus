@@ -290,17 +290,6 @@ __INITFUNC__ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial
 
     const Type _type = (Type)params[instance].type.get();
 
-    // <<<< CONDITIONAL DELAY FOR VL53L1X >>>>
-    // We only want to delay if this instance is for the VL53L1X
-    //bool is_vl53l1x = (_type == Type::VL53L1X_Short);
-
-    //if (is_vl53l1x) {
-    //    hal.console->printf("RangeFinder: Delaying VL53L1X init for 200ms (instance %u)...\n", instance); // DEBUG
-    //    gcs().send_text(MAV_SEVERITY_DEBUG, "RangeFinder: Delaying VL53L1X init for 200ms (instance %u)...\n", instance); // DEBUG
-    //    hal.scheduler->delay(200); // Delay for 200 milliseconds
-    //    hal.console->printf("RangeFinder: VL53L1X delay complete.\n"); // DEBUG
-    //    gcs().send_text(MAV_SEVERITY_DEBUG, "RangeFinder: VL53L1X delay complete.\n"); // DEBUG
-    //}
 
     switch (_type) {
 #if AP_RANGEFINDER_PULSEDLIGHTLRF_ENABLED
@@ -385,7 +374,13 @@ __INITFUNC__ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial
 #endif
 #if AP_RANGEFINDER_VL53L1X_ENABLED
                 if (_add_backend(AP_RangeFinder_VL53L1X::detect(state[instance], params[instance],
+#ifdef HAL_CF21                 
                                                                 hal.i2c_mgr->get_device(i, params[instance].address)), // <-- Only 3 arguments now
+#else
+                                                                hal.i2c_mgr->get_device(i, params[instance].address),
+                                                                _type == Type::VL53L1X_Short ?  AP_RangeFinder_VL53L1X::DistanceMode::Short :
+                                                                AP_RangeFinder_VL53L1X::DistanceMode::Long),  
+#endif                                                                                                                              
                                  instance)) {
                     break;
                 }

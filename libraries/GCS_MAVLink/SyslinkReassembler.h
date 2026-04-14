@@ -1,4 +1,3 @@
-// SyslinkReassembler.h
 #ifndef SYSLINK_REASSEMBLER_H
 #define SYSLINK_REASSEMBLER_H
 
@@ -32,7 +31,6 @@ public:
 
     // Processes an incoming byte.
     // Returns true if the byte 'c' was consumed by the Syslink state machine.
-    // mavlink_byte_pusher: A callback to push reassembled MAVLink bytes for further parsing.
     bool process_byte(uint8_t c, 
                     std::function<void(uint8_t mav_byte)> mavlink_byte_pusher,
                     std::function<void(const uint8_t* p2p_payload, uint8_t len)> p2p_packet_handler);

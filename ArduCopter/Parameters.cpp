@@ -1441,7 +1441,7 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     AP_GROUPINFO("FSTRATE_DIV", 10, ParametersG2, att_decimation, 1),
 #endif
 
-#if MODE_GUIDED_ENABLED
+#ifdef HAL_CF21   
     // @Param: GUID_KP_POS
     // @DisplayName: Guided mode position P gain
     // @Description: Guided mode position P gain for AI Deck companion computer
@@ -1537,7 +1537,16 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Range: 0-255
     // @User: Advanced
     // @RebootRequired: True
-    AP_GROUPINFO("GUID_CF_ID", 30, ParametersG2, guided_cf_id, 231),         
+    AP_GROUPINFO("GUID_CF_ID", 30, ParametersG2, guided_cf_id, 231),       
+    
+    // @Param: GUID_LOOPS
+    // @DisplayName: Guided mode loops
+    // @Description: Guided mode mission trajectory loops
+    // @Units:
+    // @Range: 0-255
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("GUID_LOOPS", 31, ParametersG2, guided_loops, 1),           
 #endif
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION

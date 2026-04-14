@@ -80,7 +80,6 @@ PB7 I2C1_SDA I2C1 # E_SCL
 
 # radio setup 
 PA4 NRF_FLOW_CTRL INPUT # goes low when we can write to uart
-# PA4 NRF_FLOW_CTRL INPUT GPIO(54)    # to reference in nrf driver
 #PB13 NRF_SWCLK
 #PB15 NRF_SWIO
 PC6 USART6_TX USART6 # NRF_RT
@@ -144,15 +143,11 @@ define AP_RANGEFINDER_ENABLED 1       #FlowDeck Support
 define AP_OPTICALFLOW_ENABLED 1       #FlowDeck Support
 define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 # define AP_SCRIPTING_ENABLED 1        #Lua Script Support
-# define AP_BLHELI_ENABLED 1           #BLHeli ESC Support
 
 undef HAL_GYROFFT_ENABLED             #Notch Filtering Support
 define HAL_GYROFFT_ENABLED 1
 
-#undef HAL_DSHOT_ENABLED               
-# define HAL_DSHOT_ENABLED 1            #BLHeli ESC Support
-
-# define HAL_WITH_BIDIR_DSHOT 1         #RPM telemetry
+define HAL_CF21                        #Crazyflie support
 define HAL_CF21_BRUSHLESS              #BDSHOT support
 
 define HAL_VISUALODOM_ENABLED 1        #OptiTrack Support

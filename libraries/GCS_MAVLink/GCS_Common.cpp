@@ -20,9 +20,12 @@
  #if HAL_GCS_ENABLED
  
  #include "GCS.h"
+
+ #ifdef HAL_CF21
  #include "SyslinkReassembler.h"
  #include "RadioBuffer.h"
  #include <AP_HAL/AP_HAL.h>     // For LED Debug
+ #endif
  
  #include <AC_Fence/AC_Fence.h>
  #include <AP_Compass/AP_Compass.h>
@@ -122,10 +125,12 @@
  
  #include <ctype.h>
  
+ #ifdef HAL_CF21
  extern const AP_HAL::HAL& hal;
  extern void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms);
  
  static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
+ #endif
  
  struct GCS_MAVLINK::LastRadioStatus GCS_MAVLINK::last_radio_status;
  uint8_t GCS_MAVLINK::mavlink_active = 0;
@@ -149,6 +154,7 @@
      streamRates = parameters.streamRates;
  }
 
+ #ifdef HAL_CF21
  static uint8_t get_cf_addr_byte3_param()
  {
     static AP_Param *p = nullptr;
@@ -265,6 +271,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
 
     gcs().send_text(MAV_SEVERITY_ALERT, "NRF_INIT: Config packets sent to port: %u", (int)port);  // DEBUG
 }
+#endif
  
  bool GCS_MAVLINK::init(uint8_t instance)
  {
@@ -290,16 +297,16 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
          set_channel_private(chan);
      }
  
+#ifdef HAL_CF21     
      if (chan == MAVLINK_COMM_2) {
         RadioPacketBuffer::get_instance().register_scheduler_task();    // register the drain task to run in parallel
         gcs().send_text(MAV_SEVERITY_DEBUG, "INIT: Registered drain task for chan %d", (int)instance);
 
         // Send the initial config packets required by the NRF firmware
         send_syslink_config_packets(_port);
-
-        set_mavlink_message_id_interval(MAVLINK_MSG_ID_ATTITUDE, 100);
    
      }
+#endif     
 
 
  
@@ -1666,15 +1673,6 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
  #endif
          deferred_messages_initialised = true;
      }
-
-    // For our P2P link (MAVLINK_COMM_2), continually ensure the ATTITUDE
-    // stream is active. This prevents a GCS from disabling it on this channel.
-    if (chan == MAVLINK_COMM_2) {
-        set_mavlink_message_id_interval(MAVLINK_MSG_ID_ATTITUDE, 100); // 100ms = 10Hz
-    }
-    if (chan == MAVLINK_COMM_1) {
-        set_mavlink_message_id_interval(MAVLINK_MSG_ID_LOCAL_POSITION_NED, 100); // 100ms = 10Hz
-    }    
  
  #if GCS_DEBUG_SEND_MESSAGE_TIMINGS
      uint32_t retry_deferred_body_start = AP_HAL::micros();
@@ -2009,6 +2007,7 @@ static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, 
      handle_message(msg);
  }
 
+#ifdef HAL_CF21 
  #pragma pack(push, 1)
  typedef struct {
      uint8_t  stx;          // 0xA8 for mission-state packet
@@ -2060,6 +2059,7 @@ static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
     fletcher8(buf, len_with_crc - 2, &c0, &c1);
     return (c0 == buf[len_with_crc - 2]) && (c1 == buf[len_with_crc - 1]);
 }
+#endif
  
  void
  GCS_MAVLINK::update_receive(uint32_t max_time_us)
@@ -2086,6 +2086,7 @@ static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
          const uint32_t protocol_timeout = 4000;
          bool byte_handled_by_syslink = false;
  
+#ifdef HAL_CF21         
          // --- BEGIN SYSLINK PRE-PROCESSING FOR MAVLINK_COMM_2 ---
          if (chan == MAVLINK_COMM_2) {
              //gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_2 RAW RX: 0x%02X", (unsigned)c);  // DEBUG
@@ -2238,7 +2239,7 @@ static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
              // if MAVLink was successfully generated from Syslink.
              continue;
          }        
-         
+#endif         
          // Original MAVLink / alternative protocol handling for byte 'c'
          // This part runs if 'chan' is not MAVLINK_COMM_1, or if Syslink didn't consume the byte.
          bool parsed_packet_std = false; // Use a different variable name

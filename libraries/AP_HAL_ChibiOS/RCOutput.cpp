@@ -1063,7 +1063,7 @@ bool RCOutput::setup_group_DMA(pwm_group &group, uint32_t bitrate, uint32_t bit_
 #endif // HAL_DSHOT_ENABLED
 }
 
-#if defined(HAL_CF21_BRUSHLESS)
+#ifdef HAL_CF21_BRUSHLESS
 bool RCOutput::cf21_is_tim2_motor_group(const pwm_group &group)
 {
     return group.timer_id == 2;
@@ -1077,9 +1077,7 @@ void RCOutput::cf21_set_tim2_motor_lines_tx(const pwm_group &group, bool bidir)
 
     iomode_t mode = PAL_MODE_ALTERNATE(1) | PAL_STM32_OTYPE_OPENDRAIN | PAL_STM32_OSPEED_HIGHEST;
 
-    // In bidirectional mode keep the line released high when the FC is not
-    // actively pulling it low. This is the closest equivalent to the CF brushless
-    // firmware's inverted/idle-high behaviour on OD outputs.
+    // In bidirectional mode keep the line released high when the FC is not actively pulling it low
 #if defined(PAL_STM32_PUPDR_PULLUP)
     if (bidir) {
         mode |= PAL_STM32_PUPDR_PULLUP;

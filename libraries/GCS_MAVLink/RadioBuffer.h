@@ -2,7 +2,6 @@
 #define RADIO_BUFFER_H
 
 #include <AP_HAL/AP_HAL.h>
-// #include <GCS_MAVLink.h> // For MAVLINK_MAX_PACKET_LEN
 
 // A structure to hold a single complete Syslink-wrapped packet
 struct RadioPacket {

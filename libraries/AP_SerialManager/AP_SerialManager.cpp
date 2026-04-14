@@ -754,7 +754,9 @@ uint32_t AP_SerialManager::map_baudrate(int32_t rate)
     case 460:  return 460800;
     case 500:  return 500000;
     case 921:  return 921600;
+#ifdef HAL_CF21    
     case 1000:  return 1000000; // Added for Crazyflie nrf radio driver
+#endif
     case 1500:  return 1500000;
     case 2000:  return 2000000;
     }

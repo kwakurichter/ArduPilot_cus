@@ -753,9 +753,6 @@ private:
     static void cf21_set_tim2_motor_lines_tx(const pwm_group &group, bool bidir);
     static void cf21_set_tim2_motor_lines_rx(const pwm_group &group);
     static void cf21_reset_escs_for_bdshot(const pwm_group &group);
-    //static bool cf21_tim2_channel_valid(const pwm_group &group, uint8_t ch);
-    //static uint8_t cf21_tim2_first_valid_channel(const pwm_group &group);
-    //static uint8_t cf21_tim2_next_channel(const pwm_group &group, uint8_t current);
 #endif
 
     /*

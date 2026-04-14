@@ -73,7 +73,7 @@ void RCOutput::set_bidir_dshot_mask(uint32_t mask)
         }
         set_group_mode(group);
 
-#if defined(HAL_CF21_BRUSHLESS)
+#ifdef HAL_CF21_BRUSHLESS
         if (cf21_is_tim2_motor_group(group) && is_dshot_protocol(group.current_mode)) {
             const uint32_t active_mask = group.ch_mask & group.en_mask;
             const bool was_bidir = (prev_mask & active_mask) == active_mask;
@@ -109,7 +109,6 @@ static inline bool cf21_tim2_channel_valid(const Group &group, uint8_t ch)
 {
     return (group.timer_id == 2) &&
            group.is_chan_enabled(ch) &&
-           //(_bdshot.mask & (1U << group.chan[ch])) &&
            group.bdshot.ic_dma_handle[ch] != nullptr;
 }
 
@@ -549,7 +548,7 @@ void RCOutput::bdshot_reset_pwm(pwm_group& group, uint8_t telem_channel)
 #if !defined(STM32F1)
 void RCOutput::bdshot_receive_pulses_DMAR(pwm_group* group)
 {
-#if defined(HAL_CF21_BRUSHLESS)
+#ifdef HAL_CF21_BRUSHLESS
     if (cf21_is_tim2_motor_group(*group)) {
         cf21_set_tim2_motor_lines_rx(*group);
         cf21_tim2_bdshot_dbg.rx_start_count++;

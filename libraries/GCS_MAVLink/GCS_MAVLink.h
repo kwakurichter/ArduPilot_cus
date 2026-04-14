@@ -4,10 +4,13 @@
 
 #include <AP_HAL/AP_HAL_Boards.h>
 #include <AP_Networking/AP_Networking_Config.h>
+
+#ifdef HAL_CF21
 #include <vector>
 #include <cstdint>
 
 extern bool g_syslink_ready;    // Indicates when NRF is ready to receive
+#endif
 
 // we have separate helpers disabled to make it possible
 // to select MAVLink 1.0 in the arduino GUI build
@@ -73,9 +76,11 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len);
 /// @returns		Number of bytes available
 uint16_t comm_get_txspace(mavlink_channel_t chan);
 
+#ifdef HAL_CF21
 /// Check queue for p2p mission state packets
 ///
 void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms);
+#endif
 
 #define MAVLINK_USE_CONVENIENCE_FUNCTIONS
 #include "include/mavlink/v2.0/all/mavlink.h"
@@ -83,7 +88,6 @@ void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t 
 // lock and unlock a channel, for multi-threaded mavlink send
 void comm_send_lock(mavlink_channel_t chan, uint16_t size);
 void comm_send_unlock(mavlink_channel_t chan);
-bool is_your_msg(const uint8_t *buf, uint8_t len);    // Crazyflie nrf support
 HAL_Semaphore &comm_chan_lock(mavlink_channel_t chan);
 
 #pragma GCC diagnostic pop

@@ -26,6 +26,8 @@ This provides some support code and variables for MAVLink enabled sketches
 
 #include "GCS.h"
 #include "GCS_MAVLink.h"
+
+#ifdef HAL_CF21
 #include "RadioBuffer.h"
 #include <AP_Common/ExpandingString.h>
 
@@ -64,13 +66,14 @@ static_assert(sizeof(p2p_att_v1_t) == 20, "p2p packet must be 20 bytes");
 
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
 
-extern const AP_HAL::HAL& hal;
-
 bool g_syslink_ready = false; // The flag to indicate NRF is ready
 
 static HAL_Semaphore g_mstate_sem;
 static bool g_mstate_pending = false;
 static p2p_mstate_v1_t g_mstate_pkt{};
+#endif
+
+extern const AP_HAL::HAL& hal;
 
 #ifdef MAVLINK_SEPARATE_HELPERS
 // Shut up warnings about missing declarations; TODO: should be fixed on
@@ -167,6 +170,7 @@ uint16_t comm_get_txspace(mavlink_channel_t chan)
     return link->txspace();
 }
 
+#ifdef HAL_CF21
 static inline float wrap_pi(float a) {
     while (a >  M_PI) a -= 2.0f*M_PI;
     while (a < -M_PI) a += 2.0f*M_PI;
@@ -374,6 +378,7 @@ enum : uint32_t {
     P2P_TX_MISSION_STATE = 1U << 1,
     // Add more messages
 };
+#endif
 
 /*
   send a buffer out a MAVLink channel
@@ -384,6 +389,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         return;
     }
 
+#ifdef HAL_CF21
     // This logic is for the nRF radio channel (MAVLINK_COMM_2)
     if (chan == MAVLINK_COMM_2) {
         // get P2P stream bitmask
@@ -592,6 +598,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint16_t len)
         // --- END P2P REASSEMBLY & INTERCEPTION LOGIC ---
         return; // Important: We handle all MAVLINK_COMM_2 traffic inside this block now.
     }
+#endif    
 
     // For all other MAVLink channels, use the regular send
     mavlink_comm_port[chan]->write(buf, len);

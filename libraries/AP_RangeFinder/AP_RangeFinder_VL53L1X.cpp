@@ -12,12 +12,8 @@ extern const AP_HAL::HAL& hal;
 
 // --- Configuration Constants ---
 #define VL53L1X_DISTANCE_MODE       VL53L1_DISTANCEMODE_MEDIUM  // Medium range mode
-// #define VL53L1X_TIMING_BUDGET_US    25000                       // 25ms timing budget
-// #define VL53L1X_INTER_MEASUREMENT_MS ((VL53L1X_TIMING_BUDGET_US / 1000) + 5) // Timing budget + min 4 ms
-// Timeout for waiting for data ready after triggering (milliseconds)
-#define DATA_READY_TIMEOUT_MS 100
-// Timeout for considering the sensor disconnected if no valid readings (milliseconds)
-#define SENSOR_TIMEOUT_MS 500
+#define DATA_READY_TIMEOUT_MS 100   // Timeout for waiting for data ready after triggering (milliseconds)
+#define SENSOR_TIMEOUT_MS 500   // Timeout for considering the sensor disconnected if no valid readings (milliseconds)
 
 
 extern "C" void VL53L1_set_aphal_device(AP_HAL::I2CDevice*);
@@ -232,7 +228,6 @@ void AP_RangeFinder_VL53L1X::update(void)
 
     if (read_ok) {
         // Process valid measurement data
-        // Check RangeStatus based on ST API definitions (vl53l1_def.h)
         if (measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID ||
             measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID_MIN_RANGE_CLIPPED ||
             measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID_NO_WRAP_CHECK_FAIL)
@@ -240,11 +235,10 @@ void AP_RangeFinder_VL53L1X::update(void)
             state.distance_m = measurement_data.RangeMilliMeter * 0.001f;
             state.last_reading_ms = AP_HAL::millis();
 
-            // Calculate signal quality (example using Sigma)
-            // Check vl53l1_def.h or API src for SigmaMilliMeter format (e.g., FixPoint142 -> val/4.0)
+            // Calculate signal quality
             const float min_sigma_mm = 5.0f;  // Lower sigma = better quality
             const float max_sigma_mm = 50.0f;
-            float sigma_mm = (float)measurement_data.SigmaMilliMeter; // Adjust scaling based on actual format (e.g., / 4.0 for FP14.2)
+            float sigma_mm = (float)measurement_data.SigmaMilliMeter; // Adjust scaling based on actual format
 
             if (measurement_data.SigmaMilliMeter == 0) { // Check for zero sigma
                 state.signal_quality_pct = RangeFinder::SIGNAL_QUALITY_UNKNOWN; // Or 100?
@@ -258,7 +252,7 @@ void AP_RangeFinder_VL53L1X::update(void)
             state.signal_quality_pct = constrain_int16(state.signal_quality_pct, 0, 100);
 
             // Update ArduPilot status based on distance and limits
-            update_status(); // Base class checks min/max distance/orientation
+            update_status();
 
             // If status was bad, mark as Good now
             if (state.status != RangeFinder::Status::Good) {
@@ -289,10 +283,9 @@ void AP_RangeFinder_VL53L1X::update(void)
     }
 }
 
-/* Timer function - called periodically */
 void AP_RangeFinder_VL53L1X::timer(void)
 {
-    // Typically not needed if all logic is in update()
+    //
 }
 
 #endif // AP_RANGEFINDER_VL53L1X_ENABLED

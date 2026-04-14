@@ -11,7 +11,6 @@
 #include <AP_HAL/utility/sparse-endian.h>
 
 // --- Include ST API Headers ---
-// Wrap C headers in extern "C" when included from C++
 extern "C" {
   #include "vl53l1x_api/platform/inc/vl53l1_platform.h"
   #include "vl53l1x_api/core/inc/vl53l1_error_codes.h"
@@ -31,7 +30,7 @@ public:
     // Static detection function
     static AP_RangeFinder_Backend *detect(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev);
 
-    // Update state method (called periodically)
+    // Update state method
     void update(void) override;
 
 protected:
@@ -41,7 +40,7 @@ protected:
     }
 
 private:
-    // ArduPilot I2C device handle
+    // I2C device handle
     AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev;
 
     /* Full ST device wrapper – contains LL driver data plus user fields */
@@ -50,13 +49,10 @@ private:
     /* Convenience alias passed to ST API functions */
     VL53L1_DEV st_dev_ptr = &st_dev;
 
-    // Initialization status flag
-    bool is_initialized = false;
+    bool is_initialized = false;    // Initialization status flag
 
-    // Internal initialization function
     bool init();
 
-    // Timer function (optional, likely unused)
     void timer();
 
 };

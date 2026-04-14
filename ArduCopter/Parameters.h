@@ -705,7 +705,7 @@ public:
     AP_Int16                failsafe_dr_timeout;
     AP_Float                surftrak_tc;
 
-#if MODE_GUIDED_ENABLED
+#ifdef HAL_CF21
     AP_Float guided_kp_pos;
     AP_Float guided_kp_vel;
     AP_Float guided_ki_vel;
@@ -717,6 +717,7 @@ public:
     AP_Int8  guided_peer_id;
     AP_Int32 guided_p2p_stream;
     AP_Int8  guided_cf_id;
+    AP_Int8  guided_loops;
 #endif
 
     // ramp time of throttle during take-off
