@@ -65,6 +65,7 @@
 #include "AP_RangeFinder_RDS02UF.h"
 #include "AP_RangeFinder_LightWare_GRF.h"
 #include "AP_RangeFinder_DTS6012M.h"
+#include "AP_RangeFinder_FlowDeck.h"
 
 #include <AP_BoardConfig/AP_BoardConfig.h>
 #include <AP_Logger/AP_Logger.h>
@@ -634,6 +635,18 @@ __INITFUNC__ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial
         serial_create_fn = AP_RangeFinder_DTS6012M::create;
         break;
 #endif // AP_RANGEFINDER_DTS6012M_ENABLED
+
+#if AP_RANGEFINDER_FLOWDECK_ENABLED                                                                       
+    case Type::FLOWDECK:
+        FOREACH_I2C(i) {
+            if (_add_backend(AP_RangeFinder_FlowDeck::detect(state[instance], params[instance],
+                                                             hal.i2c_mgr->get_device(i, params[instance].address)),
+                             instance)) {
+                break;
+            }            
+        }
+        break;                                                                             
+#endif // AP_RANGEFINDER_FLOWDECK_ENABLED 
 
     case Type::NONE:
         break;

@@ -1,0 +1,99 @@
+#include <AP_HAL/AP_HAL.h>
+#include <AP_Scheduler/AP_Scheduler.h>
+#include "RadioBuffer.h"
+#include "GCS_MAVLink.h"
+#include <string.h> // For memcpy
+#include "GCS.h"
+
+extern const AP_HAL::HAL& hal;
+
+// To access the global mavlink_comm_port array declared in GCS_MAVLink.cpp
+extern AP_HAL::UARTDriver* mavlink_comm_port[MAVLINK_COMM_NUM_BUFFERS];
+
+// Tries to add a packet to the buffer.
+bool RadioPacketBuffer::push(const uint8_t* pkt_buf, uint8_t pkt_len) {
+    WITH_SEMAPHORE(sem); // Automatically takes and gives the semaphore
+
+    if (count >= RADIO_BUFFER_SIZE) {
+        // Buffer is full, packet will be dropped (tail droped)
+        return false;
+    }
+
+    if (pkt_len > sizeof(buffer[tail].buf)) {
+        // Packet is too large for our struct buffer, cannot store
+        return false;
+    }
+
+    // Copy the packet data into the buffer at the current tail position
+    buffer[tail].len = pkt_len;
+    memcpy(buffer[tail].buf, pkt_buf, pkt_len);
+
+    // Advance the tail index, wrapping around if necessary
+    tail = (tail + 1) % RADIO_BUFFER_SIZE;
+    count++;
+
+    return true;
+}
+
+// Tries to retrieve a packet from the buffer
+bool RadioPacketBuffer::pop(RadioPacket& packet) {
+    WITH_SEMAPHORE(sem); // Automatically takes and gives the semaphore
+
+    if (count == 0) {
+        // Buffer is empty
+        return false;
+    }
+
+    // Copy the packet from the head of the buffer to the provided packet struct
+    packet.len = buffer[head].len;
+    memcpy(packet.buf, buffer[head].buf, buffer[head].len);
+
+    // Advance the head index, wrapping around if necessary
+    head = (head + 1) % RADIO_BUFFER_SIZE;
+    count--;
+
+    return true;
+}
+
+// Checks if the buffer is empty
+bool RadioPacketBuffer::is_empty() {
+    WITH_SEMAPHORE(sem);
+    return count == 0;
+}
+
+void RadioPacketBuffer::register_scheduler_task()
+{
+    // Use a static bool to ensure we only ever register this task once
+    static bool is_registered = false;
+    if (is_registered) {
+        return;
+    }
+
+    hal.scheduler->register_timer_process(FUNCTOR_BIND_MEMBER(&RadioPacketBuffer::drain_task, void));
+    is_registered = true;
+}
+
+
+void RadioPacketBuffer::drain_task() {
+    
+    const bool nrf_is_ready = (hal.gpio->read(4) == 0);     // Necessary?
+
+    // Don't send anything until the nrf is ready
+    if (!nrf_is_ready) {
+        return;
+    }
+
+    RadioPacket packet_to_send;
+    // Call the pop() method on this instance
+    if (this->pop(packet_to_send)) {
+        if (mavlink_comm_port[MAVLINK_COMM_2] != nullptr) {
+            // gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_SEND: Using Drain path for chan %d", (int)MAVLINK_COMM_2); // DEBUG
+            mavlink_comm_port[MAVLINK_COMM_2]->write(packet_to_send.buf, packet_to_send.len);
+        }
+    }
+}
+
+uint8_t RadioPacketBuffer::free_space() {
+    WITH_SEMAPHORE(sem);
+    return RADIO_BUFFER_SIZE - count;
+}

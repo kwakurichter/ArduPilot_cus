@@ -12,6 +12,7 @@
 #include "AP_OpticalFlow_HereFlow.h"
 #include "AP_OpticalFlow_MSP.h"
 #include "AP_OpticalFlow_UPFLOW.h"
+#include "AP_OpticalFlow_FlowDeck.h"
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
 #include <AP_AHRS/AP_AHRS.h>
@@ -27,7 +28,7 @@ const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
     // @DisplayName: Optical flow sensor type
     // @Description: Optical flow sensor type
     // @SortValues: AlphabeticalZeroAtTop
-    // @Values: 0:None, 1:PX4Flow, 2:Pixart, 3:Bebop, 4:CXOF, 5:MAVLink, 6:DroneCAN, 7:MSP, 8:UPFLOW, 10:SITL
+    // @Values: 0:None, 1:PX4Flow, 2:Pixart, 3:Bebop, 4:CXOF, 5:MAVLink, 6:DroneCAN, 7:MSP, 8:UPFLOW, 9:FLOWDECK, 10:SITL
     // @User: Standard
     // @RebootRequired: True
     AP_GROUPINFO_FLAGS("_TYPE", 0,  AP_OpticalFlow,    _type,   (float)OPTICAL_FLOW_TYPE_DEFAULT, AP_PARAM_FLAG_ENABLE),
@@ -171,6 +172,11 @@ void AP_OpticalFlow::init(uint32_t log_bit)
         backend = AP_OpticalFlow_UPFLOW::detect(*this);
         break;
 #endif  // AP_OPTICALFLOW_UPFLOW_ENABLED
+#if AP_OPTICALFLOW_FLOWDECK_ENABLED
+    case Type::FLOWDECK:
+        backend = AP_OpticalFlow_FlowDeck::detect("optflow", *this);
+        break;
+#endif
 #if AP_OPTICALFLOW_SITL_ENABLED
     case Type::SITL:
         backend = NEW_NOTHROW AP_OpticalFlow_SITL(*this);
