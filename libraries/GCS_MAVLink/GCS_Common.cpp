@@ -114,6 +114,16 @@ extern AP_IOMCU iomcu;
 
 extern const AP_HAL::HAL& hal;
 
+#ifdef HAL_CF21
+#include "SyslinkReassembler.h"
+#include "RadioBuffer.h"
+#include <AP_BattMonitor/AP_BattMonitor_Scripting.h>
+
+extern void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms);
+
+static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
+#endif
+
 struct GCS_MAVLINK::LastRadioStatus GCS_MAVLINK::last_radio_status;
 uint8_t GCS_MAVLINK::mavlink_active = 0;
 uint8_t GCS_MAVLINK::chan_is_streaming = 0;
@@ -135,6 +145,143 @@ GCS_MAVLINK::GCS_MAVLINK(GCS_MAVLINK_Parameters &parameters,
 
     streamRates = parameters.streamRates;
 }
+
+#ifdef HAL_CF21
+static uint8_t get_cf_addr_byte3_param()
+{
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    // Retry until it exists
+    if (p == nullptr) {
+        p = AP_Param::find("CF_ID", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 0x01; // default LSB for E7E7E7E701
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:  v = ((AP_Int8*)p)->get();  break;
+    case AP_PARAM_INT16: v = ((AP_Int16*)p)->get(); break;
+    case AP_PARAM_INT32: v = ((AP_Int32*)p)->get(); break;
+    default: return 0x01;
+    }
+
+    v = constrain_int32(v, 0, 255);
+    return (uint8_t)v;
+}
+
+static uint8_t get_cf_channel_param()
+{
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    // Retry until it exists
+    if (p == nullptr) {
+        p = AP_Param::find("CF_CHANNEL", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 0x50; // default channel 80
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:  v = ((AP_Int8*)p)->get();  break;
+    case AP_PARAM_INT16: v = ((AP_Int16*)p)->get(); break;
+    case AP_PARAM_INT32: v = ((AP_Int32*)p)->get(); break;
+    default: return 0x50;
+    }
+
+    v = constrain_int32(v, 0, 255);
+    return (uint8_t)v;
+}
+
+// Helper function to calculate the Fletcher-8 checksum used by Syslink
+static void calculate_fletcher8(const uint8_t *data, uint8_t len, uint8_t &ck_a, uint8_t &ck_b)
+{
+    uint8_t c0 = 0;
+    uint8_t c1 = 0;
+
+    for (uint8_t i = 0; i < len; i++) {
+        c0 += data[i];
+        c1 += c0;
+    }
+
+    ck_a = c0;
+    ck_b = c1;
+}
+
+static void send_packet_blocking(AP_HAL::UARTDriver* port, const uint8_t* data, uint8_t size)
+{
+    if (port == nullptr) {
+        return;
+    }
+
+    port->write(data, size);
+
+    // Wait until the software transmit buffer is empty, using the tx_pending() method.
+    // This indicates the hardware has taken all the data for transmission.
+    // We add a 100ms timeout to prevent the system from hanging forever.
+    const uint32_t start_ms = AP_HAL::millis();
+    while (port->tx_pending()) {
+        if (AP_HAL::millis() - start_ms > 100) {
+            // gcs().send_text(MAV_SEVERITY_WARNING, "NRF: UART TX timeout");
+            break;
+        }
+        hal.scheduler->delay(1);
+    }
+}
+ 
+ static void send_syslink_config_packets(AP_HAL::UARTDriver* port)
+{
+    if (port == nullptr) {
+        return;
+    }
+
+    //gcs().send_text(MAV_SEVERITY_ALERT, "NRF_INIT: Sending config packets..."); // DEBUG
+
+    uint8_t ck_a, ck_b;
+
+    // --- Packet 1: Set Radio Channel (user configurable) ---
+    uint8_t packet1_data[] = { 0x01, 0x01, 0x50 }; // Type, Length, Data
+    packet1_data[2] = get_cf_channel_param();
+    calculate_fletcher8(packet1_data, sizeof(packet1_data), ck_a, ck_b);
+    const uint8_t packet1[] = { 0xBC, 0xCF, packet1_data[0], packet1_data[1], packet1_data[2], ck_a, ck_b };
+    send_packet_blocking(port, packet1, sizeof(packet1));
+
+    // --- Packet 2: Set Data Rate to 2M (0x02) ---
+    const uint8_t packet2_data[] = { 0x02, 0x01, 0x02 }; // Type, Length, Data
+    calculate_fletcher8(packet2_data, sizeof(packet2_data), ck_a, ck_b);
+    const uint8_t packet2[] = { 0xBC, 0xCF, packet2_data[0], packet2_data[1], packet2_data[2], ck_a, ck_b };
+    send_packet_blocking(port, packet2, sizeof(packet2));
+
+    // --- Packet 3: Set Radio Address to E7E7E7E701 (user configurble) ---
+    // The Crazyflie firmware expects the 5-byte address in little-endian byte order. So, 0xE7E7E7E701 is sent as {0x01, 0xE7, 0xE7, 0xE7, 0xE7}.
+    uint8_t packet3_data[] = { 0x05, 0x05, 0x01, 0xE7, 0xE7, 0xE7, 0xE7 }; // Type, Length, Data
+    packet3_data[2] = get_cf_addr_byte3_param();    // LSB (the “01” in E7E7E7E701)
+    calculate_fletcher8(packet3_data, sizeof(packet3_data), ck_a, ck_b);
+    const uint8_t packet3[] = { 0xBC, 0xCF, packet3_data[0], packet3_data[1], packet3_data[2], packet3_data[3], packet3_data[4], packet3_data[5], packet3_data[6], ck_a, ck_b };
+    send_packet_blocking(port, packet3, sizeof(packet3));
+
+    // --- Packet 4: Set Radio Power to +6dBm (0x06) (Optional) ---
+    //const uint8_t packet4_data[] = { 0x07, 0x01, 0x06 }; // Type, Length, Data
+    //calculate_fletcher8(packet4_data, sizeof(packet4_data), ck_a, ck_b);
+    //const uint8_t packet4[] = { 0xBC, 0xCF, packet4_data[0], packet4_data[1], packet4_data[2], ck_a, ck_b };
+    //send_packet_blocking(port, packet4, sizeof(packet4));
+
+    // -- DEBUG --
+    //ExpandingString hex_dump;
+    //hex_dump.printf("NRF_INIT: (%u): ", 7);
+    //for (uint8_t k = 0; k < 7; k++) {
+    //    hex_dump.printf("%02X ", packet3_data[k]);
+    //}
+    //gcs().send_text(MAV_SEVERITY_ALERT, "%s", hex_dump.get_string());
+    // -- DEBUG --      
+
+    //gcs().send_text(MAV_SEVERITY_ALERT, "NRF_INIT: Config packets sent to port: %u", (int)port);  // DEBUG
+}
+#endif
 
 bool GCS_MAVLINK::init(uint8_t instance)
 {
@@ -159,6 +306,16 @@ bool GCS_MAVLINK::init(uint8_t instance)
     if (uartstate->option_enabled(AP_HAL::UARTDriver::OPTION_MAVLINK_NO_FORWARD)) {
         set_channel_private(chan);
     }
+
+#ifdef HAL_CF21     
+    if (chan == MAVLINK_COMM_2) {
+        RadioPacketBuffer::get_instance().register_scheduler_task();    // register the drain task to run in parallel
+        //gcs().send_text(MAV_SEVERITY_DEBUG, "INIT: Registered drain task for chan %d", (int)instance);
+
+        // Send the initial config packets required by the NRF firmware
+        send_syslink_config_packets(_port);
+    }
+#endif           
 
     /*
       Now try to cope with SiK radios that may be stuck in bootloader
@@ -1833,6 +1990,73 @@ void GCS_MAVLINK::packetReceived(const mavlink_status_t &status,
     handle_message(msg);
 }
 
+#ifdef HAL_CF21 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;          // 0xA8 for mission-state packet
+    uint8_t  peer_id;      // source id
+    uint16_t seq;          // sequence number for dedupe
+    uint8_t  st;           // mission state/event
+    uint16_t val;          // optional value (wp idx, substate, etc.)
+    uint32_t time_ms;      // timestamp
+    uint16_t res_0;        // reserved
+    uint16_t res_1;        // reserved
+    uint8_t  c0;           // Fletcher-8
+    uint8_t  c1;           // Fletcher-8
+} p2p_mstate_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_mstate_v1_t) <= 17, "p2p packet must be 17 bytes"); 
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // 0xA7
+    uint8_t  peer_id;       // who sent it
+    uint32_t time_boot_ms;  // copied from MAVLink ATTITUDE
+    int16_t  roll_cd;       // roll  in centi-deg
+    int16_t  pitch_cd;      // pitch in centi-deg
+    int16_t  yaw_cd;        // yaw   in centi-deg (wrap to [-18000, +18000])
+    int16_t  rollrate_cds;  // rollspeed  in centi-deg/s
+    int16_t  pitchrate_cds; // pitchspeed in centi-deg/s
+    int16_t  yawrate_cds;   // yawspeed   in centi-deg/s
+    int16_t  res_0;         // reserved
+    int16_t  res_1;         // reserved
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_att_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_att_v1_t) == 24, "p2p packet must be 24 bytes");
+
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // 0xA9
+    uint8_t  peer_id;       // who sent it
+    uint32_t time_boot_ms;  // copied from MAVLink (32)
+    int16_t  x_pos;         // x-position in m
+    int16_t  y_pos;         // y-position in m
+    int16_t  z_pos;         // z-position in m
+    int16_t  x_vel;         // x-velocity in m/s
+    int16_t  y_vel;         // y-velocity in m/s
+    int16_t  z_vel;         // z-velocity in m/s
+    int16_t  res_0;         // reserved
+    int16_t  res_1;         // reserved
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_pos_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_pos_v1_t) == 24, "p2p packet must be 24 bytes");
+
+static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
+{
+    if (len_with_crc < 3) return false;
+    uint8_t c0, c1;
+    calculate_fletcher8(buf, len_with_crc - 2, c0, c1);
+    return (c0 == buf[len_with_crc - 2]) && (c1 == buf[len_with_crc - 1]);
+}
+#endif
+
 void
 GCS_MAVLINK::update_receive(uint32_t max_time_us)
 {
@@ -1854,6 +2078,160 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
     {
         const uint8_t c = (uint8_t)_port->read();
         const uint32_t protocol_timeout = 4000;
+
+#ifdef HAL_CF21       
+        bool byte_handled_by_syslink = false;
+
+        if (chan == MAVLINK_COMM_2) {
+            //gcs().send_text(MAV_SEVERITY_DEBUG, "COMM_2 RAW RX: 0x%02X", (unsigned)c);  // DEBUG
+
+            // Define the callback that SyslinkReassembler will use to push MAVLink bytes
+            auto mavlink_byte_pusher_lambda = 
+                [&](uint8_t mav_byte) { // Captures needed variables by reference
+                const uint8_t framing = mavlink_frame_char_buffer(channel_buffer(), channel_status(), mav_byte, &msg, &status);
+                if (framing == MAVLINK_FRAMING_OK) {
+                    // gcs().send_text(MAV_SEVERITY_DEBUG, "MSGID: %.2u Received\n", msg.msgid);    // DEBUG 
+
+                    hal.util->persistent_data.last_mavlink_msgid = msg.msgid;
+                    packetReceived(status, msg); // Process the MAVLink packet
+
+                    // Update Battery Data sent from NRF51
+                    if (msg.msgid == MAVLINK_MSG_ID_BATTERY_STATUS) {
+                        // Get a reference to the main battery monitor object
+                        AP_BattMonitor &battery_mon = AP::battery();                        
+                        
+                        // 1. Decode the incoming MAVLink message
+                        mavlink_battery_status_t batt_status;
+                        mavlink_msg_battery_status_decode(&msg, &batt_status);
+
+                        // 2. Create and populate the state struct that the scripting backend expects
+                        BattMonitorScript_State script_state{};                 
+
+                        // Voltage: MAVLink is in mV, struct expects V
+                        script_state.voltage = batt_status.voltages[0] / 1000.0f;        
+
+                        // Temperature: MAVLink is in cdegC, struct expects degC
+                        if (batt_status.temperature != INT16_MAX) {
+                            script_state.temperature = batt_status.temperature / 100.0f;
+                        } else {
+                            script_state.temperature = NAN;
+                        }
+
+                        // copy only the available voltage data (10 cells)
+                        memcpy(script_state.cell_voltages, batt_status.voltages, sizeof(batt_status.voltages));
+
+                        // Also copy the extended voltage data (cells 11-14)
+                        memcpy(&script_state.cell_voltages[10], batt_status.voltages_ext, sizeof(batt_status.voltages_ext));
+
+                        script_state.cell_count = 1;
+
+                        // Set other fields to "unknown"
+                        script_state.current_amps = NAN;
+                        script_state.consumed_mah = NAN;
+                        script_state.capacity_remaining_pct = UINT8_MAX;
+                        script_state.consumed_wh = NAN;
+                        script_state.cycle_count = UINT16_MAX;
+
+                        // Set health status
+                        script_state.healthy = true;                    
+                        
+                        // 3. Call the handler to inject the data into the battery monitor system
+                        battery_mon.handle_scripting(0, script_state);
+
+                        // gcs().send_text(MAV_SEVERITY_DEBUG, "VBAT: %.2f V, %.2f C", (double)script_state.voltage, (double)script_state.temperature);    // DEBUG  
+                    }
+ 
+                    gcs_alternative_active[chan] = false; // MAVLink is active
+                    alternative.last_mavlink_ms = now_ms; // Update MAVLink activity timestamp
+                    hal.util->persistent_data.last_mavlink_msgid = 0;
+                }
+            };
+            auto p2p_packet_handler_lambda =
+                [&](const uint8_t* payload, uint8_t len) {
+
+                    // -- DEBUG --
+                    //ExpandingString hex_dump;
+                    //hex_dump.printf("P2P Received(%u): ", len);
+                    //for (uint8_t k = 0; k < len; k++) {
+                    //    hex_dump.printf("%02X ", payload[k]);
+                    //}
+                    //gcs().send_text(MAV_SEVERITY_DEBUG, "%s", hex_dump.get_string());
+                    // -- DEBUG --  
+
+                    // Forward the raw MAVLink message directly to the AI Deck's serial port.
+                    mavlink_comm_port[MAVLINK_COMM_1]->write(payload, len);  
+                    
+                    if (len >= sizeof(p2p_att_v1_t) && payload[0] == 0xA7) {
+
+                        p2p_att_v1_t pkt;
+                        memcpy(&pkt, payload, sizeof(pkt));
+
+                        // verify Fletcher c0/c1 here before logging
+                        if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
+
+                            AP::logger().Write("P2PA", "TimeUS,PID,TBootMS,Rcd,Pcd,Ycd,RRcd,PRcd,YRcd,res0,res1", "QBIhhhhhhhh",
+                                        AP_HAL::micros64(),
+                                        pkt.peer_id,
+                                        pkt.time_boot_ms,
+                                        pkt.roll_cd,
+                                        pkt.pitch_cd,
+                                        pkt.yaw_cd,
+                                        pkt.rollrate_cds,
+                                        pkt.pitchrate_cds,
+                                        pkt.yawrate_cds,
+                                        pkt.res_0,
+                                        pkt.res_1);
+                        }                        
+                    }
+                    if (len >= sizeof(p2p_mstate_v1_t) && payload[0] == 0xA8) {
+                        p2p_mstate_v1_t pkt;
+                        memcpy(&pkt, payload, sizeof(pkt));
+
+                        // verify Fletcher c0/c1 here before logging
+                        if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
+
+                            AP::logger().Write("P2PM", "TimeUS,PID,seq,st,val,TimeMS,res0,res1", "QBHBHIhh",
+                                        AP_HAL::micros64(),
+                                        pkt.peer_id,
+                                        pkt.seq,
+                                        pkt.st,
+                                        pkt.val,
+                                        pkt.time_ms,
+                                        pkt.res_0,
+                                        pkt.res_1);
+                        }            
+                    }
+                    if (len >= sizeof(p2p_pos_v1_t) && payload[0] == 0xA9) {
+                        p2p_pos_v1_t pkt;
+                        memcpy(&pkt, payload, sizeof(pkt));
+
+                        // verify Fletcher c0/c1 here before logging
+                        if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
+
+                            AP::logger().Write("P2PP", "TimeUS,PID,TBootMS,Xpos,Ypos,Zpos,Xvel,Yvel,Zvel,res0,res1", "QBIhhhhhhhh",
+                                        AP_HAL::micros64(),
+                                        pkt.peer_id,
+                                        pkt.time_boot_ms,
+                                        pkt.x_pos,
+                                        pkt.y_pos,
+                                        pkt.z_pos,
+                                        pkt.x_vel,
+                                        pkt.y_vel,
+                                        pkt.z_vel,
+                                        pkt.res_0,
+                                        pkt.res_1);
+                        }            
+                    }                    
+            };                
+             
+            byte_handled_by_syslink = s_syslink_reassembler_for_comm1.process_byte(c, mavlink_byte_pusher_lambda, p2p_packet_handler_lambda);
+        }
+         
+        if (byte_handled_by_syslink) {
+            // If Syslink logic (on MAVLINK_COMM_2) consumed or processed the byte 'c', skip the default MAVLink/alternative protocol handling for this byte.
+            continue;
+        }        
+#endif                 
         
         if (alternative.handler &&
             now_ms - alternative.last_mavlink_ms > protocol_timeout) {
@@ -4155,6 +4533,106 @@ void GCS_MAVLINK::handle_heartbeat(const mavlink_message_t &msg) const
     }
 }
 
+#ifdef HAL_CF21
+static bool parse_u32_key(const char* text, const char* key, uint32_t &out)
+{
+    const char* p = strstr(text, key);
+    if (!p) return false;
+
+    p += strlen(key);
+    if (*p != '=') return false;
+    p++;
+
+    char* end = nullptr;
+    unsigned long v = strtoul(p, &end, 10);
+    if (end == p) return false;
+
+    out = (uint32_t)v;
+    return true;
+}
+
+static uint8_t get_peer_id_from_param()
+{
+// cache lookup (find is not free)
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    if (p == nullptr) {
+        p = AP_Param::find("CF_PEER_ID", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 21; // fallback
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:
+        v = ((AP_Int8*)p)->get();
+        break;
+    case AP_PARAM_INT16:
+        v = ((AP_Int16*)p)->get();
+        break;
+    case AP_PARAM_INT32:
+        v = ((AP_Int32*)p)->get();
+        break;
+    default:
+        return 21; // wrong type -> fallback
+    }
+
+    // clamp to byte
+    if (v < 0)   v = 0;
+    if (v > 255) v = 255;
+    //gcs().send_text(MAV_SEVERITY_ALERT, "P2P: Peer ID =%.ld",v);
+    return (uint8_t)v;
+}
+
+void GCS_MAVLINK::handle_ai_deck_mission_statustext(const mavlink_message_t &msg)
+{
+    mavlink_statustext_t st{};
+    mavlink_msg_statustext_decode(&msg, &st);
+
+    // If we ever send chunked statustext, ignore non-first chunks for now:
+    if (st.chunk_seq != 0) {
+        return;
+    }
+
+    // Make a safe, null-terminated string copy
+    char text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN + 1];
+    memcpy(text, st.text, MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN);
+    text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN] = '\0';
+
+    // Fast reject: must start with "MS1,"
+    if (strncmp(text, "MS1,", 4) != 0) {
+        return;
+    }
+
+    // Parse fields (accept strict "MS1,st=%u,val=%u,seq=%u,res0=%u,res1=%u")
+    uint32_t st_u = 0, val_u = 0, seq_u = 0, res0_u = 0, res1_u = 0;
+    // Require st + seq; val optional
+    if (!parse_u32_key(text, "st", st_u))  return;
+    if (!parse_u32_key(text, "seq", seq_u)) return;
+    (void)parse_u32_key(text, "val", val_u);
+    (void)parse_u32_key(text, "res0", res0_u);
+    (void)parse_u32_key(text, "res1", res1_u);
+
+    // Clamp to your intended sizes
+    const uint8_t  st8  = (uint8_t)st_u;
+    const uint16_t val16 = (uint16_t)val_u;
+    const uint16_t seq16 = (uint16_t)seq_u;
+    const uint16_t res016 = (uint16_t)res0_u;
+    const uint16_t res116 = (uint16_t)res1_u;
+
+    // Choose a source id
+    const uint8_t src_id = get_peer_id_from_param();
+
+    // include a timestamp
+    const uint32_t now_ms = AP_HAL::millis();
+
+    // Queue it for transmission via COMM_2 pipeline
+    p2p_queue_mission_state(src_id, seq16, st8, val16, now_ms, res016, res116);
+}
+#endif
+
 /*
   handle messages which don't require vehicle specific data
  */
@@ -4320,6 +4798,12 @@ void GCS_MAVLINK::handle_message(const mavlink_message_t &msg)
 #endif
 
     case MAVLINK_MSG_ID_STATUSTEXT:
+#ifdef HAL_CF21
+        // keep existing logging behavior
+        if (chan == MAVLINK_COMM_1) {
+            handle_ai_deck_mission_statustext(msg);
+        }
+#endif    
         handle_statustext(msg);
         break;
 

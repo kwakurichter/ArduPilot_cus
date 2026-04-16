@@ -32,6 +32,17 @@ FRAME_CLASS,1
 MOT_PWM_TYPE,3
 RC_SPEED,16000
 
-# 1s lipo
+# Thrust Compensation (Advanced)
+MOT_OPTIONS,1       # Raw voltage
+MOT_THST_EXPO,0.450
+MOT_THST_HOVER,0.300
+
+# NRF51 Radio (Advanced)
+SERIAL2_PROTOCOL,2
+SERIAL2_BAUD,1000
+SERIAL3_PROTOCOL,2
+
+# 1s lipo (Advanced)
 MOT_BAT_VOLT_MAX,4.2
 MOT_BAT_VOLT_MIN,3.3
+BATT_MONITOR,29     # NRF Battery Monitor

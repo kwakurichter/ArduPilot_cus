@@ -72,6 +72,10 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len);
 /// @returns		Number of bytes available
 uint16_t comm_get_txspace(mavlink_channel_t chan);
 
+#ifdef HAL_CF21
+void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms,  uint16_t res_0, uint16_t res_1);
+#endif
+
 #define MAVLINK_USE_CONVENIENCE_FUNCTIONS
 #include "include/mavlink/v2.0/all/mavlink.h"
 

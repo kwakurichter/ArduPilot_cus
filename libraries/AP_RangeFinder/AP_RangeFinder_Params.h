@@ -30,6 +30,7 @@ public:
     AP_Int8  ground_clearance_cm;
     AP_Int8  address;
     AP_Int8  orientation;
+    AP_Int8  distance_mode;
 };
 
 #endif  // AP_RANGEFINDER_ENABLED
