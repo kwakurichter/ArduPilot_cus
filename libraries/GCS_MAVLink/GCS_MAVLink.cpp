@@ -32,6 +32,7 @@ This provides some support code and variables for MAVLink enabled sketches
 
 #ifdef HAL_CF21
 #include "RadioBuffer.h"
+#include <AP_Common/ExpandingString.h>
 
 #pragma pack(push, 1)
 typedef struct {
@@ -75,12 +76,12 @@ typedef struct {
     uint8_t  stx;           // 0xA9
     uint8_t  peer_id;       // who sent it
     uint32_t time_boot_ms;  // copied from MAVLink (32)
-    int16_t  x_pos;         // x-position in m
-    int16_t  y_pos;         // y-position in m
-    int16_t  z_pos;         // z-position in m
-    int16_t  x_vel;         // x-velocity in m/s
-    int16_t  y_vel;         // y-velocity in m/s
-    int16_t  z_vel;         // z-velocity in m/s
+    int16_t  x_pos;         // x-position in cm
+    int16_t  y_pos;         // y-position in cm
+    int16_t  z_pos;         // z-position in cm
+    int16_t  x_vel;         // x-velocity in cm/s
+    int16_t  y_vel;         // y-velocity in cm/s
+    int16_t  z_vel;         // z-velocity in cm/s
     int16_t  res_0;         // reserved
     int16_t  res_1;         // reserved
     uint8_t  c0;            // Fletcher-8
@@ -216,6 +217,18 @@ static inline int16_t to_cdeg_per_s(float rad_s)
     return (int16_t)constrain_int32(v, -32768, 32767);
 }
 
+static inline int16_t to_cm(float metres)
+{
+    const int32_t v = (int32_t)lrintf(metres * 100.0f);
+    return (int16_t)constrain_int32(v, -32768, 32767);
+}
+
+static inline int16_t to_cms(float m_per_s)
+{
+    const int32_t v = (int32_t)lrintf(m_per_s * 100.0f);
+    return (int16_t)constrain_int32(v, -32768, 32767);
+}
+
 static inline void fletcher8(const uint8_t *buf, uint8_t len, uint8_t *c0, uint8_t *c1)
 {
     uint8_t a = 0, b = 0;
@@ -261,13 +274,13 @@ static void build_p2p_pos_packet(p2p_pos_v1_t &pkt, uint8_t peer_id, const mavli
     pkt.peer_id = peer_id;
     pkt.time_boot_ms = pos.time_boot_ms;
 
-    pkt.x_pos = pos.x;
-    pkt.y_pos = pos.y;
-    pkt.z_pos = pos.z;
+    pkt.x_pos = to_cm(pos.x);
+    pkt.y_pos = to_cm(pos.y);
+    pkt.z_pos = to_cm(pos.z);
 
-    pkt.x_vel = pos.vx;
-    pkt.y_vel = pos.vy;
-    pkt.z_vel = pos.vz;
+    pkt.x_vel = to_cms(pos.vx);
+    pkt.y_vel = to_cms(pos.vy);
+    pkt.z_vel = to_cms(pos.vz);
 
     pkt.res_0 = res_0;
     pkt.res_1 = res_1;    
@@ -501,7 +514,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
                         parsed = true;
                         break;
                     }
-                }                
+                }
 
                 if (parsed) {
                     const uint32_t msgid = in_msg.msgid; // works for MAVLink1 and MAVLink2
@@ -628,7 +641,7 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
                         // 1) Syslink header
                         packet[idx++] = 0xBC;
                         packet[idx++] = 0xCF;
-                        packet[idx++] = 0x0B; // TYPE = Radio MAVLink
+                        packet[idx++] = 0x0C; // TYPE = Radio MAVLink
                         packet[idx++] = length_field;
 
                         // 2) Fragment header

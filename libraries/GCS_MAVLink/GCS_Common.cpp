@@ -119,7 +119,7 @@ extern const AP_HAL::HAL& hal;
 #include "RadioBuffer.h"
 #include <AP_BattMonitor/AP_BattMonitor_Scripting.h>
 
-extern void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms);
+//extern void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms);
 
 static SyslinkToMAVLinkReassembler s_syslink_reassembler_for_comm1;
 #endif
@@ -2033,12 +2033,12 @@ typedef struct {
     uint8_t  stx;           // 0xA9
     uint8_t  peer_id;       // who sent it
     uint32_t time_boot_ms;  // copied from MAVLink (32)
-    int16_t  x_pos;         // x-position in m
-    int16_t  y_pos;         // y-position in m
-    int16_t  z_pos;         // z-position in m
-    int16_t  x_vel;         // x-velocity in m/s
-    int16_t  y_vel;         // y-velocity in m/s
-    int16_t  z_vel;         // z-velocity in m/s
+    int16_t  x_pos;         // x-position in cm
+    int16_t  y_pos;         // y-position in cm
+    int16_t  z_pos;         // z-position in cm
+    int16_t  x_vel;         // x-velocity in cm/s
+    int16_t  y_vel;         // y-velocity in cm/s
+    int16_t  z_vel;         // z-velocity in cm/s
     int16_t  res_0;         // reserved
     int16_t  res_1;         // reserved
     uint8_t  c0;            // Fletcher-8
