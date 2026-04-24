@@ -4628,6 +4628,17 @@ void GCS_MAVLINK::handle_ai_deck_mission_statustext(const mavlink_message_t &msg
     // include a timestamp
     const uint32_t now_ms = AP_HAL::millis();
 
+    // Log message
+    AP::logger().Write("MS1", "TimeUS,PID,seq,st,val,TimeMS,res0,res1", "QBHBHIhh",
+                AP_HAL::micros64(),
+                src_id,
+                seq16,
+                st8,
+                val16,
+                now_ms,
+                res016,
+                res116);
+
     // Queue it for transmission via COMM_2 pipeline
     p2p_queue_mission_state(src_id, seq16, st8, val16, now_ms, res016, res116);
 }
