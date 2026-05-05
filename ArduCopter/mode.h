@@ -1059,14 +1059,21 @@ public:
     bool init(bool ignore_checks) override;
     void run() override;
 
+#ifdef HAL_CF21
+    bool requires_GPS() const override { return false; }
+#else
     bool requires_GPS() const override { return true; }
+#endif
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override;
     bool is_autopilot() const override { return true; }
     bool has_user_takeoff(bool must_navigate) const override { return true; }
     bool in_guided_mode() const override { return true; }
-
+#ifdef HAL_CF21
+    bool requires_terrain_failsafe() const override { return false; }
+#else
     bool requires_terrain_failsafe() const override { return true; }
+#endif
 
 #if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
     // Return the type of this mode for use by advanced failsafe
