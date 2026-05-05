@@ -20,7 +20,7 @@ void SyslinkToMAVLinkReassembler::reset_parser_state() {
 
 bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c,
                                                 std::function<void(uint8_t mav_byte)> mavlink_byte_pusher, 
-                                                std::function<void(const uint8_t* p2p_payload, uint8_t len)> p2p_packet_handler) {
+                                                std::function<void(const uint8_t* p2p_payload, uint8_t len, uint8_t rssi)> p2p_packet_handler) {
     bool consumed_by_syslink = true; // Assume consumed initially
 
     current_syslink_frame_buffer.push_back(c);
@@ -92,7 +92,8 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c,
             }
             // Frame so far: [SYNC1, SYNC2, TYPE, LEN, P2P_PORT, RSSI]
             else if (current_syslink_frame_buffer.size() >= 6) {
-                // This is the RSSI byte. We could store it, but for now, we just consume it.
+                // This is the RSSI byte. We use for collision avoidance.
+
                 // Now we are ready to read the actual MAVLink payload.
                 // gcs().send_text(MAV_SEVERITY_DEBUG, "Syslink: P2P Packet Received\n");    // DEBUG
                 state = ParseState::READ_PAYLOAD_AND_CRC;
@@ -160,8 +161,11 @@ bool SyslinkToMAVLinkReassembler::process_byte(uint8_t c,
 
                         // Check if the handler is valid and the payload is not empty
                         if (p2p_packet_handler && p2p_mavlink_len > 0) {
+                            uint8_t rssi_raw = frame_ptr[5];
+                            //gcs().send_text(MAV_SEVERITY_DEBUG, "P2P RSSI: raw=%u (-%u dBm) len=%d", (unsigned)rssi_raw, (unsigned)rssi_raw, p2p_mavlink_len);    // DEBUG
+                            
                             // --- INVOKE THE P2P CALLBACK ---
-                            p2p_packet_handler(p2p_mavlink_payload, p2p_mavlink_len);
+                            p2p_packet_handler(p2p_mavlink_payload, p2p_mavlink_len, rssi_raw);
                         }
                     } else {                        
                         // CRC OK. Extract fragment and process

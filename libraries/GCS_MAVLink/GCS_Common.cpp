@@ -2147,7 +2147,7 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
                 }
             };
             auto p2p_packet_handler_lambda =
-                [&](const uint8_t* payload, uint8_t len) {
+                [&](const uint8_t* payload, uint8_t len, uint8_t rssi) {
 
                     // -- DEBUG --
                     //ExpandingString hex_dump;
@@ -2159,6 +2159,10 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
                     // -- DEBUG --  
 
                     // Forward the raw MAVLink message directly to the AI Deck's serial port.
+                    // Forward to the AI Deck with a 2-byte prefix: [0xAB, rssi_raw, payload...]
+                    const uint8_t prefix[2] = {0xAB, rssi};
+                    
+                    mavlink_comm_port[MAVLINK_COMM_1]->write(prefix, sizeof(prefix));
                     mavlink_comm_port[MAVLINK_COMM_1]->write(payload, len);  
                     
                     if (len >= sizeof(p2p_att_v1_t) && payload[0] == 0xA7) {
@@ -2169,9 +2173,10 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
                         // verify Fletcher c0/c1 here before logging
                         if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
 
-                            AP::logger().Write("P2PA", "TimeUS,PID,TBootMS,Rcd,Pcd,Ycd,RRcd,PRcd,YRcd,res0,res1", "QBIhhhhhhhh",
+                            AP::logger().Write("P2PA", "TimeUS,PID,rssi,TBootMS,Rcd,Pcd,Ycd,RRcd,PRcd,YRcd,res0,res1", "QBBIhhhhhhhh",
                                         AP_HAL::micros64(),
                                         pkt.peer_id,
+                                        rssi,
                                         pkt.time_boot_ms,
                                         pkt.roll_cd,
                                         pkt.pitch_cd,
@@ -2190,9 +2195,10 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
                         // verify Fletcher c0/c1 here before logging
                         if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
 
-                            AP::logger().Write("P2PM", "TimeUS,PID,seq,st,val,TimeMS,res0,res1", "QBHBHIhh",
+                            AP::logger().Write("P2PM", "TimeUS,PID,rssi,seq,st,val,TimeMS,res0,res1", "QBBHBHIhh",
                                         AP_HAL::micros64(),
                                         pkt.peer_id,
+                                        rssi,
                                         pkt.seq,
                                         pkt.st,
                                         pkt.val,
@@ -2208,9 +2214,10 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
                         // verify Fletcher c0/c1 here before logging
                         if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
 
-                            AP::logger().Write("P2PP", "TimeUS,PID,TBootMS,Xpos,Ypos,Zpos,Xvel,Yvel,Zvel,res0,res1", "QBIhhhhhhhh",
+                            AP::logger().Write("P2PP", "TimeUS,PID,rssi,TBootMS,Xpos,Ypos,Zpos,Xvel,Yvel,Zvel,res0,res1", "QBBIhhhhhhhh",
                                         AP_HAL::micros64(),
                                         pkt.peer_id,
+                                        rssi,
                                         pkt.time_boot_ms,
                                         pkt.x_pos,
                                         pkt.y_pos,

@@ -33,7 +33,7 @@ public:
     // Returns true if the byte 'c' was consumed by the Syslink state machine.
     bool process_byte(uint8_t c, 
                     std::function<void(uint8_t mav_byte)> mavlink_byte_pusher,
-                    std::function<void(const uint8_t* p2p_payload, uint8_t len)> p2p_packet_handler);
+                    std::function<void(const uint8_t* p2p_payload, uint8_t len, uint8_t rssi)> p2p_packet_handler);
 
 private:
     ParseState state;
