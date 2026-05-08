@@ -684,6 +684,7 @@ public:
     AP_Int8  cf_id;
     AP_Int8  cf_channel;
     AP_Int8  cf_loops;
+    AP_Int8  cf_rssi_hz;
 #endif    
 
 #if WEATHERVANE_ENABLED

@@ -1292,7 +1292,16 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Range: 0-255
     // @User: Advanced
     // @RebootRequired: True
-    AP_GROUPINFO("CF_LOOPS", 27, ParametersG2, cf_loops, 1),           
+    AP_GROUPINFO("CF_LOOPS", 27, ParametersG2, cf_loops, 1),     
+    
+    // @Param: CF_RSSI_HZ
+    // @DisplayName: Crazyflie rssi frequency
+    // @Description: Set the crazyflie rssi broadcast frequency
+    // @Units:
+    // @Range: 0-50
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("CF_RSSI_HZ", 28, ParametersG2, cf_rssi_hz, 0),         
 #endif    
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION

@@ -91,6 +91,19 @@ typedef struct {
 
 static_assert(sizeof(p2p_pos_v1_t) == 24, "p2p packet must be 24 bytes");
 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // 0xAA
+    uint8_t  peer_id;       // who sent it
+    uint32_t time_boot_ms;  // AP_HAL::millis() at send time
+    uint16_t res_0;         // reserved
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_rssi_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_rssi_v1_t) == 10, "p2p_rssi_v1_t must be 10 bytes");
+
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
 
 static HAL_Semaphore g_mstate_sem;
@@ -435,12 +448,61 @@ static uint32_t get_p2p_stream_from_param()
     return (uint32_t)v;
 }
 
+static uint8_t get_rssi_hz_from_param()
+{
+    // cache lookup
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    if (p == nullptr) {
+        p = AP_Param::find("CF_RSSI_HZ", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 0; // fallback
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:
+        v = ((AP_Int8*)p)->get();
+        break;
+    case AP_PARAM_INT16:
+        v = ((AP_Int16*)p)->get();
+        break;
+    case AP_PARAM_INT32:
+        v = ((AP_Int32*)p)->get();
+        break;
+    default:
+        return 0; // wrong type -> fallback
+    }
+
+    // clamp to 50 Hz
+    if (v < 0)   v = 0;
+    if (v > 50) v = 50;
+
+    return (uint8_t)v;
+}
+
 enum : uint32_t {
     P2P_TX_ATTITUDE      = 1U << 0,
     P2P_TX_MISSION_STATE = 1U << 1,
     P2P_TX_POSITION      = 1U << 2,
-    // Add more messages
+    P2P_TX_RSSI          = 1U << 3,
 };
+
+static void p2p_send_rssi_beacon()
+{
+    if (RadioPacketBuffer::get_instance().free_space() < 1) {
+        return;
+    }
+    p2p_rssi_v1_t pkt{};
+    pkt.stx          = 0xAA;
+    pkt.peer_id      = get_peer_id_from_param();
+    pkt.time_boot_ms = AP_HAL::millis();
+    pkt.res_0        = 0;
+    fletcher8((const uint8_t*)&pkt, sizeof(pkt) - 2, &pkt.c0, &pkt.c1);
+    p2p_send_broadcast_payload((const uint8_t*)&pkt, sizeof(pkt));
+}
 #endif
 
 /*
@@ -467,7 +529,18 @@ void comm_send_buffer(mavlink_channel_t chan, const uint8_t *buf, uint8_t len)
         }        
         if (P2P_MASK & P2P_TX_MISSION_STATE) {
             p2p_flush_pending_mission_state();
-        }        
+        }
+        if (P2P_MASK & P2P_TX_RSSI) {
+            const uint8_t hz = get_rssi_hz_from_param();
+            if (hz > 0) {
+                static uint32_t last_rssi_ms = 0;
+                const uint32_t now_ms = AP_HAL::millis();
+                if (now_ms - last_rssi_ms >= (1000u / hz)) {
+                    last_rssi_ms = now_ms;
+                    p2p_send_rssi_beacon();
+                }
+            }
+        }
 
         // --- START P2P REASSEMBLY & INTERCEPTION LOGIC ---
 

@@ -2048,6 +2048,19 @@ typedef struct {
 
 static_assert(sizeof(p2p_pos_v1_t) == 24, "p2p packet must be 24 bytes");
 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // 0xAA
+    uint8_t  peer_id;       // who sent it
+    uint32_t time_boot_ms;  // sender's AP_HAL::millis()
+    uint16_t res_0;         // reserved
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_rssi_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_rssi_v1_t) == 10, "p2p_rssi_v1_t must be 10 bytes");
+
 static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
 {
     if (len_with_crc < 3) return false;
@@ -2227,8 +2240,22 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
                                         pkt.z_vel,
                                         pkt.res_0,
                                         pkt.res_1);
-                        }            
-                    }                    
+                        }
+                    }
+                    if (len >= sizeof(p2p_rssi_v1_t) && payload[0] == 0xAA) {
+                        p2p_rssi_v1_t pkt;
+                        memcpy(&pkt, payload, sizeof(pkt));
+
+                        if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
+
+                            AP::logger().Write("P2PR", "TimeUS,PID,rssi,TBootMS,res0", "QBBIh",
+                                        AP_HAL::micros64(),
+                                        pkt.peer_id,
+                                        rssi,
+                                        pkt.time_boot_ms,
+                                        pkt.res_0);
+                        }
+                    }
             };                
              
             byte_handled_by_syslink = s_syslink_reassembler_for_comm1.process_byte(c, mavlink_byte_pusher_lambda, p2p_packet_handler_lambda);
