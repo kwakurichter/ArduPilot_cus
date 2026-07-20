@@ -104,6 +104,18 @@ typedef struct {
 
 static_assert(sizeof(p2p_rssi_v1_t) == 10, "p2p_rssi_v1_t must be 10 bytes");
 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // 0xAB
+    uint8_t  peer_id;       // responder's ID
+    uint32_t time_boot_ms;  // echoed from original P2PR (sender's timestamp)
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_echo_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_echo_v1_t) == 8, "p2p_echo_v1_t must be 8 bytes");
+
 static uint16_t g_syslink_message_id_counter = 0; // For Crazyflie Syslink Packet ID
 
 static HAL_Semaphore g_mstate_sem;
@@ -483,12 +495,63 @@ static uint8_t get_rssi_hz_from_param()
     return (uint8_t)v;
 }
 
+static uint8_t get_echo_from_param()
+{
+    // cache lookup
+    static AP_Param *p = nullptr;
+    static enum ap_var_type t = AP_PARAM_NONE;
+
+    if (p == nullptr) {
+        p = AP_Param::find("CF_ECHO", &t, nullptr);
+    }
+    if (p == nullptr) {
+        return 0; // fallback
+    }
+
+    int32_t v = 0;
+    switch (t) {
+    case AP_PARAM_INT8:
+        v = ((AP_Int8*)p)->get();
+        break;
+    case AP_PARAM_INT16:
+        v = ((AP_Int16*)p)->get();
+        break;
+    case AP_PARAM_INT32:
+        v = ((AP_Int32*)p)->get();
+        break;
+    default:
+        return 0; // wrong type -> fallback
+    }
+
+    // clamp to byte
+    if (v < 0)   v = 0;
+    if (v > 1) v = 1;
+
+    return (uint8_t)v;
+}
+
 enum : uint32_t {
     P2P_TX_ATTITUDE      = 1U << 0,
     P2P_TX_MISSION_STATE = 1U << 1,
     P2P_TX_POSITION      = 1U << 2,
     P2P_TX_RSSI          = 1U << 3,
 };
+
+void p2p_send_echo_response(uint32_t echoed_time_boot_ms)
+{
+    if (get_echo_from_param() == 0) {
+        return;
+    }
+    if (RadioPacketBuffer::get_instance().free_space() < 1) {
+        return;
+    }
+    p2p_echo_v1_t pkt{};
+    pkt.stx          = 0xAB;
+    pkt.peer_id      = get_peer_id_from_param();
+    pkt.time_boot_ms = echoed_time_boot_ms;
+    fletcher8((const uint8_t*)&pkt, sizeof(pkt) - 2, &pkt.c0, &pkt.c1);
+    p2p_send_broadcast_payload((const uint8_t*)&pkt, sizeof(pkt));
+}
 
 static void p2p_send_rssi_beacon()
 {

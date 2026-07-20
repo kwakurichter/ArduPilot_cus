@@ -74,6 +74,7 @@ uint16_t comm_get_txspace(mavlink_channel_t chan);
 
 #ifdef HAL_CF21
 void p2p_queue_mission_state(uint8_t src_id, uint16_t seq, uint8_t st, uint16_t val, uint32_t time_ms,  uint16_t res_0, uint16_t res_1);
+void p2p_send_echo_response(uint32_t echoed_time_boot_ms);
 #endif
 
 #define MAVLINK_USE_CONVENIENCE_FUNCTIONS

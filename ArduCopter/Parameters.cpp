@@ -1301,7 +1301,16 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Range: 0-50
     // @User: Advanced
     // @RebootRequired: True
-    AP_GROUPINFO("CF_RSSI_HZ", 28, ParametersG2, cf_rssi_hz, 0),         
+    AP_GROUPINFO("CF_RSSI_HZ", 28, ParametersG2, cf_rssi_hz, 0),  
+    
+    // @Param: CF_ECHO
+    // @DisplayName: Crazyflie rssi echo message
+    // @Description: Enable a acknowledgement echo for rssi latency
+    // @Units:
+    // @Range: 0-1
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("CF_ECHO", 29, ParametersG2, cf_echo, 0),      
 #endif    
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION

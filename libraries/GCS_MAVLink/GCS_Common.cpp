@@ -2061,6 +2061,18 @@ typedef struct {
 
 static_assert(sizeof(p2p_rssi_v1_t) == 10, "p2p_rssi_v1_t must be 10 bytes");
 
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  stx;           // 0xAB
+    uint8_t  peer_id;       // responder's ID
+    uint32_t time_boot_ms;  // echoed from original P2PR (sender's timestamp)
+    uint8_t  c0;            // Fletcher-8
+    uint8_t  c1;            // Fletcher-8
+} p2p_echo_v1_t;
+#pragma pack(pop)
+
+static_assert(sizeof(p2p_echo_v1_t) == 8, "p2p_echo_v1_t must be 8 bytes");
+
 static inline bool fletcher8_ok(const uint8_t *buf, uint8_t len_with_crc)
 {
     if (len_with_crc < 3) return false;
@@ -2254,6 +2266,22 @@ GCS_MAVLINK::update_receive(uint32_t max_time_us)
                                         rssi,
                                         pkt.time_boot_ms,
                                         pkt.res_0);
+
+                            p2p_send_echo_response(pkt.time_boot_ms);
+                        }
+                    }
+                    if (len >= sizeof(p2p_echo_v1_t) && payload[0] == 0xAB) {
+                        p2p_echo_v1_t pkt;
+                        memcpy(&pkt, payload, sizeof(pkt));
+
+                        if (fletcher8_ok((const uint8_t*)&pkt, sizeof(pkt))) {
+
+                            // RTT_ms = TimeUS/1000 - time_boot_ms  (both on this drone's clock)
+                            AP::logger().Write("P2PE", "TimeUS,PID,rssi,TBootMS", "QBBI",
+                                        AP_HAL::micros64(),
+                                        pkt.peer_id,
+                                        rssi,
+                                        pkt.time_boot_ms);
                         }
                     }
             };                
