@@ -903,6 +903,7 @@ def build(bld):
     bld.get_board().build(bld)
 
     bld.recurse('libraries/vl53l1x_api')    # Add Crazyflie FlowDeck support via ST vl53l1x API
+    bld.recurse('modules/libdw1000')        # Add Crazyflie Loco Deck support via libdw1000 API
 
     _build_common_taskgens(bld)
 

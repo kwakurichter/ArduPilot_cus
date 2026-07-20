@@ -39,8 +39,7 @@ public:
     // update - run the ranging state machine and publish new ranges
     virtual void update() = 0;
 
-    // set the measured range to a node in meters. Called by the backend as
-    // each TWR exchange completes.
+    // set the measured range to a node in meters. Called by the backend as each TWR exchange completes.
     void set_node_distance(uint8_t node_instance, float distance);
 
 protected:

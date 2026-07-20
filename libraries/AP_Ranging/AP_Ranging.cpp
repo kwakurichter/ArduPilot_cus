@@ -18,8 +18,7 @@
 #if AP_RANGING_ENABLED
 
 #include "AP_Ranging_Backend.h"
-// TODO: include concrete backends here as they are added, e.g.
-// #include "AP_Ranging_DW1000.h"
+#include "AP_Ranging_DW1000.h"
 
 #include <AP_Logger/AP_Logger.h>
 
@@ -30,8 +29,8 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
 
     // @Param: _TYPE
     // @DisplayName: UWB ranging device type
-    // @Description: What type of UWB two-way-ranging device is connected
-    // @Values: 0:None
+    // @Description: What type of UWB ranging device is connected
+    // @Values: 0:None,1:DW1000
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE", 0, AP_Ranging, _type, 0, AP_PARAM_FLAG_ENABLE),
 
@@ -59,10 +58,11 @@ void AP_Ranging::init(void)
 
     // create backend
     switch ((Type)_type) {
-    // TODO: instantiate concrete backends here as they are added, e.g.
-    // case Type::DW1000:
-    //     _driver = NEW_NOTHROW AP_Ranging_DW1000(*this);
-    //     break;
+#if AP_RANGING_DW1000_ENABLED
+    case Type::DW1000:
+        _driver = NEW_NOTHROW AP_Ranging_DW1000(*this);
+        break;
+#endif
     case Type::None:
         break;
     }

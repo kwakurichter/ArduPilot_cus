@@ -18,11 +18,9 @@
 #if AP_RANGING_ENABLED
 
 // base class constructor.
-AP_Ranging_Backend::AP_Ranging_Backend(AP_Ranging &frontend) :
-    _frontend(frontend)
+AP_Ranging_Backend::AP_Ranging_Backend(AP_Ranging &frontend) : _frontend(frontend)
 {
-    // NOTE: a concrete backend sets up its own transport (e.g. a DW1000 over
-    // SPI via hal.spi->get_device(...)) in its own constructor/init.
+    // NOTE: a backend sets up its own transport in its own constructor/init.
 }
 
 // set the measured range to a node in meters
@@ -33,7 +31,7 @@ void AP_Ranging_Backend::set_node_distance(uint8_t node_instance, float distance
         return;
     }
 
-    // grow the tracked-node count as new nodes appear
+    // grow the node count as new nodes appear
     if (node_instance >= _frontend.num_nodes) {
         _frontend.num_nodes = node_instance + 1;
     }

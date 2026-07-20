@@ -24,12 +24,6 @@
 
 class AP_Ranging_Backend;
 
-// AP_Ranging: frontend for UWB two-way-ranging (TWR) between flying nodes.
-//
-// Unlike a fixed-anchor positioning system, this library reports the raw
-// range (distance) to each neighbouring node it is ranging with. It does not
-// solve for an absolute position - relative-position estimation is left to a
-// consumer (e.g. the EKF or a swarm controller).
 class AP_Ranging
 {
 public:
@@ -45,12 +39,9 @@ public:
     // ranging backend types (used by the _TYPE parameter)
     enum class Type : uint8_t {
         None   = 0,
-        // TODO: add hardware backends here, e.g.
-        // DW1000 = 1,
+        DW1000 = 1,
     };
 
-    // The NodeState structure is filled in by the backend driver, one entry
-    // per peer node we are ranging with.
     struct NodeState {
         uint16_t id;                 // unique id of the peer node
         bool     healthy;            // true if we have a recent range to this node

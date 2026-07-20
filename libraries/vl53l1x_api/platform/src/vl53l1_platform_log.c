@@ -20,7 +20,11 @@
 #include <stdio.h>    // sprintf(), vsnprintf(), printf()
 #include <string.h>
 #include <stdarg.h>
+#ifdef __APPLE__
+#include <stdlib.h>   // macOS has no <malloc.h>; malloc/free live in <stdlib.h>
+#else
 #include <malloc.h>
+#endif
 
 #include "vl53l1_platform_log.h"
 #include "vl53l1_platform_user_config.h"

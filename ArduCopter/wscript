@@ -8,6 +8,7 @@ def build(bld):
         [   
             'libraries/vl53l1x_api/core/inc',       # for Crazyflie FlowDeck support
             'libraries/vl53l1x_api/platform/inc',   # for Crazyflie FlowDeck support
+            'modules/libdw1000/inc',                # for Crazyflie LocoDeck support
         ],
     )        
     bld.ap_stlib(
@@ -42,7 +43,7 @@ def build(bld):
     bld.ap_program(
         program_name='arducopter',
         program_groups=['bin', 'copter'],
-        use=[vehicle + '_libs', 'vl53l1x_api'],
+        use=[vehicle + '_libs', 'vl53l1x_api', 'libdw1000'],
         defines=['FRAME_CONFIG=MULTICOPTER_FRAME'],
         )
 

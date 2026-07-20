@@ -42,3 +42,6 @@
 [submodule "modules/lwip"]
 	path = modules/lwip
 	url = https://github.com/ArduPilot/lwip.git
+[submodule "modules/libdw1000"]
+	path = modules/libdw1000
+	url = https://github.com/bitcraze/libdw1000.git
