@@ -23,6 +23,12 @@ AP_Ranging_Backend::AP_Ranging_Backend(AP_Ranging &frontend) : _frontend(fronten
     // NOTE: a backend sets up its own transport in its own constructor/init.
 }
 
+// this node's configured UWB address (RNG_NODE_ID)
+uint8_t AP_Ranging_Backend::get_node_id() const
+{
+    return (uint8_t)_frontend._node_id.get();
+}
+
 // set the measured range to a node in meters
 void AP_Ranging_Backend::set_node_distance(uint8_t node_instance, float distance)
 {

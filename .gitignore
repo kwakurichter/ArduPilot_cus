@@ -178,3 +178,4 @@ autotest_result_*_junit.xml
 
 # Ignore ArduSwarm stuff
 /libraries/AP_Ranging/dev_notes.md
+/libraries/AP_Ranging/locodeck.c.reference

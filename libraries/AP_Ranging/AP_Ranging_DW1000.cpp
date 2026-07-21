@@ -18,6 +18,7 @@
 #if AP_RANGING_DW1000_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
+#include <GCS_MAVLink/GCS.h>
 #include <string.h>
 
 extern const AP_HAL::HAL &hal;
@@ -33,6 +34,7 @@ bool AP_Ranging_DW1000::init_device()
 {
     _dev = hal.spi->get_device("dw1000");
     if (!_dev) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: SPI device not found");
         return false;
     }
 
@@ -46,6 +48,13 @@ bool AP_Ranging_DW1000::init_device()
     dwInit(&_dw, &_ops);
     dwSetUserdata(&_dw, this);    // lets the C ops recover 'this'
 
+    // (Optional) Hardware reset the DW1000 before any SPI access. Requires a GPIO to be wired to the DW1000 RSTn pin.
+    //hal.gpio->pinMode(HAL_DW1000_RESET_PIN, HAL_GPIO_OUTPUT);
+    //hal.gpio->write(HAL_DW1000_RESET_PIN, 0);       // assert reset
+    //hal.scheduler->delay(2);                        // hold low (>=1ms)
+    //hal.gpio->pinMode(HAL_DW1000_RESET_PIN, HAL_GPIO_INPUT);  // release (pull-up -> high)
+    //hal.scheduler->delay(5);                        // let the chip boot to IDLE
+
     {
         // the ops assume the caller holds the bus semaphore
         WITH_SEMAPHORE(_dev->get_semaphore());
@@ -53,24 +62,30 @@ bool AP_Ranging_DW1000::init_device()
         // configure at low speed for reliable register access
         _dev->set_speed(AP_HAL::Device::SPEED_LOW);
 
-        if (dwGetDeviceId(&_dw) != AP_RANGING_DW1000_DEVICE_ID) {
-            // wrong id - deck not present
+        const uint32_t id = dwGetDeviceId(&_dw);
+        if (id != AP_RANGING_DW1000_DEVICE_ID) {
+            // wrong id - deck not present or SPI incorrectly wired
+            GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: not detected (id=0x%08x)", (unsigned)id);
             return false;
         }
 
         if (dwConfigure(&_dw) != 0) {
+            GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: configure failed");
             return false;
         }
 
-        // TODO: select an operating mode (e.g. MODE_LONGDATA_RANGE_LOWPOWER),
-        //       set the antenna delay, install handleReceived/handleSent
-        //       handlers, and start the receiver for the TWR exchange.
+        // cache our node address and bring up the radio (RF mode + handlers), then start listening
+        _node_id = get_node_id();
+        configure_radio();
+        arm_receiver();
     }
 
-    // drive the TWR state machine from the SPI bus thread (100Hz placeholder)
-    _dev->register_periodic_callback(10000, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void));
+    // service radio events + drive TX/ranging from the SPI bus thread (1kHz)
+    // We poll here rather than using a hardware interrupt (see service_radio())
+    _dev->register_periodic_callback(1000, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void));
 
     _initialised = true;
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: detected and configured (node %u)", (unsigned)_node_id);
     return true;
 }
 
@@ -86,16 +101,132 @@ void AP_Ranging_DW1000::update()
     // TODO: post-process / filter ranges accumulated by timer()
 }
 
-// periodic callback on the SPI bus thread (bus semaphore is held here)
+// periodic callback on the SPI bus thread (bus semaphore is held here), ~1kHz
 void AP_Ranging_DW1000::timer()
 {
-    // TODO: implement the TWR state machine:
-    //   - poll dwReadSystemEventStatusRegister() / service RX/TX events
-    //   - run the poll -> response -> final message exchange with each peer
-    //   - compute Time-of-Flight -> range, then publish it:
-    //
-    //       set_node_distance(node_index, range_m);
-    //       _last_update_ms = AP_HAL::millis();
+    // 1) service any radio event (received/sent/timeout) by polling (no IRQ)
+    service_radio();
+
+    const uint32_t now = AP_HAL::millis();
+
+    // 2) broadcast our heartbeat periodically so peer can hear us
+    if (now - _last_tx_ms >= HEARTBEAT_PERIOD_MS) {
+        _last_tx_ms = now;
+        send_heartbeat();
+    }
+
+    // 3) DEBUG: report link status over MAVLink
+    if (now - _last_report_ms >= LINK_REPORT_MS) {
+        _last_report_ms = now;
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
+                      "DW1000 link: rx=%lu last src=%u seq=%u pwr=%.1fdBm",
+                      (unsigned long)_rx_count, (unsigned)_rx_last_src,
+                      (unsigned)_rx_last_seq, (double)_rx_last_power);
+    }
+}
+
+// configure the RF settings and attach event handlers
+bool AP_Ranging_DW1000::configure_radio()
+{
+    // event handlers - invoked from dwHandleInterrupt() on the bus thread
+    dwAttachSentHandler(&_dw, &AP_Ranging_DW1000::handle_sent);
+    dwAttachReceivedHandler(&_dw, &AP_Ranging_DW1000::handle_received);
+    dwAttachReceiveTimeoutHandler(&_dw, &AP_Ranging_DW1000::handle_rx_timeout);
+    dwAttachReceiveFailedHandler(&_dw, &AP_Ranging_DW1000::handle_rx_failed);
+
+    // RF settings (mirror the Bitcraze Loco deck defaults)
+    // TODO: Performance tuning: mode, channel, preamble length/code, antenna delay, etc.
+    dwNewConfiguration(&_dw);
+    dwSetDefaults(&_dw);
+    dwEnableMode(&_dw, MODE_SHORTDATA_FAST_ACCURACY);
+    dwSetChannel(&_dw, CHANNEL_2);
+    dwSetPreambleCode(&_dw, PREAMBLE_CODE_64MHZ_9);
+    dwUseSmartPower(&_dw, true);
+
+    dwTime_t antenna_delay = {};      // 0 for now; TODO: calibration
+    dwSetAntenaDelay(&_dw, antenna_delay);
+
+    dwCommitConfiguration(&_dw);
+    return true;
+}
+
+// put the radio into continuous receive
+void AP_Ranging_DW1000::arm_receiver()
+{
+    dwIdle(&_dw);
+    dwNewReceive(&_dw);
+    dwSetDefaults(&_dw);
+    dwReceivePermanently(&_dw, true);   // auto rearm after each reception
+    dwStartReceive(&_dw);
+}
+
+// broadcast a heartbeat: [type, src, seq]
+void AP_Ranging_DW1000::send_heartbeat()
+{
+    uint8_t frame[HEARTBEAT_LEN] = { FRAME_TYPE_HEARTBEAT, _node_id, _tx_seq++ };
+    dwIdle(&_dw);
+    dwNewTransmit(&_dw);
+    dwSetDefaults(&_dw);
+    dwSetData(&_dw, frame, HEARTBEAT_LEN);
+    dwStartTransmit(&_dw);
+    // RX is rearmed in handle_sent() once the frame is on air
+}
+
+// poll for and dispatch any pending radio event. dwHandleInterrupt() reads the DW1000 status register over SPI and calls our attached handlers (no IRQ)
+void AP_Ranging_DW1000::service_radio()
+{
+    dwHandleInterrupt(&_dw);
+}
+
+// ---- libdw1000 event handlers (bus thread, semaphore held) ----
+
+void AP_Ranging_DW1000::handle_sent(dwDevice_t *dev)
+{
+    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
+    if (b == nullptr) {
+        return;
+    }
+    // transmit finished - go back to listening
+    b->arm_receiver();
+}
+
+void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
+{
+    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
+    if (b == nullptr) {
+        return;
+    }
+
+    unsigned int len = dwGetDataLength(dev);
+    if (len >= HEARTBEAT_LEN) {
+        uint8_t frame[HEARTBEAT_LEN];
+        dwGetData(dev, frame, HEARTBEAT_LEN);
+        if (frame[0] == FRAME_TYPE_HEARTBEAT && frame[1] != b->_node_id) {
+            b->_rx_count++;
+            b->_rx_last_src   = frame[1];
+            b->_rx_last_seq   = frame[2];
+            b->_rx_last_power = dwGetReceivePower(dev);
+        }
+    } // TODO: add TWR frame handling here
+    // permanent receive auto rearms; no explicit arm needed here
+}
+
+// TODO: add failure counters
+void AP_Ranging_DW1000::handle_rx_timeout(dwDevice_t *dev)
+{
+    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
+    if (b != nullptr) {
+        b->arm_receiver();
+    }
+}
+
+// TODO: add failure counters
+void AP_Ranging_DW1000::handle_rx_failed(dwDevice_t *dev)
+{
+    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
+    if (b != nullptr) {
+        b->arm_receiver();
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

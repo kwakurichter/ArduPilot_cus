@@ -44,6 +44,9 @@ public:
 
 protected:
 
+    // this node's configured UWB address (RNG_NODE_ID)
+    uint8_t get_node_id() const;
+
     // reference to the owning frontend
     AP_Ranging &_frontend;
 };

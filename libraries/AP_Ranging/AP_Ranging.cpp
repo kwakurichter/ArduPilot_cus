@@ -34,6 +34,13 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE", 0, AP_Ranging, _type, 0, AP_PARAM_FLAG_ENABLE),
 
+    // @Param: _NODE_ID
+    // @DisplayName: UWB node address
+    // @Description: This vehicle's UWB node address. Each ranging node on the network must have a unique id.
+    // @Range: 0 255
+    // @User: Advanced
+    AP_GROUPINFO("_NODE_ID", 1, AP_Ranging, _node_id, 0),
+
     AP_GROUPEND
 };
 

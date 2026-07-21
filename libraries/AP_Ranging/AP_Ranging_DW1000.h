@@ -45,6 +45,34 @@ private:
     // periodic callback (SPI bus thread) - drives the TWR state machine
     void timer();
 
+    // ---- radio bring-up / link test ----
+    bool configure_radio();   // mode/channel/preamble + attach handlers, commit
+    void arm_receiver();      // put the radio back into receive
+    void send_heartbeat();    // broadcast a test heartbeat frame
+    void service_radio();     // poll the IRQ line + dwHandleInterrupt (no interrupt used)
+
+    // libdw1000 event handlers (recover 'this' via dwGetUserdata)
+    static void handle_sent(dwDevice_t *dev);
+    static void handle_received(dwDevice_t *dev);
+    static void handle_rx_timeout(dwDevice_t *dev);
+    static void handle_rx_failed(dwDevice_t *dev);
+
+    // link test frame: [type, src, seq]
+    static constexpr uint8_t FRAME_TYPE_HEARTBEAT = 0xB1;
+    static constexpr uint8_t HEARTBEAT_LEN = 3;
+    static constexpr uint32_t HEARTBEAT_PERIOD_MS = 200;  // 5 Hz broadcast
+    static constexpr uint32_t LINK_REPORT_MS = 5000;      // GCS report cadence
+
+    // link test state (all touched only from the bus thread)
+    uint8_t  _node_id = 0;          // cached from frontend RNG_NODE_ID
+    uint8_t  _tx_seq = 0;           // outgoing heartbeat sequence
+    uint32_t _last_tx_ms = 0;       // last heartbeat transmit time
+    uint32_t _last_report_ms = 0;   // last GCS link report time
+    uint32_t _rx_count = 0;         // total heartbeats received
+    uint8_t  _rx_last_src = 0;      // last received sender id
+    uint8_t  _rx_last_seq = 0;      // last received sequence
+    float    _rx_last_power = 0.0f; // last received power (dBm)
+
     // ---- libdw1000 hardware ops (C callbacks) ----
     // These recover the owning backend instance via dwGetUserdata() so they can reach the AP_HAL SPI device. They assume the bus semaphore is
     // already held by the caller (init_device() holds it; the periodic callback runs on the bus thread which holds it).
@@ -59,8 +87,8 @@ private:
     dwDevice_t _dw;     // libdw1000 device context
     dwOps_t    _ops;    // hardware op function pointers handed to libdw1000
 
-    bool     _initialised;
-    uint32_t _last_update_ms;
+    bool     _initialised = false;
+    uint32_t _last_update_ms = 0;
 
     // scratch buffer for combined header+payload SPI writes (single CS transaction). DW1000 max frame is 1024 bytes (SPI header is up to 3)
     static constexpr uint16_t TX_SCRATCH_LEN = 1024 + 3;

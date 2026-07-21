@@ -152,6 +152,11 @@ void Copter::init_ardupilot()
     g2.beacon.init();
 #endif
 
+#if AP_RANGING_ENABLED
+    // init UWB two-way-ranging deck (e.g. DWM1000 Loco deck)
+    g2.ranging.init();
+#endif
+
 #if AP_RPM_ENABLED
     // initialise AP_RPM library
     rpm_sensor.init();

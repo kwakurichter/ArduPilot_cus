@@ -40,6 +40,7 @@ public:
     enum class Type : uint8_t {
         None   = 0,
         DW1000 = 1,
+        // TODO: add SITL
     };
 
     struct NodeState {
@@ -93,6 +94,7 @@ private:
 
     // parameters
     AP_Enum<Type> _type;
+    AP_Int16      _node_id;   // this node's UWB address (RNG_NODE_ID)
 
     // backend driver
     AP_Ranging_Backend *_driver;

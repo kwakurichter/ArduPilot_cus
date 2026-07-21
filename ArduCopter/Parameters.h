@@ -523,6 +523,11 @@ public:
     AP_Beacon beacon;
 #endif
 
+#if AP_RANGING_ENABLED
+    // UWB two-way-ranging (TWR) between flying nodes
+    AP_Ranging ranging;
+#endif
+
 #if HAL_PROXIMITY_ENABLED
     // proximity (aka object avoidance) library
     AP_Proximity proximity;
