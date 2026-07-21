@@ -62,6 +62,7 @@ private:
     static constexpr uint8_t HEARTBEAT_LEN = 3;
     static constexpr uint32_t HEARTBEAT_PERIOD_MS = 200;  // 5 Hz broadcast
     static constexpr uint32_t LINK_REPORT_MS = 5000;      // GCS report cadence
+    static constexpr uint32_t TX_TIMEOUT_MS = 50;         // sent event watchdog
 
     // link test state (all touched only from the bus thread)
     uint8_t  _node_id = 0;          // cached from frontend RNG_NODE_ID
@@ -72,6 +73,15 @@ private:
     uint8_t  _rx_last_src = 0;      // last received sender id
     uint8_t  _rx_last_seq = 0;      // last received sequence
     float    _rx_last_power = 0.0f; // last received power (dBm)
+    uint16_t _rx_timeout = 0;       // total receive timeouts
+    uint16_t _rx_failed = 0;        // total receive failures (CRC/PHY errors)
+
+    // transmit state / failure tracking (bus thread only)
+    bool     _tx_in_progress = false; // a transmit was started, awaiting the sent event
+    uint32_t _tx_start_ms = 0;        // when the transmit was started
+    uint32_t _tx_count = 0;           // transmits started
+    uint32_t _tx_done = 0;            // transmits confirmed complete (sent event)
+    uint16_t _tx_fail = 0;            // transmits that never completed (watchdog fired)
 
     // ---- libdw1000 hardware ops (C callbacks) ----
     // These recover the owning backend instance via dwGetUserdata() so they can reach the AP_HAL SPI device. They assume the bus semaphore is

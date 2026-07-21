@@ -39,13 +39,16 @@ public:
     // update - run the ranging state machine and publish new ranges
     virtual void update() = 0;
 
-    // set the measured range to a node in meters. Called by the backend as each TWR exchange completes.
-    void set_node_distance(uint8_t node_instance, float distance);
+    // record a measured range (meters) to the peer identified by node_id.
+    void set_node_distance(uint8_t node_id, float distance);
 
 protected:
 
     // this node's configured UWB address (RNG_NODE_ID)
     uint8_t get_node_id() const;
+
+    // debug verbosity (RNG_DEBUG); >0 means debug output is enabled
+    int8_t get_debug() const;
 
     // reference to the owning frontend
     AP_Ranging &_frontend;

@@ -95,6 +95,7 @@ private:
     // parameters
     AP_Enum<Type> _type;
     AP_Int16      _node_id;   // this node's UWB address (RNG_NODE_ID)
+    AP_Int8       _debug;     // debug verbosity (RNG_DEBUG): 0=off
 
     // backend driver
     AP_Ranging_Backend *_driver;

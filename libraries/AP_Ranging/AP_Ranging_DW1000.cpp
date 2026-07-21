@@ -109,19 +109,28 @@ void AP_Ranging_DW1000::timer()
 
     const uint32_t now = AP_HAL::millis();
 
-    // 2) broadcast our heartbeat periodically so peer can hear us
-    if (now - _last_tx_ms >= HEARTBEAT_PERIOD_MS) {
+    // 2) transmit watchdog: if a started transmit never reported "sent", the radio is stuck 
+    //    (and would stay deaf, since RX is rearmed in handle_sent). Count the failure and recover the receiver.
+    if (_tx_in_progress && (now - _tx_start_ms) > TX_TIMEOUT_MS) {
+        _tx_fail++;
+        _tx_in_progress = false;
+        arm_receiver();
+    }
+
+    // 3) broadcast our heartbeat periodically so peer can hear us (skip while a transmit is still in flight)
+    if (!_tx_in_progress && (now - _last_tx_ms >= HEARTBEAT_PERIOD_MS)) {
         _last_tx_ms = now;
         send_heartbeat();
     }
 
-    // 3) DEBUG: report link status over MAVLink
-    if (now - _last_report_ms >= LINK_REPORT_MS) {
+    // 4) DEBUG: report link status over MAVLink, gated behind RNG_DEBUG
+    if (get_debug() > 0 && (now - _last_report_ms >= LINK_REPORT_MS)) {
         _last_report_ms = now;
         GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "DW1000 link: rx=%lu last src=%u seq=%u pwr=%.1fdBm",
-                      (unsigned long)_rx_count, (unsigned)_rx_last_src,
-                      (unsigned)_rx_last_seq, (double)_rx_last_power);
+                      "DW1000: rx=%lu tmo=%u fail=%u | tx=%lu txfail=%u | src=%u pwr=%.1fdBm",
+                      (unsigned long)_rx_count, (unsigned)_rx_timeout, (unsigned)_rx_failed,
+                      (unsigned long)_tx_done, (unsigned)_tx_fail,
+                      (unsigned)_rx_last_src, (double)_rx_last_power);
     }
 }
 
@@ -169,7 +178,11 @@ void AP_Ranging_DW1000::send_heartbeat()
     dwSetDefaults(&_dw);
     dwSetData(&_dw, frame, HEARTBEAT_LEN);
     dwStartTransmit(&_dw);
-    // RX is rearmed in handle_sent() once the frame is on air
+
+    // mark transmit in flight; handle_sent() confirms it and rearms RX, and the timer() watchdog recovers if the sent event never arrives.
+    _tx_in_progress = true;
+    _tx_start_ms = AP_HAL::millis();
+    _tx_count++;
 }
 
 // poll for and dispatch any pending radio event. dwHandleInterrupt() reads the DW1000 status register over SPI and calls our attached handlers (no IRQ)
@@ -186,7 +199,9 @@ void AP_Ranging_DW1000::handle_sent(dwDevice_t *dev)
     if (b == nullptr) {
         return;
     }
-    // transmit finished - go back to listening
+    // transmit finished - record completion and go back to listening
+    b->_tx_in_progress = false;
+    b->_tx_done++;
     b->arm_receiver();
 }
 
@@ -211,20 +226,20 @@ void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
     // permanent receive auto rearms; no explicit arm needed here
 }
 
-// TODO: add failure counters
 void AP_Ranging_DW1000::handle_rx_timeout(dwDevice_t *dev)
 {
     auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
     if (b != nullptr) {
+        b->_rx_timeout++;
         b->arm_receiver();
     }
 }
 
-// TODO: add failure counters
 void AP_Ranging_DW1000::handle_rx_failed(dwDevice_t *dev)
 {
     auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
     if (b != nullptr) {
+        b->_rx_failed++;
         b->arm_receiver();
     }
 }

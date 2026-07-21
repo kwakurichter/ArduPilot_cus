@@ -29,22 +29,37 @@ uint8_t AP_Ranging_Backend::get_node_id() const
     return (uint8_t)_frontend._node_id.get();
 }
 
-// set the measured range to a node in meters
-void AP_Ranging_Backend::set_node_distance(uint8_t node_instance, float distance)
+// debug verbosity (RNG_DEBUG)
+int8_t AP_Ranging_Backend::get_debug() const
 {
-    // sanity check instance
-    if (node_instance >= AP_RANGING_MAX_NODES) {
-        return;
+    return _frontend._debug.get();
+}
+
+// record a measured range (meters) to the peer identified by node_id
+void AP_Ranging_Backend::set_node_distance(uint8_t node_id, float distance)
+{
+    const uint32_t now = AP_HAL::millis();
+
+    // find the stable slot already assigned to this node id
+    for (uint8_t i = 0; i < _frontend.num_nodes; i++) {
+        if (_frontend.node_state[i].id == node_id) {
+            _frontend.node_state[i].distance = distance;
+            _frontend.node_state[i].distance_update_ms = now;
+            _frontend.node_state[i].healthy = true;
+            return;
+        }
     }
 
-    // grow the node count as new nodes appear
-    if (node_instance >= _frontend.num_nodes) {
-        _frontend.num_nodes = node_instance + 1;
+    // first time we've seen this node: claim the next slot. Slots are never reassigned, so a node keeps its slot for the life of the library, which
+    // keeps log/report column ordering stable.
+    if (_frontend.num_nodes >= AP_RANGING_MAX_NODES) {
+        return;   // node table full
     }
-
-    _frontend.node_state[node_instance].distance_update_ms = AP_HAL::millis();
-    _frontend.node_state[node_instance].distance = distance;
-    _frontend.node_state[node_instance].healthy = true;
+    const uint8_t i = _frontend.num_nodes++;
+    _frontend.node_state[i].id = node_id;
+    _frontend.node_state[i].distance = distance;
+    _frontend.node_state[i].distance_update_ms = now;
+    _frontend.node_state[i].healthy = true;
 }
 
 #endif  // AP_RANGING_ENABLED

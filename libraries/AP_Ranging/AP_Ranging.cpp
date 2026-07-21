@@ -41,6 +41,13 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_NODE_ID", 1, AP_Ranging, _node_id, 0),
 
+    // @Param: _DEBUG
+    // @DisplayName: UWB ranging debug output
+    // @Description: Enables verbose ranging debug messages over MAVLink.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Advanced
+    AP_GROUPINFO("_DEBUG", 2, AP_Ranging, _debug, 0),
+
     AP_GROUPEND
 };
 
@@ -172,15 +179,30 @@ void AP_Ranging::log()
         return;
     }
 
-    const struct log_Ranging pkt{
+    // gather each fixed slot's node id + last measured range into locals (avoid
+    // taking the address of packed struct members), and set the health bit if
+    // that node's range is still recent. Ordering is stable because a node id
+    // keeps the same slot (see set_node_distance()). The log carries 4 slots.
+    const uint8_t LOG_SLOTS = 4;
+    uint8_t id[LOG_SLOTS] = {};
+    float   d[LOG_SLOTS] = {};
+    uint8_t health = 0;
+    const uint8_t n = MIN(num_nodes, LOG_SLOTS);
+    for (uint8_t i = 0; i < n; i++) {
+        id[i] = (uint8_t)node_state[i].id;
+        d[i]  = node_state[i].distance;   // raw last range; validity is in Hlth
+        if (node_healthy(i)) {
+            health |= (1U << i);
+        }
+    }
+
+    const struct log_Ranging pkt {
         LOG_PACKET_HEADER_INIT(LOG_RANGING_MSG),
-        time_us         : AP_HAL::micros64(),
-        health          : (uint8_t)healthy(),
-        count           : (uint8_t)count(),
-        dist0           : node_distance(0),
-        dist1           : node_distance(1),
-        dist2           : node_distance(2),
-        dist3           : node_distance(3),
+        time_us : AP_HAL::micros64(),
+        count   : num_nodes,
+        health  : health,
+        id0 : id[0], id1 : id[1], id2 : id[2], id3 : id[3],
+        dist0 : d[0], dist1 : d[1], dist2 : d[2], dist3 : d[3],
     };
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
 }
