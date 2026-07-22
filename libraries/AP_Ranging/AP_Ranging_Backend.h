@@ -50,6 +50,9 @@ protected:
     // debug verbosity (RNG_DEBUG); >0 means debug output is enabled
     int8_t get_debug() const;
 
+    // number of nodes in the network (RNG_NUM_NODES)
+    uint8_t get_num_nodes() const;
+
     // reference to the owning frontend
     AP_Ranging &_frontend;
 };

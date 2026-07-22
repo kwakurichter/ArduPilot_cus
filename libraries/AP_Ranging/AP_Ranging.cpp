@@ -35,7 +35,7 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     AP_GROUPINFO_FLAGS("_TYPE", 0, AP_Ranging, _type, 0, AP_PARAM_FLAG_ENABLE),
 
     // @Param: _NODE_ID
-    // @DisplayName: UWB node address
+    // @DisplayName: UWB node address, should be contiguous from 0.
     // @Description: This vehicle's UWB node address. Each ranging node on the network must have a unique id.
     // @Range: 0 255
     // @User: Advanced
@@ -47,6 +47,13 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @Values: 0:Disabled,1:Enabled
     // @User: Advanced
     AP_GROUPINFO("_DEBUG", 2, AP_Ranging, _debug, 0),
+
+    // @Param: _NUM_NODES
+    // @DisplayName: UWB network node count
+    // @Description: Number of nodes in the UWB network. Each node initiates ranging to node ids 0..(RNG_NUM_NODES-1), skipping its own RNG_NODE_ID. Node ids should be contiguous from 0.
+    // @Range: 1 8
+    // @User: Advanced
+    AP_GROUPINFO("_NUM_NODES", 3, AP_Ranging, _num_nodes, 2),
 
     AP_GROUPEND
 };

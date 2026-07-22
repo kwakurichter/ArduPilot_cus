@@ -35,6 +35,12 @@ int8_t AP_Ranging_Backend::get_debug() const
     return _frontend._debug.get();
 }
 
+// number of nodes in the network (RNG_NUM_NODES)
+uint8_t AP_Ranging_Backend::get_num_nodes() const
+{
+    return (uint8_t)_frontend._num_nodes.get();
+}
+
 // record a measured range (meters) to the peer identified by node_id
 void AP_Ranging_Backend::set_node_distance(uint8_t node_id, float distance)
 {

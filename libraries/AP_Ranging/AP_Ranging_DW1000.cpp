@@ -38,113 +38,107 @@ bool AP_Ranging_DW1000::init_device()
         return false;
     }
 
-    // hand our hardware ops to libdw1000. dwInit() only touches the device struct (no bus traffic), so it needs no semaphore.
+    // hand our hardware ops to libdw1000. dwInit() only touches the device
+    // struct (no bus traffic), so it needs no semaphore.
     _ops.spiRead     = &AP_Ranging_DW1000::spiRead;
     _ops.spiWrite    = &AP_Ranging_DW1000::spiWrite;
     _ops.spiSetSpeed = &AP_Ranging_DW1000::spiSetSpeed;
     _ops.delayms     = &AP_Ranging_DW1000::delayms;
-    _ops.reset       = nullptr;   // use SPI soft reset until a reset GPIO is wired (TODO)
+    _ops.reset       = nullptr;   // SPI soft-reset (no reset GPIO wired)
 
     dwInit(&_dw, &_ops);
-    dwSetUserdata(&_dw, this);    // lets the C ops recover 'this'
+    dwSetUserdata(&_dw, this);     // lets the C ops/handlers recover 'this'
 
-    // (Optional) Hardware reset the DW1000 before any SPI access. Requires a GPIO to be wired to the DW1000 RSTn pin.
+    // (Optional) hardware reset - requires a GPIO wired to the DW1000 RSTn pin.
     //hal.gpio->pinMode(HAL_DW1000_RESET_PIN, HAL_GPIO_OUTPUT);
-    //hal.gpio->write(HAL_DW1000_RESET_PIN, 0);       // assert reset
-    //hal.scheduler->delay(2);                        // hold low (>=1ms)
-    //hal.gpio->pinMode(HAL_DW1000_RESET_PIN, HAL_GPIO_INPUT);  // release (pull-up -> high)
-    //hal.scheduler->delay(5);                        // let the chip boot to IDLE
+    //hal.gpio->write(HAL_DW1000_RESET_PIN, 0);
+    //hal.scheduler->delay(2);
+    //hal.gpio->pinMode(HAL_DW1000_RESET_PIN, HAL_GPIO_INPUT);
+    //hal.scheduler->delay(5);
 
     {
-        // the ops assume the caller holds the bus semaphore
         WITH_SEMAPHORE(_dev->get_semaphore());
 
-        // configure at low speed for reliable register access
         _dev->set_speed(AP_HAL::Device::SPEED_LOW);
 
         const uint32_t id = dwGetDeviceId(&_dw);
         if (id != AP_RANGING_DW1000_DEVICE_ID) {
-            // wrong id - deck not present or SPI incorrectly wired
             GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: not detected (id=0x%08x)", (unsigned)id);
             return false;
         }
-
         if (dwConfigure(&_dw) != 0) {
             GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: configure failed");
             return false;
         }
 
-        // cache our node address and bring up the radio (RF mode + handlers), then start listening
-        _node_id = get_node_id();
+        _node_id   = get_node_id();
+        _num_nodes = get_num_nodes();
+        _next_peer = _node_id;   // round-robin starts just past us
         configure_radio();
-        arm_receiver();
+        arm_receiver();          // start listening
     }
 
-    // service radio events + drive TX/ranging from the SPI bus thread (1kHz)
-    // We poll here rather than using a hardware interrupt (see service_radio())
+    // service radio + drive the exchange from the SPI bus thread (1kHz)
     _dev->register_periodic_callback(1000, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void));
 
     _initialised = true;
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: detected and configured (node %u)", (unsigned)_node_id);
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: ready (node %u of %u)", (unsigned)_node_id, (unsigned)_num_nodes);
     return true;
 }
 
-// return true if we have a recent range and the device came up
+// healthy if we came up and have computed a range recently
 bool AP_Ranging_DW1000::healthy()
 {
     return _initialised && (AP_HAL::millis() - _last_update_ms < AP_RANGING_TIMEOUT_MS);
 }
 
-// called from the vehicle main loop. The main TWR happens in timer() on the bus thread; nothing to do here yet
+// main loop hook
 void AP_Ranging_DW1000::update()
 {
-    // TODO: post-process / filter ranges accumulated by timer()
+    // nothing to do here - ranges are published from compute_range()
 }
 
-// periodic callback on the SPI bus thread (bus semaphore is held here), ~1kHz
+// periodic bus-thread callback (~1kHz). Services radio events, times out stalled exchanges, and round-robin polls neighbours when idle.
 void AP_Ranging_DW1000::timer()
 {
-    // 1) service any radio event (received/sent/timeout) by polling (no IRQ)
     service_radio();
 
     const uint32_t now = AP_HAL::millis();
 
-    // 2) transmit watchdog: if a started transmit never reported "sent", the radio is stuck 
-    //    (and would stay deaf, since RX is rearmed in handle_sent). Count the failure and recover the receiver.
-    if (_tx_in_progress && (now - _tx_start_ms) > TX_TIMEOUT_MS) {
-        _tx_fail++;
-        _tx_in_progress = false;
-        arm_receiver();
+    // abort an exchange that stalled (lost packet / busy peer)
+    if (_state != State::IDLE && (now - _exchange_start_ms) > EXCHANGE_TIMEOUT_MS) {
+        abort_exchange();
     }
 
-    // 3) broadcast our heartbeat periodically so peer can hear us (skip while a transmit is still in flight)
-    if (!_tx_in_progress && (now - _last_tx_ms >= HEARTBEAT_PERIOD_MS)) {
-        _last_tx_ms = now;
-        send_heartbeat();
+    // when idle, start a new poll to the next neighbour on cadence
+    if (_state == State::IDLE && (now - _last_poll_ms) >= POLL_PERIOD_MS) {
+        _last_poll_ms = now;
+        const uint8_t target = next_poll_target();
+        if (target != _node_id) {
+            start_poll(target);
+        }
     }
 
-    // 4) DEBUG: report link status over MAVLink, gated behind RNG_DEBUG
+    // debug report, gated behind RNG_DEBUG (runtime toggle)
     if (get_debug() > 0 && (now - _last_report_ms >= LINK_REPORT_MS)) {
         _last_report_ms = now;
         GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "DW1000: rx=%lu tmo=%u fail=%u | tx=%lu txfail=%u | src=%u pwr=%.1fdBm",
-                      (unsigned long)_rx_count, (unsigned)_rx_timeout, (unsigned)_rx_failed,
-                      (unsigned long)_tx_done, (unsigned)_tx_fail,
-                      (unsigned)_rx_last_src, (double)_rx_last_power);
+                      "DW1000: rng=%lu rx=%lu tx=%lu xfail=%u rxfail=%u | %u=%.2fm",
+                      (unsigned long)_range_count, (unsigned long)_rx_count,
+                      (unsigned long)_tx_count, (unsigned)_exchange_fail,
+                      (unsigned)_rx_failed, (unsigned)_last_range_peer,
+                      (double)_last_range);
     }
 }
 
-// configure the RF settings and attach event handlers
+// configure RF settings (must match peers) and attach the event handlers
 bool AP_Ranging_DW1000::configure_radio()
 {
-    // event handlers - invoked from dwHandleInterrupt() on the bus thread
     dwAttachSentHandler(&_dw, &AP_Ranging_DW1000::handle_sent);
     dwAttachReceivedHandler(&_dw, &AP_Ranging_DW1000::handle_received);
     dwAttachReceiveTimeoutHandler(&_dw, &AP_Ranging_DW1000::handle_rx_timeout);
     dwAttachReceiveFailedHandler(&_dw, &AP_Ranging_DW1000::handle_rx_failed);
 
-    // RF settings (mirror the Bitcraze Loco deck defaults)
-    // TODO: Performance tuning: mode, channel, preamble length/code, antenna delay, etc.
     dwNewConfiguration(&_dw);
     dwSetDefaults(&_dw);
     dwEnableMode(&_dw, MODE_SHORTDATA_FAST_ACCURACY);
@@ -152,43 +146,158 @@ bool AP_Ranging_DW1000::configure_radio()
     dwSetPreambleCode(&_dw, PREAMBLE_CODE_64MHZ_9);
     dwUseSmartPower(&_dw, true);
 
-    dwTime_t antenna_delay = {};      // 0 for now; TODO: calibration
+    dwTime_t antenna_delay = {};   // 0 for now (TODO: calibrate)
     dwSetAntenaDelay(&_dw, antenna_delay);
 
     dwCommitConfiguration(&_dw);
     return true;
 }
 
-// put the radio into continuous receive
+// plain (non-permanent) receive: our "listening" / IDLE state. Mid-exchange RX
+// is armed automatically by wait4resp, so this is only for idle listening and
+// post-exchange recovery.
 void AP_Ranging_DW1000::arm_receiver()
 {
     dwIdle(&_dw);
     dwNewReceive(&_dw);
     dwSetDefaults(&_dw);
-    dwReceivePermanently(&_dw, true);   // auto rearm after each reception
     dwStartReceive(&_dw);
 }
 
-// broadcast a heartbeat: [type, src, seq]
-void AP_Ranging_DW1000::send_heartbeat()
-{
-    uint8_t frame[HEARTBEAT_LEN] = { FRAME_TYPE_HEARTBEAT, _node_id, _tx_seq++ };
-    dwIdle(&_dw);
-    dwNewTransmit(&_dw);
-    dwSetDefaults(&_dw);
-    dwSetData(&_dw, frame, HEARTBEAT_LEN);
-    dwStartTransmit(&_dw);
-
-    // mark transmit in flight; handle_sent() confirms it and rearms RX, and the timer() watchdog recovers if the sent event never arrives.
-    _tx_in_progress = true;
-    _tx_start_ms = AP_HAL::millis();
-    _tx_count++;
-}
-
-// poll for and dispatch any pending radio event. dwHandleInterrupt() reads the DW1000 status register over SPI and calls our attached handlers (no IRQ)
+// poll dwHandleInterrupt(); it reads the status register over SPI and dispatches
+// to our attached handlers. No hardware interrupt is used.
 void AP_Ranging_DW1000::service_radio()
 {
     dwHandleInterrupt(&_dw);
+}
+
+// round-robin the next neighbour id in [0, _num_nodes), skipping our own id.
+// returns _node_id if there is no other node to poll.
+uint8_t AP_Ranging_DW1000::next_poll_target()
+{
+    if (_num_nodes <= 1) {
+        return _node_id;
+    }
+    for (uint8_t i = 0; i < _num_nodes; i++) {
+        _next_peer = (_next_peer + 1) % _num_nodes;
+        if (_next_peer != _node_id) {
+            return _next_peer;
+        }
+    }
+    return _node_id;
+}
+
+// initiator: send POLL (delayed tx so poll_tx is known immediately), then wait4resp so the receiver arms for the RESPONSE.
+void AP_Ranging_DW1000::start_poll(uint8_t dst)
+{
+    _peer = dst;
+    _seq++;
+
+    dwNewTransmit(&_dw);
+    dwTime_t delay = {}; delay.full = REPLY_DELAY_TICKS;
+    const dwTime_t tx = dwSetDelay(&_dw, &delay);
+    _poll_tx = tx.full & TS_MASK;
+
+    const uint8_t f[FRAME_HDR_LEN] = { FRAME_POLL, _node_id, dst, _seq };
+    dwSetData(&_dw, (uint8_t *)f, FRAME_HDR_LEN);
+    dwWaitForResponse(&_dw, true);
+    dwStartTransmit(&_dw);
+    _tx_count++;
+
+    _state = State::I_WAIT_RESP;
+    _exchange_start_ms = AP_HAL::millis();
+}
+
+// responder: reply to a POLL with a delayed RESPONSE, wait4resp for the FINAL.
+void AP_Ranging_DW1000::send_response(uint8_t dst)
+{
+    dwNewTransmit(&_dw);
+    dwTime_t delay = {}; delay.full = REPLY_DELAY_TICKS;
+    const dwTime_t tx = dwSetDelay(&_dw, &delay);
+    _resp_tx = tx.full & TS_MASK;
+
+    const uint8_t f[FRAME_HDR_LEN] = { FRAME_RESPONSE, _node_id, dst, _seq };
+    dwSetData(&_dw, (uint8_t *)f, FRAME_HDR_LEN);
+    dwWaitForResponse(&_dw, true);
+    dwStartTransmit(&_dw);
+    _tx_count++;
+
+    _state = State::R_WAIT_FINAL;
+    _exchange_start_ms = AP_HAL::millis();
+}
+
+// initiator: FINAL carries our three timestamps so the responder can range.
+// The delayed-tx time (final_tx) is read from dwSetDelay before we build the
+// payload, so it can be embedded.
+void AP_Ranging_DW1000::send_final(uint8_t dst)
+{
+    dwNewTransmit(&_dw);
+    dwTime_t delay = {}; delay.full = REPLY_DELAY_TICKS;
+    const dwTime_t tx = dwSetDelay(&_dw, &delay);
+    _final_tx = tx.full & TS_MASK;
+
+    uint8_t f[FINAL_LEN] = { FRAME_FINAL, _node_id, dst, _seq };
+    ts_pack(&f[FRAME_HDR_LEN + 0 * TS_LEN], _poll_tx);
+    ts_pack(&f[FRAME_HDR_LEN + 1 * TS_LEN], _resp_rx);
+    ts_pack(&f[FRAME_HDR_LEN + 2 * TS_LEN], _final_tx);
+    dwSetData(&_dw, f, FINAL_LEN);
+    dwWaitForResponse(&_dw, false);   // initiator is done after the FINAL
+    dwStartTransmit(&_dw);
+    _tx_count++;
+
+    _state = State::I_SENDING_FINAL;
+}
+
+// responder: apply Alternative DS-TWR (eq. 17) and publish the range.
+void AP_Ranging_DW1000::compute_range()
+{
+    const uint64_t Ra = (_resp_rx  - _poll_tx) & TS_MASK;  // A round-trip
+    const uint64_t Da = (_final_tx - _resp_rx) & TS_MASK;  // A reply delay
+    const uint64_t Db = (_resp_tx  - _poll_rx) & TS_MASK;  // B reply delay
+    const uint64_t Rb = (_final_rx - _resp_tx) & TS_MASK;  // B round-trip
+
+    const uint64_t den = Ra + Da + Rb + Db;
+    if (den == 0) {
+        return;
+    }
+    const int64_t num = (int64_t)(Ra * Rb) - (int64_t)(Da * Db);
+    const double tof_ticks = (double)num / (double)den;
+    const float dist = (float)(tof_ticks * DISTANCE_OF_RADIO);
+
+    if (dist <= RANGE_MIN_M || dist >= RANGE_MAX_M) {
+        return;   // reject nonsense (bad exchange / clock glitch)
+    } // TODO: pre-filter?
+
+    set_node_distance(_peer, dist);
+    _range_count++;
+    _last_range = dist;
+    _last_range_peer = _peer;
+    _last_update_ms = AP_HAL::millis();
+}
+
+// give up on the in progress exchange and go back to listening
+void AP_Ranging_DW1000::abort_exchange()
+{
+    _exchange_fail++;
+    _state = State::IDLE;
+    arm_receiver();
+}
+
+// ---- 40-bit timestamp (de)serialisation ----
+void AP_Ranging_DW1000::ts_pack(uint8_t *dst, uint64_t v)
+{
+    for (uint8_t i = 0; i < TS_LEN; i++) {
+        dst[i] = (uint8_t)((v >> (8 * i)) & 0xFF);
+    }
+}
+
+uint64_t AP_Ranging_DW1000::ts_unpack(const uint8_t *src)
+{
+    uint64_t v = 0;
+    for (uint8_t i = 0; i < TS_LEN; i++) {
+        v |= (uint64_t)src[i] << (8 * i);
+    }
+    return v;
 }
 
 // ---- libdw1000 event handlers (bus thread, semaphore held) ----
@@ -199,10 +308,12 @@ void AP_Ranging_DW1000::handle_sent(dwDevice_t *dev)
     if (b == nullptr) {
         return;
     }
-    // transmit finished - record completion and go back to listening
-    b->_tx_in_progress = false;
-    b->_tx_done++;
-    b->arm_receiver();
+    // POLL/RESPONSE sends auto-armed RX via wait4resp; only the FINAL (which
+    // ends the initiator's job) needs us to resume plain listening.
+    if (b->_state == State::I_SENDING_FINAL) {
+        b->_state = State::IDLE;
+        b->arm_receiver();
+    }
 }
 
 void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
@@ -212,26 +323,74 @@ void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
         return;
     }
 
-    unsigned int len = dwGetDataLength(dev);
-    if (len >= HEARTBEAT_LEN) {
-        uint8_t frame[HEARTBEAT_LEN];
-        dwGetData(dev, frame, HEARTBEAT_LEN);
-        if (frame[0] == FRAME_TYPE_HEARTBEAT && frame[1] != b->_node_id) {
-            b->_rx_count++;
-            b->_rx_last_src   = frame[1];
-            b->_rx_last_seq   = frame[2];
-            b->_rx_last_power = dwGetReceivePower(dev);
+    uint8_t buf[RX_BUF_LEN];
+    const unsigned int len = dwGetDataLength(dev);
+    if (len < FRAME_HDR_LEN || len > sizeof(buf)) {
+        b->arm_receiver();
+        return;
+    }
+    dwGetData(dev, buf, len);
+    b->_rx_count++;
+
+    const uint8_t type = buf[0];
+    const uint8_t src  = buf[1];
+    const uint8_t dst  = buf[2];
+    const uint8_t seq  = buf[3];
+
+    // ignore frames not addressed to us, keep listening
+    if (dst != b->_node_id) {
+        b->arm_receiver();
+        return;
+    }
+
+    dwTime_t rx = {};
+    dwGetReceiveTimestamp(dev, &rx);
+
+    switch (type) {
+    case FRAME_POLL:
+        if (b->_state == State::IDLE) {
+            b->_peer = src;
+            b->_seq  = seq;
+            b->_poll_rx = rx.full & TS_MASK;
+            b->send_response(src);   // wait4resp arms RX for the FINAL
+        } else {
+            b->arm_receiver();       // busy: drop, keep listening
         }
-    } // TODO: add TWR frame handling here
-    // permanent receive auto rearms; no explicit arm needed here
+        break;
+
+    case FRAME_RESPONSE:
+        if (b->_state == State::I_WAIT_RESP && src == b->_peer && seq == b->_seq) {
+            b->_resp_rx = rx.full & TS_MASK;
+            b->send_final(src);      // -> I_SENDING_FINAL, completes in handle_sent
+        } else {
+            b->arm_receiver();
+        }
+        break;
+
+    case FRAME_FINAL:
+        if (b->_state == State::R_WAIT_FINAL && src == b->_peer && seq == b->_seq &&
+            len >= FINAL_LEN) {
+            b->_final_rx = rx.full & TS_MASK;
+            b->_poll_tx  = ts_unpack(&buf[FRAME_HDR_LEN + 0 * TS_LEN]);
+            b->_resp_rx  = ts_unpack(&buf[FRAME_HDR_LEN + 1 * TS_LEN]);
+            b->_final_tx = ts_unpack(&buf[FRAME_HDR_LEN + 2 * TS_LEN]);
+            b->compute_range();
+            b->_state = State::IDLE;
+        }
+        b->arm_receiver();           // exchange done (or bad) -> listen again
+        break;
+
+    default:
+        b->arm_receiver();
+        break;
+    }
 }
 
 void AP_Ranging_DW1000::handle_rx_timeout(dwDevice_t *dev)
 {
     auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
     if (b != nullptr) {
-        b->_rx_timeout++;
-        b->arm_receiver();
+        b->abort_exchange();
     }
 }
 
@@ -240,21 +399,21 @@ void AP_Ranging_DW1000::handle_rx_failed(dwDevice_t *dev)
     auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
     if (b != nullptr) {
         b->_rx_failed++;
+        // a corrupted frame doesn't end the exchange; keep waiting (the software
+        // timeout in timer() gives up if the good frame never arrives)
         b->arm_receiver();
     }
 }
 
-// ---------------------------------------------------------------------------------------------------------------------------------
-// libdw1000 hardware ops. Each recovers the backend via dwGetUserdata() and assumes the bus semaphore is already held by the caller
-// ---------------------------------------------------------------------------------------------------------------------------------
+// ---- libdw1000 hardware ops ----
 
-void AP_Ranging_DW1000::spiRead(dwDevice_t *dev, const void *header, size_t header_len, void *data, size_t data_len)
+void AP_Ranging_DW1000::spiRead(dwDevice_t *dev, const void *header, size_t header_len,
+                                void *data, size_t data_len)
 {
     auto *backend = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
     if (backend == nullptr || !backend->_dev) {
         return;
     }
-    // send the header, then clock in data_len bytes (single CS transaction)
     backend->_dev->transfer((const uint8_t *)header, header_len, (uint8_t *)data, data_len);
 }
 
@@ -265,9 +424,8 @@ void AP_Ranging_DW1000::spiWrite(dwDevice_t *dev, const void *header, size_t hea
         return;
     }
     if (header_len + data_len > sizeof(backend->_tx_scratch)) {
-        return;   // oversized write - should not happen for DW1000 frames
+        return;
     }
-    // AP_HAL SPI transfer takes a single send buffer, so concatenate header and payload to keep them within one CS assertion.
     memcpy(backend->_tx_scratch, header, header_len);
     if (data_len > 0) {
         memcpy(backend->_tx_scratch + header_len, data, data_len);
@@ -291,8 +449,7 @@ void AP_Ranging_DW1000::delayms(dwDevice_t *dev, unsigned int delay)
 
 void AP_Ranging_DW1000::reset(dwDevice_t *dev)
 {
-    // TODO: hardware reset (optional, not currently wired): _ops.reset is nullptr so libdw1000 uses dwSoftReset() over SPI. Implement here (toggle a reset GPIO) and
-    // set _ops.reset = &AP_Ranging_DW1000::reset if a reset line is added.
+    // optional hardware reset - not wired (_ops.reset is nullptr -> SPI soft-reset)
 }
 
 #endif  // AP_RANGING_DW1000_ENABLED

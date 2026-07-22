@@ -96,6 +96,7 @@ private:
     AP_Enum<Type> _type;
     AP_Int16      _node_id;   // this node's UWB address (RNG_NODE_ID)
     AP_Int8       _debug;     // debug verbosity (RNG_DEBUG): 0=off
+    AP_Int8       _num_nodes; // number of nodes in the network (RNG_NUM_NODES)
 
     // backend driver
     AP_Ranging_Backend *_driver;

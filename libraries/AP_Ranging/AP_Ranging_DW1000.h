@@ -29,6 +29,28 @@ extern "C" {
 // DW1000 expected chip id returned by dwGetDeviceId()
 #define AP_RANGING_DW1000_DEVICE_ID 0xDECA0130UL
 
+// Loco deck RSTn / IRQ GPIO pin numbers. Must match the GPIO(n) numbers given
+// to DW1000_RESET / DW1000_IRQ in the board hwdef (crazyflie2: GPIO(1)/GPIO(2)).
+#ifndef HAL_DW1000_RESET_PIN
+#define HAL_DW1000_RESET_PIN 1
+#endif
+#ifndef HAL_DW1000_IRQ_PIN
+#define HAL_DW1000_IRQ_PIN 2
+#endif
+
+// Alternative Double-Sided Two-Way Ranging (Decawave APS013, eq. 17):
+//   Tf = (Ra*Rb - Da*Db) / (Ra + Da + Rb + Db)
+// This form tolerates arbitrary/asymmetric reply delays, so we can use generous
+// reply delays that comfortably exceed the ~1ms software polling latency.
+//
+// Every node both initiates (round-robin polls to all neighbours) and responds.
+// In a 3-message exchange the RESPONDER receives last and holds all six
+// timestamps, so it computes and stores the range - therefore a node's ranges
+// come from responding to its neighbours' polls (no report needed).
+//
+// Only ONE exchange runs at a time (single half-duplex radio): the node is
+// listening when IDLE, and is either initiating or responding otherwise.
+
 class AP_Ranging_DW1000 : public AP_Ranging_Backend
 {
 public:
@@ -38,18 +60,21 @@ public:
     void update() override;
 
 private:
-    // acquire the SPI device, run dwInit/dwConfigure, verify the chip id.
-    // returns true on success. Runs once from the main thread.
     bool init_device();
+    void timer();               // periodic bus-thread callback (~1kHz)
 
-    // periodic callback (SPI bus thread) - drives the TWR state machine
-    void timer();
+    // radio setup
+    bool configure_radio();     // mode/channel/preamble + attach handlers, commit
+    void arm_receiver();        // plain (non-permanent) receive = "listening"
+    void service_radio();       // poll dwHandleInterrupt (no hardware interrupt)
 
-    // ---- radio bring-up / link test ----
-    bool configure_radio();   // mode/channel/preamble + attach handlers, commit
-    void arm_receiver();      // put the radio back into receive
-    void send_heartbeat();    // broadcast a test heartbeat frame
-    void service_radio();     // poll the IRQ line + dwHandleInterrupt (no interrupt used)
+    // ---- Alternative DS-TWR exchange ----
+    void start_poll(uint8_t dst);   // initiator: POLL (delayed tx)
+    void send_response(uint8_t dst);// responder: RESPONSE (delayed tx)
+    void send_final(uint8_t dst);   // initiator: FINAL carrying our 3 timestamps
+    void compute_range();           // responder: eq(17) -> distance -> publish
+    void abort_exchange();          // count a failure, return to IDLE + listen
+    uint8_t next_poll_target();     // round-robin neighbour id (skips self)
 
     // libdw1000 event handlers (recover 'this' via dwGetUserdata)
     static void handle_sent(dwDevice_t *dev);
@@ -57,35 +82,65 @@ private:
     static void handle_rx_timeout(dwDevice_t *dev);
     static void handle_rx_failed(dwDevice_t *dev);
 
-    // link test frame: [type, src, seq]
-    static constexpr uint8_t FRAME_TYPE_HEARTBEAT = 0xB1;
-    static constexpr uint8_t HEARTBEAT_LEN = 3;
-    static constexpr uint32_t HEARTBEAT_PERIOD_MS = 200;  // 5 Hz broadcast
-    static constexpr uint32_t LINK_REPORT_MS = 5000;      // GCS report cadence
-    static constexpr uint32_t TX_TIMEOUT_MS = 50;         // sent event watchdog
+    // 40-bit timestamp (de)serialisation (little-endian, 5 bytes)
+    static void     ts_pack(uint8_t *dst, uint64_t v);
+    static uint64_t ts_unpack(const uint8_t *src);
+    static constexpr uint64_t TS_MASK = 0xFFFFFFFFFFULL;   // 40-bit
 
-    // link test state (all touched only from the bus thread)
-    uint8_t  _node_id = 0;          // cached from frontend RNG_NODE_ID
-    uint8_t  _tx_seq = 0;           // outgoing heartbeat sequence
-    uint32_t _last_tx_ms = 0;       // last heartbeat transmit time
-    uint32_t _last_report_ms = 0;   // last GCS link report time
-    uint32_t _rx_count = 0;         // total heartbeats received
-    uint8_t  _rx_last_src = 0;      // last received sender id
-    uint8_t  _rx_last_seq = 0;      // last received sequence
-    float    _rx_last_power = 0.0f; // last received power (dBm)
-    uint16_t _rx_timeout = 0;       // total receive timeouts
-    uint16_t _rx_failed = 0;        // total receive failures (CRC/PHY errors)
+    // frame layout: [type, src, dst, seq, <payload>]
+    enum : uint8_t { FRAME_POLL = 0xC1, FRAME_RESPONSE = 0xC2, FRAME_FINAL = 0xC3 };
+    static constexpr uint8_t FRAME_HDR_LEN = 4;
+    static constexpr uint8_t TS_LEN        = 5;
+    static constexpr uint8_t FINAL_LEN     = FRAME_HDR_LEN + 3 * TS_LEN;  // 19
+    static constexpr uint8_t RX_BUF_LEN    = 32;
 
-    // transmit state / failure tracking (bus thread only)
-    bool     _tx_in_progress = false; // a transmit was started, awaiting the sent event
-    uint32_t _tx_start_ms = 0;        // when the transmit was started
-    uint32_t _tx_count = 0;           // transmits started
-    uint32_t _tx_done = 0;            // transmits confirmed complete (sent event)
-    uint16_t _tx_fail = 0;            // transmits that never completed (watchdog fired)
+    // exchange state (single exchange at a time)
+    enum class State : uint8_t {
+        IDLE,             // listening
+        I_WAIT_RESP,      // initiator: POLL sent, awaiting RESPONSE
+        I_SENDING_FINAL,  // initiator: FINAL queued, awaiting sent event
+        R_WAIT_FINAL,     // responder: RESPONSE sent, awaiting FINAL
+    };
+    State    _state = State::IDLE;
+    uint8_t  _peer = 0;               // node id of the in progress exchange
+    uint8_t  _seq = 0;                // sequence of the in progress exchange
+    uint32_t _exchange_start_ms = 0;  // for the software exchange timeout
+
+    // timestamps for the in progress exchange (device ticks, 40-bit)
+    // initiator captures: poll_tx, resp_rx, final_tx
+    // responder captures: poll_rx, resp_tx, final_rx (+ the 3 above from FINAL)
+    uint64_t _poll_tx = 0, _resp_rx = 0, _final_tx = 0;
+    uint64_t _poll_rx = 0, _resp_tx = 0, _final_rx = 0;
+
+    // round-robin initiator scheduler
+    uint8_t  _next_peer = 0;
+    uint32_t _last_poll_ms = 0;
+
+    // cached config
+    uint8_t  _node_id = 0;
+    uint8_t  _num_nodes = 2;
+
+    // reply delay applied to every delayed transmit. Must exceed the polling latency (~1ms); a few ms is fine for Alternative DS-TWR.
+    static constexpr double   REPLY_DELAY_US   = 3000.0;               // 3 ms
+    static constexpr uint64_t REPLY_DELAY_TICKS = (uint64_t)(REPLY_DELAY_US / TIME_RES);
+    static constexpr uint32_t EXCHANGE_TIMEOUT_MS = 30;   // abort a stalled exchange
+    static constexpr uint32_t POLL_PERIOD_MS      = 50;   // per-neighbour poll cadence
+    static constexpr uint32_t LINK_REPORT_MS      = 5000; // GCS debug cadence
+    static constexpr float    RANGE_MIN_M = -1.0f;        // sanity gate
+    static constexpr float    RANGE_MAX_M = 1000.0f;
+
+    // counters / diagnostics (bus thread only)
+    uint32_t _rx_count = 0;        // frames received
+    uint32_t _tx_count = 0;        // frames transmitted
+    uint16_t _rx_failed = 0;       // RX CRC/PHY errors
+    uint16_t _exchange_fail = 0;   // exchanges that timed out
+    uint32_t _range_count = 0;     // ranges successfully computed
+    float    _last_range = 0.0f;   // last computed range (m)
+    uint8_t  _last_range_peer = 0; // peer of the last computed range
+    uint32_t _last_report_ms = 0;
 
     // ---- libdw1000 hardware ops (C callbacks) ----
-    // These recover the owning backend instance via dwGetUserdata() so they can reach the AP_HAL SPI device. They assume the bus semaphore is
-    // already held by the caller (init_device() holds it; the periodic callback runs on the bus thread which holds it).
+    // Recover the backend via dwGetUserdata(); assume the bus semaphore is held.
     static void spiRead(dwDevice_t *dev, const void *header, size_t header_len, void *data, size_t data_len);
     static void spiWrite(dwDevice_t *dev, const void *header, size_t header_len, const void *data, size_t data_len);
     static void spiSetSpeed(dwDevice_t *dev, dwSpiSpeed_t speed);
@@ -98,9 +153,9 @@ private:
     dwOps_t    _ops;    // hardware op function pointers handed to libdw1000
 
     bool     _initialised = false;
-    uint32_t _last_update_ms = 0;
+    uint32_t _last_update_ms = 0;  // last successful range (drives healthy())
 
-    // scratch buffer for combined header+payload SPI writes (single CS transaction). DW1000 max frame is 1024 bytes (SPI header is up to 3)
+    // scratch buffer for combined header+payload SPI writes (single CS transaction)
     static constexpr uint16_t TX_SCRATCH_LEN = 1024 + 3;
     uint8_t _tx_scratch[TX_SCRATCH_LEN];
 };
