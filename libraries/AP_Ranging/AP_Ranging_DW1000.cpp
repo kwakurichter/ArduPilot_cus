@@ -23,6 +23,14 @@
 
 extern const AP_HAL::HAL &hal;
 
+// DEBUG: test a bit in the DW1000 SYS_STATUS register. dwHandleInterrupt() has
+// already read it into dev->sysstatus, and dwClearReceiveStatus() only clears
+// the hardware (not this local copy), so the failing bits are still valid here.
+static inline bool st_bit(const dwDevice_t *dev, uint8_t bit)
+{
+    return (dev->sysstatus[bit >> 3] >> (bit & 7)) & 0x01u;
+}
+
 AP_Ranging_DW1000::AP_Ranging_DW1000(AP_Ranging &frontend) : AP_Ranging_Backend(frontend)
 {
     // attempt init now; healthy() reports the outcome
@@ -117,20 +125,25 @@ void AP_Ranging_DW1000::timer()
         arm_receiver();
     }
 
-    // 3) broadcast our heartbeat periodically so peer can hear us (skip while a transmit is still in flight)
-    if (!_tx_in_progress && (now - _last_tx_ms >= HEARTBEAT_PERIOD_MS)) {
+    // 3) broadcast our heartbeat periodically so peer can hear us (skip while a
+    //    transmit is still in flight). RNG_DEBUG==2 => LISTEN-ONLY: never
+    //    transmit, so we can test reception without our own TX aborting RX.
+    if (!_tx_in_progress && get_debug() != 2 && (now - _last_tx_ms >= HEARTBEAT_PERIOD_MS)) {
         _last_tx_ms = now;
         send_heartbeat();
     }
 
-    // 4) DEBUG: report link status over MAVLink, gated behind RNG_DEBUG
+    // 4) DEBUG: report the RX pipeline over MAVLink, gated behind RNG_DEBUG.
+    //    good = frames that decoded; ok = passed our accept filter; the rest are
+    //    per-cause receive failures. (kept short for the 50-char statustext limit)
     if (get_debug() > 0 && (now - _last_report_ms >= LINK_REPORT_MS)) {
         _last_report_ms = now;
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "DW1000: rx=%lu tmo=%u fail=%u | tx=%lu txfail=%u | src=%u pwr=%.1fdBm",
-                      (unsigned long)_rx_count, (unsigned)_rx_timeout, (unsigned)_rx_failed,
-                      (unsigned long)_tx_done, (unsigned)_tx_fail,
-                      (unsigned)_rx_last_src, (double)_rx_last_power);
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DWrx good=%lu ok=%lu irq=%lu tx=%lu",
+                      (unsigned long)_rx_good, (unsigned long)_rx_count,
+                      (unsigned long)_irq_count, (unsigned long)_tx_done);
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DWrx crc=%u sfdto=%u phe=%u sys=0x%08lx",
+                      (unsigned)_f_crc, (unsigned)_f_sfdto, (unsigned)_f_phe,
+                      (unsigned long)_last_status);
     }
 }
 
@@ -156,6 +169,17 @@ bool AP_Ranging_DW1000::configure_radio()
     dwSetAntenaDelay(&_dw, antenna_delay);
 
     dwCommitConfiguration(&_dw);
+
+    // Enable the chip's interrupt outputs so the IRQ pin reflects RX/TX events.
+    // dwConfigure() cleared the mask, so set our sources and flush the mask.
+    // (We POLL the IRQ pin as a flag in service_radio() - not a hardware ISR -
+    //  so we only touch SYS_STATUS when the chip says there's an event, like
+    //  the Bitcraze driver, instead of hammering it blindly at 1kHz.)
+    dwInterruptOnSent(&_dw, true);
+    dwInterruptOnReceived(&_dw, true);
+    dwInterruptOnReceiveFailed(&_dw, true);
+    dwInterruptOnReceiveTimeout(&_dw, true);
+    dwWriteSystemEventMaskRegister(&_dw);
     return true;
 }
 
@@ -185,10 +209,16 @@ void AP_Ranging_DW1000::send_heartbeat()
     _tx_count++;
 }
 
-// poll for and dispatch any pending radio event. dwHandleInterrupt() reads the DW1000 status register over SPI and calls our attached handlers (no IRQ)
+// service the radio ONLY when the DW1000 IRQ line is asserted (polled as a
+// flag - no hardware interrupt). This matches the Bitcraze driver: we read/clear
+// SYS_STATUS only when the chip signals a real event, rather than hammering it
+// at 1kHz (which was returning intermittent 0xFFFFFFFF "SPI busy" reads).
 void AP_Ranging_DW1000::service_radio()
 {
-    dwHandleInterrupt(&_dw);
+    if (hal.gpio->read(HAL_DW1000_IRQ_PIN)) {
+        _irq_count++;
+        dwHandleInterrupt(&_dw);
+    }
 }
 
 // ---- libdw1000 event handlers (bus thread, semaphore held) ----
@@ -211,6 +241,7 @@ void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
     if (b == nullptr) {
         return;
     }
+    b->_rx_good++;   // DEBUG: a frame decoded OK (before our accept filter)
 
     unsigned int len = dwGetDataLength(dev);
     if (len >= HEARTBEAT_LEN) {
@@ -238,10 +269,26 @@ void AP_Ranging_DW1000::handle_rx_timeout(dwDevice_t *dev)
 void AP_Ranging_DW1000::handle_rx_failed(dwDevice_t *dev)
 {
     auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
-    if (b != nullptr) {
-        b->_rx_failed++;
-        b->arm_receiver();
+    if (b == nullptr) {
+        return;
     }
+    b->_rx_failed++;
+
+    // DEBUG: capture the raw SYS_STATUS low-32 (holds every RX good/error bit)
+    b->_last_status = (uint32_t)dev->sysstatus[0]        |
+                      (uint32_t)dev->sysstatus[1] << 8   |
+                      (uint32_t)dev->sysstatus[2] << 16  |
+                      (uint32_t)dev->sysstatus[3] << 24;
+
+    // DEBUG: categorise the failure by SYS_STATUS bit (more than one can be set)
+    if (st_bit(dev, RXFCE_BIT))   { b->_f_crc++;   }
+    if (st_bit(dev, RXPHE_BIT))   { b->_f_phe++;   }
+    if (st_bit(dev, RXSFDTO_BIT)) { b->_f_sfdto++; }
+    if (st_bit(dev, RXRFSL_BIT))  { b->_f_rsl++;   }
+    if (st_bit(dev, LDEERR_BIT))  { b->_f_lde++;   }
+    if (st_bit(dev, AFFREJ_BIT))  { b->_f_afrej++; }
+
+    b->arm_receiver();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

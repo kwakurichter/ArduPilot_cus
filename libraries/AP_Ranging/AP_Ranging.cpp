@@ -43,8 +43,8 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
 
     // @Param: _DEBUG
     // @DisplayName: UWB ranging debug output
-    // @Description: Enables verbose ranging debug messages over MAVLink.
-    // @Values: 0:Disabled,1:Enabled
+    // @Description: Ranging debug: 0 off, 1 verbose debug prints, 2 verbose debug prints + listen-only (never transmit, for RX isolation).
+    // @Values: 0:Disabled,1:Enabled,2:Enabled+ListenOnly
     // @User: Advanced
     AP_GROUPINFO("_DEBUG", 2, AP_Ranging, _debug, 0),
 

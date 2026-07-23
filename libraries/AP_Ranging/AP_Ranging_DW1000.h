@@ -29,6 +29,15 @@ extern "C" {
 // DW1000 expected chip id returned by dwGetDeviceId()
 #define AP_RANGING_DW1000_DEVICE_ID 0xDECA0130UL
 
+// Loco deck RSTn / IRQ GPIO pin numbers. Must match the GPIO(n) numbers given
+// to DW1000_RESET / DW1000_IRQ in the board hwdef (crazyflie2: GPIO(1)/GPIO(2)).
+#ifndef HAL_DW1000_RESET_PIN
+#define HAL_DW1000_RESET_PIN 61
+#endif
+#ifndef HAL_DW1000_IRQ_PIN
+#define HAL_DW1000_IRQ_PIN 60
+#endif
+
 class AP_Ranging_DW1000 : public AP_Ranging_Backend
 {
 public:
@@ -69,12 +78,23 @@ private:
     uint8_t  _tx_seq = 0;           // outgoing heartbeat sequence
     uint32_t _last_tx_ms = 0;       // last heartbeat transmit time
     uint32_t _last_report_ms = 0;   // last GCS link report time
-    uint32_t _rx_count = 0;         // total heartbeats received
+    uint32_t _rx_count = 0;         // heartbeats accepted (passed our filter)
     uint8_t  _rx_last_src = 0;      // last received sender id
     uint8_t  _rx_last_seq = 0;      // last received sequence
     float    _rx_last_power = 0.0f; // last received power (dBm)
     uint16_t _rx_timeout = 0;       // total receive timeouts
-    uint16_t _rx_failed = 0;        // total receive failures (CRC/PHY errors)
+    uint16_t _rx_failed = 0;        // total receive failures (any cause)
+
+    // DEBUG: pipeline instrumentation
+    uint32_t _rx_good = 0;          // frames that decoded OK (handle_received entered)
+    uint16_t _f_crc = 0;           // RXFCE: frame arrived but CRC failed
+    uint16_t _f_phe = 0;           // RXPHE: PHY header error (rate/preamble mismatch)
+    uint16_t _f_sfdto = 0;         // RXSFDTO: preamble seen but no SFD (never synced)
+    uint16_t _f_rsl = 0;           // RXRFSL: Reed-Solomon decode error
+    uint16_t _f_lde = 0;           // LDEERR: leading-edge detection error
+    uint16_t _f_afrej = 0;         // AFFREJ: auto frame-filter reject
+    uint32_t _last_status = 0;     // raw SYS_STATUS low-32 at the last RX failure
+    uint32_t _irq_count = 0;       // times the DW1000 IRQ line was seen asserted
 
     // transmit state / failure tracking (bus thread only)
     bool     _tx_in_progress = false; // a transmit was started, awaiting the sent event
