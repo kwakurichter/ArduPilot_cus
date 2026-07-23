@@ -53,6 +53,15 @@ protected:
     // number of nodes in the network (RNG_NUM_NODES)
     uint8_t get_num_nodes() const;
 
+    // DW1000 antenna delay in device ticks (RNG_ANT_DLY)
+    uint16_t get_ant_delay() const;
+
+    // tuning parameters
+    uint16_t get_poll_ms() const;   // RNG_POLL_MS  - base poll cadence
+    uint8_t  get_channel() const;   // RNG_CHAN     - UWB RF channel
+    uint16_t get_reply_us() const;  // RNG_REPLY_US - TWR reply delay
+    uint16_t get_xchg_ms() const;   // RNG_XCHG_MS  - exchange timeout
+
     // reference to the owning frontend
     AP_Ranging &_frontend;
 };

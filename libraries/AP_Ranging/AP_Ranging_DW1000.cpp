@@ -18,6 +18,7 @@
 #if AP_RANGING_DW1000_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Math/AP_Math.h>   // get_random16()
 #include <GCS_MAVLink/GCS.h>
 #include <string.h>
 
@@ -106,13 +107,18 @@ void AP_Ranging_DW1000::timer()
     const uint32_t now = AP_HAL::millis();
 
     // abort an exchange that stalled (lost packet / busy peer)
-    if (_state != State::IDLE && (now - _exchange_start_ms) > EXCHANGE_TIMEOUT_MS) {
+    if (_state != State::IDLE && (now - _exchange_start_ms) > get_xchg_ms()) {
         abort_exchange();
     }
 
-    // when idle, start a new poll to the next neighbour on cadence
-    if (_state == State::IDLE && (now - _last_poll_ms) >= POLL_PERIOD_MS) {
+    // when idle, start a new poll to the next neighbour on a JITTERED cadence.
+    // The jitter is essential: two nodes on the same fixed period boot in phase
+    // and livelock - each polls while the other is mid-poll (not IDLE), so both
+    // drop the incoming POLL and time out, forever. Random jitter drifts them
+    // apart so one is usually IDLE when the other polls.
+    if (_state == State::IDLE && (now - _last_poll_ms) >= _poll_interval) {
         _last_poll_ms = now;
+        _poll_interval = get_poll_ms() + (get_random16() % POLL_JITTER_MS);
         const uint8_t target = next_poll_target();
         if (target != _node_id) {
             start_poll(target);
@@ -122,12 +128,12 @@ void AP_Ranging_DW1000::timer()
     // debug report, gated behind RNG_DEBUG (runtime toggle)
     if (get_debug() > 0 && (now - _last_report_ms >= LINK_REPORT_MS)) {
         _last_report_ms = now;
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                      "DW1000: rng=%lu rx=%lu tx=%lu xfail=%u rxfail=%u | %u=%.2fm",
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: rng=%lu rx=%lu tx=%lu irq=%lu",
                       (unsigned long)_range_count, (unsigned long)_rx_count,
-                      (unsigned long)_tx_count, (unsigned)_exchange_fail,
-                      (unsigned)_rx_failed, (unsigned)_last_range_peer,
-                      (double)_last_range);
+                      (unsigned long)_tx_count, (unsigned long)_irq_count);
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: xfail=%u rxfail=%u | %u=%.2fm",
+                      (unsigned)_exchange_fail, (unsigned)_rx_failed,
+                      (unsigned)_last_range_peer, (double)_last_range);
     }
 }
 
@@ -142,14 +148,27 @@ bool AP_Ranging_DW1000::configure_radio()
     dwNewConfiguration(&_dw);
     dwSetDefaults(&_dw);
     dwEnableMode(&_dw, MODE_SHORTDATA_FAST_ACCURACY);
-    dwSetChannel(&_dw, CHANNEL_2);
+    dwSetChannel(&_dw, get_channel());   // RNG_CHAN (all nodes must match)
     dwSetPreambleCode(&_dw, PREAMBLE_CODE_64MHZ_9);
     dwUseSmartPower(&_dw, true);
 
-    dwTime_t antenna_delay = {};   // 0 for now (TODO: calibrate)
+    // antenna delay from RNG_ANT_DLY (calibration). Must be set BEFORE
+    // dwCommitConfiguration, which writes it to TX_ANTD/LDE_RXANTD.
+    dwTime_t antenna_delay = {};
+    antenna_delay.full = get_ant_delay();
     dwSetAntenaDelay(&_dw, antenna_delay);
 
     dwCommitConfiguration(&_dw);
+
+    // Enable the chip's interrupt outputs so the IRQ pin reflects RX/TX events.
+    // dwConfigure() cleared the mask, so set our sources and flush the mask.
+    // We POLL the IRQ pin as a flag in service_radio() (not a hardware ISR), so
+    // we only touch SYS_STATUS when the chip signals a real event
+    dwInterruptOnSent(&_dw, true);
+    dwInterruptOnReceived(&_dw, true);
+    dwInterruptOnReceiveFailed(&_dw, true);
+    dwInterruptOnReceiveTimeout(&_dw, true);
+    dwWriteSystemEventMaskRegister(&_dw);
     return true;
 }
 
@@ -164,11 +183,20 @@ void AP_Ranging_DW1000::arm_receiver()
     dwStartReceive(&_dw);
 }
 
-// poll dwHandleInterrupt(); it reads the status register over SPI and dispatches
-// to our attached handlers. No hardware interrupt is used.
+// service the radio ONLY when the DW1000 IRQ line is asserted (polled as a flag,
+// no hardware ISR). dwHandleInterrupt() reads/clears SYS_STATUS and dispatches to our handlers
 void AP_Ranging_DW1000::service_radio()
 {
-    dwHandleInterrupt(&_dw);
+    if (hal.gpio->read(HAL_DW1000_IRQ_PIN)) {
+        _irq_count++;
+        dwHandleInterrupt(&_dw);
+    }
+}
+
+// RNG_REPLY_US -> DW1000 device ticks. TIME_RES is microseconds-per-tick.
+uint64_t AP_Ranging_DW1000::reply_delay_ticks() const
+{
+    return (uint64_t)((double)get_reply_us() / TIME_RES);
 }
 
 // round-robin the next neighbour id in [0, _num_nodes), skipping our own id.
@@ -194,7 +222,7 @@ void AP_Ranging_DW1000::start_poll(uint8_t dst)
     _seq++;
 
     dwNewTransmit(&_dw);
-    dwTime_t delay = {}; delay.full = REPLY_DELAY_TICKS;
+    dwTime_t delay = {}; delay.full = reply_delay_ticks();
     const dwTime_t tx = dwSetDelay(&_dw, &delay);
     _poll_tx = tx.full & TS_MASK;
 
@@ -212,7 +240,7 @@ void AP_Ranging_DW1000::start_poll(uint8_t dst)
 void AP_Ranging_DW1000::send_response(uint8_t dst)
 {
     dwNewTransmit(&_dw);
-    dwTime_t delay = {}; delay.full = REPLY_DELAY_TICKS;
+    dwTime_t delay = {}; delay.full = reply_delay_ticks();
     const dwTime_t tx = dwSetDelay(&_dw, &delay);
     _resp_tx = tx.full & TS_MASK;
 
@@ -232,7 +260,7 @@ void AP_Ranging_DW1000::send_response(uint8_t dst)
 void AP_Ranging_DW1000::send_final(uint8_t dst)
 {
     dwNewTransmit(&_dw);
-    dwTime_t delay = {}; delay.full = REPLY_DELAY_TICKS;
+    dwTime_t delay = {}; delay.full = reply_delay_ticks();
     const dwTime_t tx = dwSetDelay(&_dw, &delay);
     _final_tx = tx.full & TS_MASK;
 

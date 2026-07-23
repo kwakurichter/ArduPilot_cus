@@ -29,13 +29,12 @@ extern "C" {
 // DW1000 expected chip id returned by dwGetDeviceId()
 #define AP_RANGING_DW1000_DEVICE_ID 0xDECA0130UL
 
-// Loco deck RSTn / IRQ GPIO pin numbers. Must match the GPIO(n) numbers given
-// to DW1000_RESET / DW1000_IRQ in the board hwdef (crazyflie2: GPIO(1)/GPIO(2)).
+// Loco deck RSTn / IRQ GPIO pin numbers. Must match the GPIO(n) numbers given to DW1000_RESET / DW1000_IRQ in the board hwdef
 #ifndef HAL_DW1000_RESET_PIN
-#define HAL_DW1000_RESET_PIN 1
+#define HAL_DW1000_RESET_PIN 61
 #endif
 #ifndef HAL_DW1000_IRQ_PIN
-#define HAL_DW1000_IRQ_PIN 2
+#define HAL_DW1000_IRQ_PIN 60
 #endif
 
 // Alternative Double-Sided Two-Way Ranging (Decawave APS013, eq. 17):
@@ -115,18 +114,19 @@ private:
     // round-robin initiator scheduler
     uint8_t  _next_peer = 0;
     uint32_t _last_poll_ms = 0;
+    uint32_t _poll_interval = 50;  // current (jittered) poll interval; from RNG_POLL_MS
 
     // cached config
     uint8_t  _node_id = 0;
     uint8_t  _num_nodes = 2;
 
-    // reply delay applied to every delayed transmit. Must exceed the polling latency (~1ms); a few ms is fine for Alternative DS-TWR.
-    static constexpr double   REPLY_DELAY_US   = 3000.0;               // 3 ms
-    static constexpr uint64_t REPLY_DELAY_TICKS = (uint64_t)(REPLY_DELAY_US / TIME_RES);
-    static constexpr uint32_t EXCHANGE_TIMEOUT_MS = 30;   // abort a stalled exchange
-    static constexpr uint32_t POLL_PERIOD_MS      = 50;   // per-neighbour poll cadence
-    static constexpr uint32_t LINK_REPORT_MS      = 5000; // GCS debug cadence
-    static constexpr float    RANGE_MIN_M = -1.0f;        // sanity gate
+    // Tuning now comes from params (RNG_POLL_MS / _REPLY_US / _XCHG_MS / _CHAN)
+    // via the get_*() accessors. Reply delay is converted to device ticks here:
+    uint64_t reply_delay_ticks() const;   // RNG_REPLY_US -> DW1000 ticks
+
+    static constexpr uint32_t POLL_JITTER_MS = 50;   // random jitter to de-sync nodes
+    static constexpr uint32_t LINK_REPORT_MS = 5000; // GCS debug cadence
+    static constexpr float    RANGE_MIN_M = -1.0f;   // range sanity gate
     static constexpr float    RANGE_MAX_M = 1000.0f;
 
     // counters / diagnostics (bus thread only)
@@ -137,6 +137,7 @@ private:
     uint32_t _range_count = 0;     // ranges successfully computed
     float    _last_range = 0.0f;   // last computed range (m)
     uint8_t  _last_range_peer = 0; // peer of the last computed range
+    uint32_t _irq_count = 0;       // times the DW1000 IRQ line was seen asserted
     uint32_t _last_report_ms = 0;
 
     // ---- libdw1000 hardware ops (C callbacks) ----

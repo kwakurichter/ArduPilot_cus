@@ -23,23 +23,15 @@ AP_Ranging_Backend::AP_Ranging_Backend(AP_Ranging &frontend) : _frontend(fronten
     // NOTE: a backend sets up its own transport in its own constructor/init.
 }
 
-// this node's configured UWB address (RNG_NODE_ID)
-uint8_t AP_Ranging_Backend::get_node_id() const
-{
-    return (uint8_t)_frontend._node_id.get();
-}
-
-// debug verbosity (RNG_DEBUG)
-int8_t AP_Ranging_Backend::get_debug() const
-{
-    return _frontend._debug.get();
-}
-
-// number of nodes in the network (RNG_NUM_NODES)
-uint8_t AP_Ranging_Backend::get_num_nodes() const
-{
-    return (uint8_t)_frontend._num_nodes.get();
-}
+// Get parameters from the frontend
+uint8_t AP_Ranging_Backend::get_node_id() const    { return (uint8_t)_frontend._node_id.get(); }
+int8_t AP_Ranging_Backend::get_debug() const       { return _frontend._debug.get(); }
+uint8_t AP_Ranging_Backend::get_num_nodes() const  { return (uint8_t)_frontend._num_nodes.get(); }
+uint16_t AP_Ranging_Backend::get_ant_delay() const { return (uint16_t)_frontend._ant_delay.get(); }
+uint16_t AP_Ranging_Backend::get_poll_ms() const   { return (uint16_t)_frontend._poll_ms.get(); }
+uint8_t  AP_Ranging_Backend::get_channel() const   { return (uint8_t)_frontend._channel.get(); }
+uint16_t AP_Ranging_Backend::get_reply_us() const  { return (uint16_t)_frontend._reply_us.get(); }
+uint16_t AP_Ranging_Backend::get_xchg_ms() const   { return (uint16_t)_frontend._xchg_ms.get(); }
 
 // record a measured range (meters) to the peer identified by node_id
 void AP_Ranging_Backend::set_node_distance(uint8_t node_id, float distance)

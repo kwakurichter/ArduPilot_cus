@@ -55,6 +55,46 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_NUM_NODES", 3, AP_Ranging, _num_nodes, 2),
 
+    // @Param: _ANT_DLY
+    // @DisplayName: UWB antenna delay
+    // @Description: DW1000 antenna delay in device time units (~15.65ps each), applied to both TX and RX. Calibrate at a known distance: increasing this REDUCES the reported range. 0 gives a large positive offset; ~16384 is the typical DWM1000 value.
+    // @Range: 0 32767
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("_ANT_DLY", 4, AP_Ranging, _ant_delay, 16384),
+
+    // @Param: _POLL_MS
+    // @DisplayName: UWB poll period
+    // @Description: Base interval between initiating a ranging exchange to each neighbour. Random jitter is added on top to de-synchronise nodes.
+    // @Range: 10 1000
+    // @Units: ms
+    // @User: Advanced
+    AP_GROUPINFO("_POLL_MS", 5, AP_Ranging, _poll_ms, 50),
+
+    // @Param: _CHAN
+    // @DisplayName: UWB RF channel
+    // @Description: DW1000 UWB channel. All nodes on the network must use the same channel.
+    // @Values: 1:Ch1,2:Ch2,3:Ch3,4:Ch4,5:Ch5,7:Ch7
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("_CHAN", 6, AP_Ranging, _channel, 2),
+
+    // @Param: _REPLY_US
+    // @DisplayName: UWB TWR reply delay
+    // @Description: Delay before sending each TWR reply. Must exceed the servicing latency (~1ms)
+    // @Range: 1500 20000
+    // @Units: us
+    // @User: Advanced
+    AP_GROUPINFO("_REPLY_US", 7, AP_Ranging, _reply_us, 3000),
+
+    // @Param: _XCHG_MS
+    // @DisplayName: UWB exchange timeout
+    // @Description: Abort a stalled ranging exchange after this long and retry on the next cycle.
+    // @Range: 5 200
+    // @Units: ms
+    // @User: Advanced
+    AP_GROUPINFO("_XCHG_MS", 8, AP_Ranging, _xchg_ms, 30),
+
     AP_GROUPEND
 };
 
