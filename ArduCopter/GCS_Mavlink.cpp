@@ -607,9 +607,11 @@ const struct GCS_MAVLINK::stream_entries GCS_MAVLINK::all_stream_entries[] = {
 
 MISSION_STATE GCS_MAVLINK_Copter::mission_state(const class AP_Mission &mission) const
 {
+#if MODE_AUTO_ENABLED
     if (copter.mode_auto.paused()) {
         return MISSION_STATE_PAUSED;
     }
+#endif
     return GCS_MAVLINK::mission_state(mission);
 }
 

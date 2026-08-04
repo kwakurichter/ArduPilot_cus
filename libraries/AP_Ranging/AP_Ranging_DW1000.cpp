@@ -18,7 +18,7 @@
 #if AP_RANGING_DW1000_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
-#include <AP_Math/AP_Math.h>   // get_random16()
+#include <AP_Math/AP_Math.h>
 #include <GCS_MAVLink/GCS.h>
 #include <string.h>
 
@@ -79,8 +79,8 @@ bool AP_Ranging_DW1000::init_device()
         arm_receiver();          // start listening
     }
 
-    // service radio + drive the exchange from the SPI bus thread (1kHz)
-    _dev->register_periodic_callback(1000, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void));
+    // service radio + drive the exchange from the SPI bus thread (300Hz)
+    _dev->register_periodic_callback(300, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void));
 
     _initialised = true;
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: ready (node %u of %u)", (unsigned)_node_id, (unsigned)_num_nodes);
@@ -113,7 +113,7 @@ void AP_Ranging_DW1000::timer()
 
     // when idle, start a new poll to the next neighbour on a JITTERED cadence.
     // The jitter is essential: two nodes on the same fixed period boot in phase
-    // and livelock - each polls while the other is mid-poll (not IDLE), so both
+    // and livelock (each polls while the other is mid-poll (not IDLE)), so both
     // drop the incoming POLL and time out, forever. Random jitter drifts them
     // apart so one is usually IDLE when the other polls.
     if (_state == State::IDLE && (now - _last_poll_ms) >= _poll_interval) {
@@ -152,8 +152,7 @@ bool AP_Ranging_DW1000::configure_radio()
     dwSetPreambleCode(&_dw, PREAMBLE_CODE_64MHZ_9);
     dwUseSmartPower(&_dw, true);
 
-    // antenna delay from RNG_ANT_DLY (calibration). Must be set BEFORE
-    // dwCommitConfiguration, which writes it to TX_ANTD/LDE_RXANTD.
+    // antenna delay from RNG_ANT_DLY (calibration)
     dwTime_t antenna_delay = {};
     antenna_delay.full = get_ant_delay();
     dwSetAntenaDelay(&_dw, antenna_delay);
@@ -193,7 +192,7 @@ void AP_Ranging_DW1000::service_radio()
     }
 }
 
-// RNG_REPLY_US -> DW1000 device ticks. TIME_RES is microseconds-per-tick.
+// RNG_REPLY_US -> DW1000 device ticks. TIME_RES is microseconds per tick.
 uint64_t AP_Ranging_DW1000::reply_delay_ticks() const
 {
     return (uint64_t)((double)get_reply_us() / TIME_RES);
@@ -255,7 +254,7 @@ void AP_Ranging_DW1000::send_response(uint8_t dst)
 }
 
 // initiator: FINAL carries our three timestamps so the responder can range.
-// The delayed-tx time (final_tx) is read from dwSetDelay before we build the
+// The delayed tx time (final_tx) is read from dwSetDelay before we build the
 // payload, so it can be embedded.
 void AP_Ranging_DW1000::send_final(uint8_t dst)
 {
