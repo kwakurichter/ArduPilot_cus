@@ -21,6 +21,7 @@
 
 #include <AP_HAL/utility/packetise.h>
 #include <AP_Math/AP_Math.h>
+#include <GCS_MAVLink/GCS_MAVLink.h>
 
 using namespace AP_Syslink_Protocol;
 
@@ -31,17 +32,6 @@ using namespace AP_Syslink_Protocol;
  */
 #define AP_SYSLINK_PORT_TX_SIZE 2048
 #define AP_SYSLINK_PORT_RX_SIZE 1024
-
-/*
-  Bytes per second the GCS should assume for this link.
-
-  This is not the UART rate. Downlink chunks only leave in ack payloads when
-  the ground station polls, so the achievable rate is set by the radio and is
-  far below the 1 Mbaud serial line. GCS_Param and GCS_FTP pace parameter
-  download and log burst reads from this number; setting it too high just
-  overruns the 5-deep queue and loses more to drops than it gains.
- */
-#define AP_SYSLINK_PORT_BW 4000
 
 bool AP_Syslink_MAVLinkPort::init(AP_Syslink &syslink)
 {
@@ -126,9 +116,55 @@ bool AP_Syslink_MAVLinkPort::_discard_input()
     return true;
 }
 
+/*
+  Not the UART rate. Downlink chunks only leave in ack payloads when the ground
+  station polls, so the achievable rate is set by the radio and is far below
+  the 1 Mbaud serial line. GCS_Param and GCS_FTP pace parameter download and
+  burst reads from this; log download does not use it at all.
+ */
 uint32_t AP_Syslink_MAVLinkPort::bw_in_bytes_per_second() const
 {
-    return AP_SYSLINK_PORT_BW;
+    if (_syslink == nullptr) {
+        return 1000;
+    }
+    return _syslink->link_bw();
+}
+
+uint32_t AP_Syslink_MAVLinkPort::frame_len_at(uint32_t ofs, uint32_t avail) const
+{
+    if (ofs >= avail) {
+        return 0;
+    }
+    const int16_t b = _writebuf->peek(ofs);
+    if (b != MAVLINK_STX_MAVLINK1 && b != MAVLINK_STX) {
+        // not a frame boundary, so there is nothing safe to append
+        return 0;
+    }
+
+    uint8_t min_length = (b == MAVLINK_STX_MAVLINK1) ? 8 : 12;
+    if (avail - ofs < min_length) {
+        return 0;
+    }
+
+    const int16_t len = _writebuf->peek(ofs + 1);
+    if (len < 0) {
+        return 0;
+    }
+    if (b == MAVLINK_STX) {
+        const int16_t incompat = _writebuf->peek(ofs + 2);
+        if (incompat < 0) {
+            return 0;
+        }
+        if (incompat & MAVLINK_IFLAG_SIGNED) {
+            min_length += MAVLINK_SIGNATURE_BLOCK_LEN;
+        }
+    }
+
+    const uint32_t total = uint32_t(len) + min_length;
+    if (avail - ofs < total) {
+        return 0;       // frame still arriving
+    }
+    return total;
 }
 
 uint32_t AP_Syslink_MAVLinkPort::txspace()
@@ -207,6 +243,31 @@ void AP_Syslink_MAVLinkPort::update()
                 _frame_remaining = mavlink_packetise(*_writebuf, avail);
                 if (_frame_remaining == 0) {
                     break;      // frame still arriving
+                }
+
+                /*
+                  Append further whole frames while they fit.
+
+                  Downlink throughput is polls per second times bytes per
+                  radio packet, and one poll carries exactly one packet
+                  whatever its size. A lone 109 byte LOG_DATA frame therefore
+                  wastes well over half of every 251 byte packet, so packing
+                  roughly doubles bulk download for the same poll rate.
+
+                  The cost is that one lost packet now damages two frames
+                  rather than one. Unicast has hardware ack and retry so loss
+                  is rare, but SYSL_OPTIONS bit 2 turns this off if it is not
+                  the right trade.
+                 */
+                if (_syslink->pack_frames() && _frame_remaining <= MAVLINK_CHUNK_MAX) {
+                    while (true) {
+                        const uint32_t next_len = frame_len_at(_frame_remaining, avail);
+                        if (next_len == 0 ||
+                            _frame_remaining + next_len > MAVLINK_CHUNK_MAX) {
+                            break;
+                        }
+                        _frame_remaining += next_len;
+                    }
                 }
             }
 

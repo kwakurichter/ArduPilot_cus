@@ -256,6 +256,40 @@ ceiling is ~100 kB/s, but the nRF51's UART has no DMA — per-byte interrupt on 
 16 MHz Cortex-M0, and transmission busy-waits. Budget ~50 kB/s sustained duplex.
 Ample for telemetry; not a bulk data pipe.
 
+## Throughput
+
+Downlink rate is **polls per second times bytes per radio packet**. One poll
+carries exactly one packet whatever its size, so a half-empty packet is a
+halved link.
+
+That makes packet occupancy the lever, not the UART, and not the assumed
+bandwidth. A `LOG_DATA` frame is about 109 bytes; alone in a 251 byte packet it
+wastes well over half of every poll. Packing whole frames until they no longer
+fit roughly doubles bulk download at an unchanged poll rate — measured over a
+run of `LOG_DATA` frames, 10 chunks become 5. `SYSL_OPTIONS` bit 2 controls it.
+The cost is that one lost packet damages two frames instead of one, which
+unicast's hardware ack and retry makes rare.
+
+Three separate mechanisms pace traffic, and they apply to different things:
+
+| Mechanism | Affects | Set by |
+|---|---|---|
+| `bw_in_bytes_per_second()` | parameter download, FTP bursts | `SYSL_BW` |
+| `txspace()` from free slots | everything | radio queue depth |
+| `have_flow_control()` | param burst clamp, `LOG_DATA` per call | fixed true |
+
+**`SYSL_BW` does not affect log download.** `AP_Logger` paces `LOG_DATA` by
+`HAVE_PAYLOAD_SPACE()` and a per-call message count, never by the bandwidth
+hint, so raising it to speed up logs achieves nothing. It matters for
+parameters and FTP.
+
+`get_flow_control()` deliberately reports `FLOW_CONTROL_ENABLE`. The link has
+flow control in a stronger form than a UART's RTS/CTS — `txspace()` comes from
+the peer's own queue depth — and `GCS_MAVLINK::have_flow_control()` gates two
+throttles meant for dumb serial links: parameter streaming is clamped to 5
+messages per burst without it, and `AP_Logger::handle_log_sending()` drops from
+10 `LOG_DATA` per call to 1.
+
 ## Phases
 
 1. **Core** — UART ownership, framing/deframing, Fletcher-8, type demux, flow

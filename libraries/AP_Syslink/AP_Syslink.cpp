@@ -64,9 +64,9 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Param: OPTIONS
     // @DisplayName: Syslink options
     // @Description: Bitmask of syslink driver options.
-    // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics
+    // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics,2:Pack multiple MAVLink frames per radio packet
     // @User: Advanced
-    AP_GROUPINFO("OPTIONS", 3, AP_Syslink, _options, 3),
+    AP_GROUPINFO("OPTIONS", 3, AP_Syslink, _options, 7),
 
     // @Param: CHAN
     // @DisplayName: Radio channel
@@ -100,6 +100,14 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("TXPOW", 7, AP_Syslink, _txpower, 0),
+
+    // @Param: BW
+    // @DisplayName: Assumed link bandwidth
+    // @Description: Bytes per second the GCS layer should assume for the radio link. Paces parameter download and MAVLink FTP burst reads only; it does not affect log download, which is bounded by the transmit queue instead. Too high overruns the 5 deep radio queue and loses more to drops than it gains.
+    // @Range: 500 20000
+    // @Units: B/s
+    // @User: Advanced
+    AP_GROUPINFO("BW", 8, AP_Syslink, _link_bw, 8000),
 
     AP_GROUPEND
 };

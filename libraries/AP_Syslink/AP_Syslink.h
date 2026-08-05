@@ -82,6 +82,12 @@ public:
     AP_Syslink_MAVLinkPort &get_mavlink_port() { return _mavlink_port; }
 #endif
 
+    // Bytes per second the GCS should assume for this link (SYSL_BW).
+    uint16_t link_bw() const { return uint16_t(_link_bw.get()); }
+
+    // Whether to pack several whole MAVLink frames into one radio chunk.
+    bool pack_frames() const { return option_set(Option::PACK_FRAMES); }
+
     // Most recent DEBUG_PROBE response; probe_time_ms is 0 if none received.
     const AP_Syslink_Protocol::DebugProbeData &get_debug_probe() const { return _probe; }
     uint32_t get_debug_probe_time_ms() const { return _probe_time_ms; }
@@ -96,6 +102,7 @@ private:
     enum class Option : uint8_t {
         USE_FLOW_CONTROL = (1U << 0),
         LOG_STATS        = (1U << 1),
+        PACK_FRAMES      = (1U << 2),
     };
     bool option_set(Option opt) const { return (uint8_t(_options.get()) & uint8_t(opt)) != 0; }
 
@@ -189,6 +196,7 @@ private:
     AP_Int8 _datarate;
     AP_Int16 _address;
     AP_Int8 _txpower;
+    AP_Int16 _link_bw;
 };
 
 namespace AP {
