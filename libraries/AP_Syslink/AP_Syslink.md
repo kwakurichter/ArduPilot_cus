@@ -262,13 +262,25 @@ Downlink rate is **polls per second times bytes per radio packet**. One poll
 carries exactly one packet whatever its size, so a half-empty packet is a
 halved link.
 
-That makes packet occupancy the lever, not the UART, and not the assumed
-bandwidth. A `LOG_DATA` frame is about 109 bytes; alone in a 251 byte packet it
-wastes well over half of every poll. Packing whole frames until they no longer
-fit roughly doubles bulk download at an unchanged poll rate — measured over a
-run of `LOG_DATA` frames, 10 chunks become 5. `SYSL_OPTIONS` bit 2 controls it.
-The cost is that one lost packet damages two frames instead of one, which
-unicast's hardware ack and retry makes rare.
+That suggests filling every packet: a `LOG_DATA` frame is about 109 bytes and
+alone in a 251 byte packet it wastes over half a poll, so packing whole frames
+until they no longer fit halves the chunk count for a given number of bytes.
+
+**On this hardware that is a large net loss, and packing is off by default.**
+Measured on a Crazyflie 2.1, log download ran at 2-8 kB/s with packing off and
+about 500 B/s with it on.
+
+The model above is wrong in its key assumption: polls per second is *not*
+independent of packet size. The nRF51 has no UART DMA — it takes a per byte
+interrupt on a 16 MHz Cortex-M0 and busy-waits on transmit — so forwarding a
+full size chunk stalls its main loop for roughly 2.6 ms, and the radio is
+serviced from that same loop. Bigger packets therefore directly reduce how
+often the radio can answer a poll, and that costs far more than the occupancy
+gains.
+
+`SYSL_OPTIONS` bit 2 still enables it, since the trade could go the other way
+against a co-processor that forwards by DMA, or a ground station polling too
+slowly to exploit small packets.
 
 Three separate mechanisms pace traffic, and they apply to different things:
 
@@ -351,6 +363,27 @@ nRF51 replies with 8 bytes: whether address/channel/datarate commands were
 received, whether UART data was dropped, UART error flags and count, and two
 syslink RX checksum error counters. Those, plus this driver's own counters, are
 written to the `SYSL` log message at 1 Hz.
+
+### Stub log files around a download
+
+Downloading a log leaves short log files behind, typically tens of kilobytes
+and containing only the startup block. This is stock ArduPilot behaviour, not
+anything to do with this driver.
+
+`AP_Logger_File::get_log_data()` calls `stop_logging()` before it opens a log
+for reading — the active log has to be closed to read another. When logging
+resumes a fresh file is opened and immediately writes the FMT, UNIT, MULT and
+PARM preamble, which for Copter is tens of kilobytes on its own. Ask for
+another log soon after, as a ground station does when it lists logs on
+connecting, and that new file is closed again while still writing its preamble.
+Connecting over USB and then over the radio is two such cycles.
+
+`SYSL` is missing from those stubs for a second reason: while
+`_writing_startup_messages` is set, `AP_Logger_File::_WritePrioritisedBlock()`
+refuses non-critical messages unless it has not written one for 100 ms, so a
+1 Hz diagnostic loses that race and is dropped.
+
+## Debugging
 
 If the link is dead, check in this order:
 

@@ -79,9 +79,10 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @DisplayName: Syslink options
     // @Description: Bitmask of syslink driver options.
     // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics,2:Pack multiple MAVLink frames per radio packet,3:Claim flow control to the GCS
+    // @Description{2}: Bit 2 fills each radio packet with as many whole frames as fit. Measured much slower on Crazyflie hardware, not faster, because the nRF51 stalls for about 2.6ms forwarding a full size chunk and services the radio from that same loop. Off by default.
     // @Description{3}: Bit 3 makes AP_Logger send 10 LOG_DATA messages per call instead of 1 and lifts the 5 message parameter burst clamp. Only enable it if the ground station polls fast enough to drain the result, or the link will saturate and drop.
     // @User: Advanced
-    AP_GROUPINFO("OPTIONS", 3, AP_Syslink, _options, 7),
+    AP_GROUPINFO("OPTIONS", 3, AP_Syslink, _options, 3),
 
     // @Param: CHAN
     // @DisplayName: Radio channel
