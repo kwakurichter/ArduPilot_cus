@@ -33,6 +33,9 @@ using namespace AP_Syslink_Protocol;
 #define AP_SYSLINK_PORT_TX_SIZE 2048
 #define AP_SYSLINK_PORT_RX_SIZE 1024
 
+// How long to wait for a free-slot report before releasing one slot anyway.
+#define AP_SYSLINK_SPACE_TIMEOUT_MS 500
+
 bool AP_Syslink_MAVLinkPort::init(AP_Syslink &syslink)
 {
     _syslink = &syslink;
@@ -185,8 +188,7 @@ uint32_t AP_Syslink_MAVLinkPort::txspace()
       unsolicited as soon as the link comes up, but refusing to transmit until
       then would deadlock the link if it were ever missed.
      */
-    const uint8_t slots = _have_space_report ? _free_slots : MAVLINK_TX_SLOTS;
-    return MIN(_writebuf->space(), uint32_t(slots) * uint32_t(MAVLINK_CHUNK_MAX));
+    return MIN(_writebuf->space(), uint32_t(free_slots()) * uint32_t(MAVLINK_CHUNK_MAX));
 }
 
 void AP_Syslink_MAVLinkPort::handle_chunk(uint8_t type, const uint8_t *data, uint8_t len)
@@ -203,13 +205,55 @@ void AP_Syslink_MAVLinkPort::handle_chunk(uint8_t type, const uint8_t *data, uin
     _readbuf->write(data, len);
 }
 
+/*
+  Slots the radio can still take, counted as depth less what we have handed
+  over and not yet seen transmitted.
+ */
+uint8_t AP_Syslink_MAVLinkPort::free_slots() const
+{
+    if (_outstanding >= MAVLINK_TX_SLOTS) {
+        return 0;
+    }
+    return MAVLINK_TX_SLOTS - _outstanding;
+}
+
+enum AP_HAL::UARTDriver::flow_control AP_Syslink_MAVLinkPort::get_flow_control(void)
+{
+    /*
+      Claiming flow control lifts two throttles that GCS_MAVLINK applies to
+      links without it: the 5 message parameter burst clamp, and
+      AP_Logger::handle_log_sending() dropping from 10 LOG_DATA per call to 1.
+
+      Off by default. Ten LOG_DATA per call at the rate update_send() runs
+      produces far more than this radio carries, and the excess does not queue
+      politely - it saturates the nRF51 and takes the link down. Opt in with
+      SYSL_OPTIONS bit 3 only alongside a ground station that polls fast
+      enough to drain it.
+     */
+    if (_syslink != nullptr && _syslink->report_flow_control()) {
+        return FLOW_CONTROL_ENABLE;
+    }
+    return FLOW_CONTROL_DISABLE;
+}
+
 void AP_Syslink_MAVLinkPort::handle_space(uint8_t type, const uint8_t *data, uint8_t len)
 {
     (void)type;
     if (len < 1) {
         return;
     }
-    _free_slots = MIN(data[0], MAVLINK_TX_SLOTS);
+    const uint8_t free = MIN(data[0], MAVLINK_TX_SLOTS);
+
+    /*
+      Return credit only for slots the radio has demonstrably freed since the
+      last report. The absolute value cannot be trusted as a credit because it
+      predates anything still in flight.
+     */
+    if (free > _last_reported_free) {
+        _outstanding -= MIN(_outstanding, uint8_t(free - _last_reported_free));
+    }
+    _last_reported_free = free;
+    _last_report_ms = AP_HAL::millis();
     _have_space_report = true;
 }
 
@@ -219,9 +263,21 @@ void AP_Syslink_MAVLinkPort::update()
         return;
     }
 
+    /*
+      Credit is only returned by a report, so a lost one would stall the link
+      for good. Release a single slot if none has arrived for a while: if the
+      queue really is full the chunk is discarded and we are no worse off, and
+      if a report went missing the link recovers.
+     */
+    if (_outstanding > 0 && _have_space_report &&
+        AP_HAL::millis() - _last_report_ms > AP_SYSLINK_SPACE_TIMEOUT_MS) {
+        _outstanding--;
+        _last_report_ms = AP_HAL::millis();
+    }
+
     while (true) {
         // stop once the radio queue is full; further chunks would be discarded
-        if (_have_space_report && _free_slots == 0) {
+        if (free_slots() == 0) {
             break;
         }
 
@@ -306,8 +362,8 @@ void AP_Syslink_MAVLinkPort::update()
         }
         _frame_remaining -= MIN(_frame_remaining, got);
 
-        if (_free_slots > 0) {
-            _free_slots--;
+        if (_outstanding < UINT8_MAX) {
+            _outstanding++;
         }
     }
 }

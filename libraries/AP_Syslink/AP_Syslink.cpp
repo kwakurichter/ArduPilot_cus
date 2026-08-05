@@ -30,7 +30,13 @@ using namespace AP_Syslink_Protocol;
 // The nRF51's UART is fixed at 1 Mbaud, 8N1.
 #define SYSLINK_BAUD 1000000U
 
-#define SYSLINK_TX_BUF_SIZE 1024
+/*
+  Must hold a full radio queue of framed chunks, or update() gets authorised by
+  the free slot count to queue chunks that send_packet() then has to reject.
+  Five packed chunks is 5 * (251 + 6) = 1285 bytes, so 1024 was too small the
+  moment frames began to be packed.
+ */
+#define SYSLINK_TX_BUF_SIZE 2048
 #define SYSLINK_UART_RX_SIZE 512
 #define SYSLINK_UART_TX_SIZE 512
 
@@ -64,7 +70,8 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Param: OPTIONS
     // @DisplayName: Syslink options
     // @Description: Bitmask of syslink driver options.
-    // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics,2:Pack multiple MAVLink frames per radio packet
+    // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics,2:Pack multiple MAVLink frames per radio packet,3:Claim flow control to the GCS
+    // @Description{3}: Bit 3 makes AP_Logger send 10 LOG_DATA messages per call instead of 1 and lifts the 5 message parameter burst clamp. Only enable it if the ground station polls fast enough to drain the result, or the link will saturate and drop.
     // @User: Advanced
     AP_GROUPINFO("OPTIONS", 3, AP_Syslink, _options, 7),
 
@@ -107,7 +114,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Range: 500 20000
     // @Units: B/s
     // @User: Advanced
-    AP_GROUPINFO("BW", 8, AP_Syslink, _link_bw, 8000),
+    AP_GROUPINFO("BW", 8, AP_Syslink, _link_bw, 4000),
 
     AP_GROUPEND
 };

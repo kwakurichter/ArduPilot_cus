@@ -88,6 +88,13 @@ public:
     // Whether to pack several whole MAVLink frames into one radio chunk.
     bool pack_frames() const { return option_set(Option::PACK_FRAMES); }
 
+    /*
+      Whether the virtual port claims flow control to the GCS. Off by default:
+      it makes AP_Logger send 10 LOG_DATA per call instead of 1, which produces
+      far more than this radio can carry and collapses the link.
+     */
+    bool report_flow_control() const { return option_set(Option::REPORT_FLOW_CTRL); }
+
     // Most recent DEBUG_PROBE response; probe_time_ms is 0 if none received.
     const AP_Syslink_Protocol::DebugProbeData &get_debug_probe() const { return _probe; }
     uint32_t get_debug_probe_time_ms() const { return _probe_time_ms; }
@@ -103,6 +110,7 @@ private:
         USE_FLOW_CONTROL = (1U << 0),
         LOG_STATS        = (1U << 1),
         PACK_FRAMES      = (1U << 2),
+        REPORT_FLOW_CTRL = (1U << 3),
     };
     bool option_set(Option opt) const { return (uint8_t(_options.get()) & uint8_t(opt)) != 0; }
 

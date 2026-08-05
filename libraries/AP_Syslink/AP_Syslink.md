@@ -276,19 +276,41 @@ Three separate mechanisms pace traffic, and they apply to different things:
 |---|---|---|
 | `bw_in_bytes_per_second()` | parameter download, FTP bursts | `SYSL_BW` |
 | `txspace()` from free slots | everything | radio queue depth |
-| `have_flow_control()` | param burst clamp, `LOG_DATA` per call | fixed true |
+| `have_flow_control()` | param burst clamp, `LOG_DATA` per call | `SYSL_OPTIONS` bit 3 |
 
 **`SYSL_BW` does not affect log download.** `AP_Logger` paces `LOG_DATA` by
 `HAVE_PAYLOAD_SPACE()` and a per-call message count, never by the bandwidth
 hint, so raising it to speed up logs achieves nothing. It matters for
 parameters and FTP.
 
-`get_flow_control()` deliberately reports `FLOW_CONTROL_ENABLE`. The link has
-flow control in a stronger form than a UART's RTS/CTS — `txspace()` comes from
-the peer's own queue depth — and `GCS_MAVLINK::have_flow_control()` gates two
-throttles meant for dumb serial links: parameter streaming is clamped to 5
-messages per burst without it, and `AP_Logger::handle_log_sending()` drops from
-10 `LOG_DATA` per call to 1.
+`get_flow_control()` can report `FLOW_CONTROL_ENABLE`, which lifts two
+throttles `GCS_MAVLINK::have_flow_control()` applies to links without it:
+parameter streaming is clamped to 5 messages per burst, and
+`AP_Logger::handle_log_sending()` drops from 10 `LOG_DATA` per call to 1.
+
+**It is off by default, and enabling it took the link down in testing.** Ten
+`LOG_DATA` per call at the rate `update_send()` runs produces far more than
+this radio carries; the excess does not queue politely, it saturates the nRF51
+and the connection is lost. `SYSL_OPTIONS` bit 3 opts in, and is only worth it
+alongside a ground station polling fast enough to drain the result.
+
+### Credit accounting, not absolute credit
+
+`RADIO_MAVLINK_SPACE` describes the queue when the report was generated, which
+is stale by the time it crosses the UART — chunks sent in the meantime are
+still travelling and are not in it. Treating the value as an absolute credit
+hands back slots that are already spoken for and the queue overflows silently.
+
+Credit is therefore returned only on **proof of transmission**: a report
+showing more free slots than the previous one. Simulated against a stale-report
+pipeline, that removes the overflow entirely for about 3% fewer sends. Because
+credit then depends on reports arriving, one slot is released anyway if no
+report has been seen for 500 ms, so a lost report cannot stall the link
+permanently.
+
+The syslink transmit buffer must also hold a full queue of chunks — five packed
+chunks is 1285 bytes — or `update()` gets authorised to queue chunks that
+`send_packet()` then rejects.
 
 ## Phases
 
