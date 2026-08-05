@@ -56,7 +56,7 @@ to the rest of the vehicle. Nothing else may open USART6.
                 GCS_MAVLINK (COMM_2)
 ```
 
-### Why a RegisteredPort, and no new SerialProtocol
+### Why a RegisteredPort
 
 `AP_SerialManager::RegisteredPort` is an `AP_HAL::UARTDriver` subclass whose
 purpose is to present a non-UART transport to ArduPilot as a serial port.
@@ -73,22 +73,44 @@ for free from that path:
   bandwidth hint paces parameter download (`GCS_Param.cpp`) and FTP bursts
   (`GCS_FTP.cpp`) — the two flows most likely to bury a 5-deep radio queue.
 
-The physical UART is taken **by index** (`hal.serial(SYSL_PORT)`) rather than by
-registering a new `SerialProtocol` enum value. Two reasons:
+### Why SERIAL2_PROTOCOL must be Syslink, and must not be None
 
-1. `AP_OSD_ParamSetting.cpp` carries an unguarded
-   `static_assert(SerialProtocol_NumProtocols == ARRAY_SIZE(SERIAL_PROTOCOL_VALUES))`,
-   and that file compiles on crazyflie2 even though `OSD_ENABLED` is 0. Any new
-   protocol number breaks the build unless the string table is extended in
-   lockstep.
-2. Upstream already claims 50 for `SerialProtocol_IOMCU`, so the obvious next
-   number collides on the 4.7.0 rebase.
+The obvious way to keep the GCS off the physical port is to leave it
+unassigned. **That does not work on ChibiOS**, and the failure is silent.
 
-Set `SERIAL2_PROTOCOL = -1` so nothing else claims the port. The *virtual* port
-advertises the existing `SerialProtocol_MAVLink2`, so no new enum value is
-needed anywhere. Net new upstream surface: zero.
+`SerialProtocol_None` is `-1`, and `AP_SerialManager::init()` — which runs
+before `init_ardupilot()`, so before this driver starts — calls
+`uart->disable_rxtx()` on any `None` port. That sets both rx and tx lines to
+`PAL_MODE_INPUT`, de-muxing them from the USART peripheral. **Nothing ever
+restores the alternate-function muxing.** The only code that re-muxes is the
+pin-inversion path in `AP_HAL_ChibiOS/UARTDriver.cpp`, which is compiled only
+for F7/H7/F3/G4/L4 — and the Crazyflie is an STM32F405. A later `begin()`
+starts the peripheral onto disconnected pins, and the link is dead for the rest
+of the boot with no error anywhere.
 
-With SERIAL2 disabled, the virtual port is expected to land on `MAVLINK_COMM_2`
+So the port carries its own protocol value, `SerialProtocol_Syslink = 51`.
+Anything that is not `None` and has no explicit case in the serial manager's
+switch falls through to `default:`, which calls a harmless `begin()` and leaves
+the pins alone. No other consumer claims the value, so nothing fights us for
+the port.
+
+This costs two small upstream deltas, both unavoidable:
+
+- the enum value itself, and
+- one matching entry in `SERIAL_PROTOCOL_VALUES` in `AP_OSD_ParamSetting.cpp`,
+  which carries an unguarded
+  `static_assert(SerialProtocol_NumProtocols == ARRAY_SIZE(SERIAL_PROTOCOL_VALUES))`.
+  That file compiles on crazyflie2 even though `OSD_ENABLED` is 0, so the table
+  must grow in lockstep with the enum or the build fails.
+
+Value **50 is deliberately left free** because upstream 4.7 uses it for
+`SerialProtocol_IOMCU`; taking 51 keeps that rebase clean.
+
+The *virtual* port advertises the existing `SerialProtocol_MAVLink2`, so no
+further enum values are needed.
+
+With SERIAL2 carrying Syslink rather than MAVLink, the virtual port is expected
+to land on `MAVLINK_COMM_2`
 — the same channel the old in-GCS implementation used — so `SR2_*` stream rate
 parameters carry over unchanged. Confirm this at bring-up rather than assuming.
 

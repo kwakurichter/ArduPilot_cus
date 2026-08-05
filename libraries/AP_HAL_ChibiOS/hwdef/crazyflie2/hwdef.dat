@@ -93,9 +93,11 @@ define HAL_I2C_MAX_CLOCK 400000
 SERIAL_ORDER OTG1 USART3 USART6 USART2
 
 # SERIAL2 is the nRF51822 radio, driven by AP_Syslink which owns the port
-# outright and registers its own virtual MAVLink port. Nothing else may
-# claim it.
-define DEFAULT_SERIAL2_PROTOCOL SerialProtocol_None
+# outright and registers its own virtual MAVLink port. This must not be
+# SerialProtocol_None: the serial manager calls disable_rxtx() on a None
+# port, and on STM32F4 nothing restores the pin muxing afterwards.
+define DEFAULT_SERIAL2_PROTOCOL SerialProtocol_Syslink
+define DEFAULT_SERIAL2_BAUD 1000
 
 define HAL_STORAGE_SIZE 15360
 STORAGE_FLASH_PAGE 1

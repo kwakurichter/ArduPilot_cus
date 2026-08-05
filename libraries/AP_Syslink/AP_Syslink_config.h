@@ -13,7 +13,6 @@
 #endif
 
 // GPIO number of the nRF51's UART RTS line, matching GPIO() in the hwdef.
-// Reflects the nRF51's UART receive FIFO, not its radio transmit queue.
 #ifndef HAL_SYSLINK_FLOWCTRL_PIN
 #define HAL_SYSLINK_FLOWCTRL_PIN 62
 #endif

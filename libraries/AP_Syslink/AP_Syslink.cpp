@@ -19,6 +19,7 @@
 
 #include <AP_BoardConfig/AP_BoardConfig.h>
 #include <AP_Logger/AP_Logger.h>
+#include <AP_SerialManager/AP_SerialManager.h>
 #include <AP_Math/AP_Math.h>
 #include <GCS_MAVLink/GCS.h>
 
@@ -36,10 +37,8 @@ using namespace AP_Syslink_Protocol;
 #define SYSLINK_THREAD_STACK 2048
 
 /*
-  How long the nRF51 may hold its RTS line deasserted before we transmit
-  anyway. The line is only meant to throttle brief UART FIFO pressure, so a
-  sustained deassertion means it is unwired or the nRF51 is wedged - and a
-  permanently blocked transmit path would leave the vehicle silently dark.
+  How long the nRF51 may hold its RTS line deasserted before we transmit anyway. The line is only meant to throttle brief UART FIFO pressure, so a
+  sustained deassertion means it is unwired or the nRF51 is wedged - and a permanently blocked transmit path would leave the vehicle silently dark.
  */
 #define SYSLINK_FLOWCTRL_TIMEOUT_MS 100
 
@@ -49,19 +48,13 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
 
     // @Param: ENABLE
     // @DisplayName: Syslink enable
-    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port given by SYSL_PORT, which must not be assigned a protocol of its own.
+    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port whose SERIALn_PROTOCOL is set to 51 (Syslink).
     // @Values: 0:Disabled,1:Enabled
     // @RebootRequired: True
     // @User: Standard
     AP_GROUPINFO_FLAGS("ENABLE", 1, AP_Syslink, _enable, 1, AP_PARAM_FLAG_ENABLE),
 
-    // @Param: PORT
-    // @DisplayName: Syslink serial port
-    // @Description: Serial port number the nRF51822 is wired to. Set that port's SERIALn_PROTOCOL to -1 so nothing else claims it.
-    // @Range: 0 9
-    // @RebootRequired: True
-    // @User: Advanced
-    AP_GROUPINFO("PORT", 2, AP_Syslink, _port_num, 2),
+    // index 2 was PORT, before the driver moved to find_serial()
 
     // @Param: OPTIONS
     // @DisplayName: Syslink options
@@ -89,9 +82,15 @@ void AP_Syslink::init()
         return;
     }
 
-    _uart = hal.serial(_port_num);
+    /*
+      The port must carry SerialProtocol_Syslink rather than being left
+      unassigned: AP_SerialManager::init() calls disable_rxtx() on a
+      SerialProtocol_None port, and on STM32F4 nothing restores the pin
+      muxing afterwards, so begin() would land on disconnected pins.
+     */
+    _uart = AP::serialmanager().find_serial(AP_SerialManager::SerialProtocol_Syslink, 0);
     if (_uart == nullptr) {
-        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: no serial port %d", int(_port_num));
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: no port set to protocol Syslink");
         return;
     }
 
@@ -104,8 +103,7 @@ void AP_Syslink::init()
     _uart->begin(SYSLINK_BAUD, SYSLINK_UART_RX_SIZE, SYSLINK_UART_TX_SIZE);
 
     // the driver answers its own debug probe requests
-    if (!register_handler(Type::DEBUG_PROBE,
-                          FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_debug_probe, void, const uint8_t *, uint8_t))) {
+    if (!register_handler(Type::DEBUG_PROBE,  FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_debug_probe, void, const uint8_t *, uint8_t))) {
         GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
     }
 
@@ -355,10 +353,8 @@ void AP_Syslink::send_pending()
 }
 
 /*
-  The nRF51 drives its UART RTS onto PA4. Asserted low means it can accept
-  data. This guards the nRF51's UART receive FIFO only - it says nothing about
-  the radio transmit queue, which is reported separately by
-  RADIO_MAVLINK_SPACE.
+  The nRF51 drives its UART RTS onto PA4. Asserted low means it can accept data. This guards the nRF51's UART receive FIFO only, it says nothing about
+  the radio transmit queue, which is reported separately by RADIO_MAVLINK_SPACE.
  */
 bool AP_Syslink::flow_control_ok()
 {
@@ -377,10 +373,8 @@ bool AP_Syslink::flow_control_ok()
     }
 
     /*
-      Once the line has been held off long enough to not be real FIFO
-      backpressure, stop gating on it entirely rather than forcing one write
-      per timeout - that would throttle the link to a trickle instead of
-      falling back cleanly. Normal gating resumes if the line ever deasserts.
+      Once the line has been held off long enough to not be real FIFO backpressure, stop gating on it entirely rather than forcing one write
+      per timeout - that would throttle the link to a trickle instead of falling back cleanly. Normal gating resumes if the line ever deasserts.
      */
     if (_flowctrl_failed) {
         return true;

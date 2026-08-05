@@ -84,7 +84,6 @@ private:
 
     // parameters
     AP_Int8 _enable;
-    AP_Int8 _port_num;
     AP_Int8 _options;
 
     enum class Option : uint8_t {

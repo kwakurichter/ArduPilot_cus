@@ -4,8 +4,7 @@
 #include <AP_Common/AP_Common.h>
 
 /*
-  Wire format definitions for the syslink protocol spoken between the STM32 and
-  the nRF51822 radio co-processor on Crazyflie 2.x. See AP_Syslink.md.
+  Wire format definitions for the syslink protocol spoken between the STM32 and the nRF51822 radio co-processor on Crazyflie 2.x. See AP_Syslink.md.
 
   All multi-byte fields are little-endian.
  */
@@ -22,20 +21,16 @@ static constexpr uint16_t MAX_DATA_LEN = 255;
 static constexpr uint8_t FRAME_OVERHEAD = 6;
 
 /*
-  Largest MAVLink chunk that fits one radio packet: the 252 byte ESB payload
-  less the one byte on-air marker that separates MAVLink traffic from the
-  CRTP-derived control packets the nRF51 answers locally. A longer chunk is
-  dropped by the nRF51 rather than truncated.
+  Largest MAVLink chunk that fits one radio packet: the 252 byte ESB payload less the one byte on-air marker that separates MAVLink traffic from the
+  CRTP control packets the nRF51 answers locally. A longer chunk is dropped by the nRF51 rather than truncated.
  */
 static constexpr uint8_t MAVLINK_CHUNK_MAX = 251;
 
-// Usable depth of the nRF51's unicast transmit queue, as reported by
-// RADIO_MAVLINK_SPACE. Broadcasts are not queued and are not counted.
+// Usable depth of the nRF51's unicast transmit queue, as reported by RADIO_MAVLINK_SPACE. P2P Broadcasts are not queued and are not counted.
 static constexpr uint8_t MAVLINK_TX_SLOTS = 5;
 
 /*
-  Packet types. The high nibble is the group (0x00 radio, 0x10 power
-  management, 0x20 one-wire, 0x30 system, 0xF0 debug).
+  Packet types. The high nibble is the group (0x00 radio, 0x10 power management, 0x20 one-wire, 0x30 system, 0xF0 debug).
  */
 enum class Type : uint8_t {
     RADIO_RAW               = 0x00,
@@ -86,12 +81,9 @@ enum class DataRate : uint8_t {
 static constexpr uint8_t ADDRESS_LEN = 5;
 
 /*
-  PM_BATTERY_STATE payload. TEMP is only present when the nRF51 is built with
-  PM_SYSLINK_INCLUDE_TEMP, so the packet is either 13 or 17 bytes; parsers must
-  accept both.
+  PM_BATTERY_STATE payload. TEMP is only present when the nRF51 is built with PM_SYSLINK_INCLUDE_TEMP, so the packet is either 13 or 17 bytes
 
-  ISET is *charge* current, not discharge. TEMP is the nRF51 die temperature,
-  not the battery's - see AP_Syslink.md before surfacing either.
+  ISET is *charge* current, not discharge. TEMP is the nRF51 die temperature, not the battery's - see AP_Syslink.md.
  */
 struct PACKED BatteryState {
     uint8_t flags;      // bit0 charging, bit1 USB powered, bit2 can charge
