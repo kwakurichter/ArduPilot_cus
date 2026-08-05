@@ -95,6 +95,14 @@ public:
      */
     bool report_flow_control() const { return option_set(Option::REPORT_FLOW_CTRL); }
 
+    /*
+      Power state from the nRF51's last PM_BATTERY_STATE report. Valid only
+      once battery_time_ms() is non-zero.
+     */
+    bool is_charging() const;
+    bool is_usb_powered() const;
+    uint32_t battery_time_ms() const { return _batt_time_ms; }
+
     // Most recent DEBUG_PROBE response; probe_time_ms is 0 if none received.
     const AP_Syslink_Protocol::DebugProbeData &get_debug_probe() const { return _probe; }
     uint32_t get_debug_probe_time_ms() const { return _probe_time_ms; }
@@ -124,6 +132,7 @@ private:
     void update_stats_1hz();
     void handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t len);
     void handle_config_echo(uint8_t type, const uint8_t *data, uint8_t len);
+    void handle_battery_state(uint8_t type, const uint8_t *data, uint8_t len);
 
     void update_config();
     void send_config_step();
@@ -174,6 +183,12 @@ private:
     AP_Syslink_Protocol::DebugProbeData _probe;
     uint32_t _probe_time_ms;
 
+    // power management state from PM_BATTERY_STATE
+    uint32_t _last_battery_ms;
+    uint32_t _batt_time_ms;
+    uint8_t _batt_flags;
+    bool _batt_warned;
+
     uint32_t _flowctrl_blocked_ms;
     bool _flowctrl_failed;      // line stuck deasserted; gate disabled
     uint32_t _last_1hz_ms;
@@ -205,6 +220,7 @@ private:
     AP_Int16 _address;
     AP_Int8 _txpower;
     AP_Int16 _link_bw;
+    AP_Int8 _batt_instance;
 };
 
 namespace AP {

@@ -17,6 +17,8 @@
 
 #if AP_SYSLINK_ENABLED
 
+#include <AP_BattMonitor/AP_BattMonitor.h>
+#include <AP_BattMonitor/AP_BattMonitor_Backend.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
 #include <AP_Logger/AP_Logger.h>
 #include <AP_SerialManager/AP_SerialManager.h>
@@ -47,6 +49,12 @@ using namespace AP_Syslink_Protocol;
   sustained deassertion means it is unwired or the nRF51 is wedged.
  */
 #define SYSLINK_FLOWCTRL_TIMEOUT_MS 100
+
+/*
+  The nRF51 reports battery state at 100Hz once enabled, which is far more than
+  the battery monitor has any use for.
+ */
+#define SYSLINK_BATTERY_INTERVAL_MS 100
 
 // How long to wait for the nRF51 to echo a configuration packet before
 // resending it, and how many attempts a non-critical step gets.
@@ -116,6 +124,13 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("BW", 8, AP_Syslink, _link_bw, 4000),
 
+    // @Param: BATT
+    // @DisplayName: Battery monitor instance
+    // @Description: Battery monitor instance fed from the nRF51's power management reports. That instance's BATTn_MONITOR must be set to 29 (Scripting). Set to -1 to leave the battery monitor alone.
+    // @Range: -1 9
+    // @User: Standard
+    AP_GROUPINFO("BATT", 9, AP_Syslink, _batt_instance, 0),
+
     AP_GROUPEND
 };
 
@@ -179,6 +194,14 @@ void AP_Syslink::init()
                               FUNCTOR_BIND(&_mavlink_port, &AP_Syslink_MAVLinkPort::handle_space, void, uint8_t, const uint8_t *, uint8_t))) {
             GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
         }
+    }
+#endif
+
+#if AP_BATTERY_SCRIPTING_ENABLED
+    if (_batt_instance >= 0 &&
+        !register_handler(Type::PM_BATTERY_STATE,
+                          FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_battery_state, void, uint8_t, const uint8_t *, uint8_t))) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
     }
 #endif
 
@@ -518,6 +541,86 @@ void AP_Syslink::handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t l
     memcpy(&_probe, data, sizeof(_probe));
     _probe_time_ms = AP_HAL::millis();
 }
+
+bool AP_Syslink::is_charging() const
+{
+    return (_batt_flags & BATTERY_FLAG_CHARGING) != 0;
+}
+
+bool AP_Syslink::is_usb_powered() const
+{
+    return (_batt_flags & BATTERY_FLAG_USB_POWERED) != 0;
+}
+
+#if AP_BATTERY_SCRIPTING_ENABLED
+/*
+  PM_BATTERY_STATE from the nRF51, which owns the charger and the only voltage
+  divider on the pack. Fed to the battery monitor's scripting backend, which is
+  a supported public entry point and costs no new backend type.
+ */
+void AP_Syslink::handle_battery_state(uint8_t type, const uint8_t *data, uint8_t len)
+{
+    (void)type;
+
+    /*
+      9 bytes without the optional die temperature, 13 with it. This build of
+      the nRF51 firmware has PM_SYSLINK_INCLUDE_TEMP enabled so 13 is what
+      arrives, but the field is a compile-time option there, so accept both
+      rather than silently rejecting every packet after a firmware rebuild.
+     */
+    if (len != BATTERY_STATE_LEN && len != BATTERY_STATE_LEN_WITH_TEMP) {
+        return;
+    }
+
+    _batt_flags = data[0];
+    _batt_time_ms = AP_HAL::millis();
+
+    const int8_t instance = _batt_instance.get();
+    if (instance < 0) {
+        return;
+    }
+
+    if (_batt_time_ms - _last_battery_ms < SYSLINK_BATTERY_INTERVAL_MS) {
+        return;
+    }
+    _last_battery_ms = _batt_time_ms;
+
+    // copied out rather than read through a packed struct: data points into
+    // the receive buffer and carries no alignment guarantee for a float
+    float vbat;
+    memcpy(&vbat, &data[1], sizeof(vbat));
+
+    if (isnan(vbat) || vbat <= 0.0f || vbat > 20.0f) {
+        // implausible; better to report nothing than to trip a failsafe
+        return;
+    }
+
+    BattMonitorScript_State state {};
+    state.voltage = vbat;
+    state.healthy = true;
+    state.cell_count = 1;                                   // Crazyflie 2.x is 1S
+    state.cell_voltages[0] = uint16_t(vbat * 1000.0f);
+
+    /*
+      Everything else stays unknown, which the struct defaults to NaN.
+
+      ISET is the *charge* current in milliamperes, not discharge, so feeding
+      it to current_amps would read plausibly wrong in flight and poison the
+      consumed-mAh integration that the backend derives from it.
+
+      TEMP is the nRF51 die temperature - not the battery, not ambient. It
+      sits above room temperature and climbs under radio load, and on boards
+      without a charger it is never sampled and stays a convincing 0 C.
+     */
+
+    if (!AP::battery().handle_scripting(instance, state) && !_batt_warned) {
+        _batt_warned = true;
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
+                      "Syslink: set BATT%u_MONITOR=29 (Scripting)",
+                      unsigned(instance + 1));
+    }
+}
+#endif // AP_BATTERY_SCRIPTING_ENABLED
 
 void AP_Syslink::handle_config_echo(uint8_t type, const uint8_t *data, uint8_t len)
 {

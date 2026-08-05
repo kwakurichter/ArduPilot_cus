@@ -331,6 +331,16 @@ chunks is 1285 bytes — or `update()` gets authorised to queue chunks that
    are oversized, so this presents as intermittent parameter and log download
    stalls.
 4. **Battery** — 0x14 at init, parse 0x13, feed `AP_BattMonitor::handle_scripting()`.
+   *(done)*
+
+   `SYSL_BATT` selects the battery instance, whose `BATTn_MONITOR` must be 29
+   (Scripting). That backend is reused rather than adding an `AP_BattMonitor`
+   type of our own: `handle_scripting()` is a supported public entry point and
+   costs no new enum value to collide on the 4.7.0 rebase. Only voltage is
+   forwarded — see the battery quirks above for why `ISET` and `TEMP` are not.
+   Reports arrive at 100 Hz and are rate limited to 10 Hz. Charging and
+   USB-powered flags are exposed via `is_charging()` and `is_usb_powered()` but
+   not yet acted on.
 5. **Cleanup** — migrate `CF_*` radio parameters into `SYSL_*`.
 6. **P2P broadcast** — 0x0D, re-home the AI-deck mission-state broadcast.
 
