@@ -92,9 +92,6 @@ struct PACKED BatteryState {
     float   temp;       // nRF51 die temperature, degrees C (optional)
 };
 
-// FLAGS(1) + VBAT(4) + ISET(4) = 9, plus TEMP(4) = 13. The Crazyflie build
-// has PM_SYSLINK_INCLUDE_TEMP enabled, so 13 is what appears on the wire here;
-// upstream defaults to 9. Accept both.
 static constexpr uint8_t BATTERY_STATE_LEN           = 9;
 static constexpr uint8_t BATTERY_STATE_LEN_WITH_TEMP = 13;
 

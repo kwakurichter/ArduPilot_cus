@@ -264,7 +264,16 @@ Ample for telemetry; not a bulk data pipe.
    `PM_BATTERY_AUTOUPDATE`, then channel/datarate/address/power from `SYSL_*`
    parameters. Every step but the autoupdate is echo-confirmed. *(done)*
 3. **MAVLink telemetry** — `RegisteredPort` + `mavlink_packetise()` + 0x0E slot
-   accounting.
+   accounting. *(done)*
+
+   Note the frame remainder is tracked explicitly rather than by re-running
+   `mavlink_packetise()` after an oversized frame is split. Once the buffer
+   starts mid-frame its first byte is payload, and roughly one time in 128 that
+   byte is `0xFD` or `0xFE`, which `packetise()` reads as a frame header, judges
+   incomplete, and returns 0 for — stranding the tail until unrelated later
+   traffic happens to satisfy the bogus length. `FILE_TRANSFER_PROTOCOL` frames
+   are oversized, so this presents as intermittent parameter and log download
+   stalls.
 4. **Battery** — 0x14 at init, parse 0x13, feed `AP_BattMonitor::handle_scripting()`.
 5. **Cleanup** — migrate `CF_*` radio parameters into `SYSL_*`.
 6. **P2P broadcast** — 0x0D, re-home the AI-deck mission-state broadcast.

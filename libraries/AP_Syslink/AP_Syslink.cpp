@@ -38,7 +38,7 @@ using namespace AP_Syslink_Protocol;
 
 /*
   How long the nRF51 may hold its RTS line deasserted before we transmit anyway. The line is only meant to throttle brief UART FIFO pressure, so a
-  sustained deassertion means it is unwired or the nRF51 is wedged - and a permanently blocked transmit path would leave the vehicle silently dark.
+  sustained deassertion means it is unwired or the nRF51 is wedged.
  */
 #define SYSLINK_FLOWCTRL_TIMEOUT_MS 100
 
@@ -133,10 +133,7 @@ void AP_Syslink::init()
     }
 
     /*
-      Every configuration packet is echoed back by the nRF51. One handler
-      serves them all; the boot sequence uses the echo as confirmation rather
-      than blind-delaying, since a mismatch here is indistinguishable from a
-      packet-format failure later.
+      Every configuration packet is echoed back by the nRF51. One handler serves them all; the boot sequence uses the echo as confirmation rather than blind-delaying
      */
     const Type echoed[] = {
         Type::RADIO_READY,
@@ -151,6 +148,24 @@ void AP_Syslink::init()
             break;
         }
     }
+
+#if AP_SERIALMANAGER_REGISTER_ENABLED
+    /*
+      Register the virtual MAVLink port before GCS::setup_uarts() runs, which
+      is when the GCS binds its channels. Unicast chunks and the free-slot
+      report both belong to it.
+     */
+    if (!_mavlink_port.init(*this)) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: MAVLink port init failed");
+    } else {
+        if (!register_handler(Type::RADIO_MAVLINK,
+                              FUNCTOR_BIND(&_mavlink_port, &AP_Syslink_MAVLinkPort::handle_chunk, void, uint8_t, const uint8_t *, uint8_t)) ||
+            !register_handler(Type::RADIO_MAVLINK_SPACE,
+                              FUNCTOR_BIND(&_mavlink_port, &AP_Syslink_MAVLinkPort::handle_space, void, uint8_t, const uint8_t *, uint8_t))) {
+            GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
+        }
+    }
+#endif
 
     if (!hal.scheduler->thread_create(FUNCTOR_BIND_MEMBER(&AP_Syslink::thread_main, void),
                                       "syslink", SYSLINK_THREAD_STACK,
@@ -223,8 +238,7 @@ bool AP_Syslink::send_packet(Type type, const uint8_t *data, uint8_t len)
     WITH_SEMAPHORE(_tx_sem);
 
     /*
-      Reject the whole frame rather than writing part of it - a truncated
-      frame would desynchronise the nRF51's parser until the next sync pair.
+      Reject the whole frame rather than writing part of it (a truncated frame would desynchronise the nRF51's parser until the next sync pair)
      */
     if (_tx_buf->space() < frame_len) {
         _stats.tx_dropped++;
@@ -244,19 +258,14 @@ bool AP_Syslink::send_packet(Type type, const uint8_t *data, uint8_t len)
 /*
   Open the port. Must run on the driver thread.
 
-  The ChibiOS UARTDriver records the thread that calls begin() as the port
-  owner and then silently refuses reads from any other thread: _available()
-  returns 0 and _read() returns -1. Writes are not guarded, so opening the port
-  from the main thread produces a link that transmits perfectly and never
-  receives a byte.
+  The ChibiOS UARTDriver records the thread that calls begin() as the port owner and then silently refuses reads from any other thread: _available()
+  returns 0 and _read() returns -1. Writes are not guarded, so opening the port from the main thread produces a link that transmits perfectly and never receives a byte.
  */
 bool AP_Syslink::init_port()
 {
     /*
-      The port must carry SerialProtocol_Syslink rather than being left
-      unassigned: AP_SerialManager::init() calls disable_rxtx() on a
-      SerialProtocol_None port, and on STM32F4 nothing restores the pin
-      muxing afterwards, so begin() would land on disconnected pins.
+      The port must carry SerialProtocol_Syslink rather than being leftunassigned: AP_SerialManager::init() calls disable_rxtx() on a
+      SerialProtocol_None port, and on STM32F4 nothing restores the pin muxing afterwards, so begin() would land on disconnected pins.
      */
     _uart = AP::serialmanager().find_serial(AP_SerialManager::SerialProtocol_Syslink, 0);
     if (_uart == nullptr) {
@@ -280,6 +289,16 @@ void AP_Syslink::thread_main()
 
         receive_bytes();
         update_config();
+#if AP_SERIALMANAGER_REGISTER_ENABLED
+        /*
+          Hold telemetry until the radio is on the configured channel and
+          address; chunks sent before that go out on the wrong settings and
+          only burn transmit slots.
+         */
+        if (configured()) {
+            _mavlink_port.update();
+        }
+#endif
         send_pending();
         update_stats_1hz();
     }
@@ -496,10 +515,8 @@ void AP_Syslink::handle_config_echo(uint8_t type, const uint8_t *data, uint8_t l
 /*
   Drive the boot sequence.
 
-  The nRF51 transmits nothing at all over the UART until it has received one
-  syslink packet that passes both checksum bytes, so until RADIO_READY is
-  acknowledged a working nRF51 is indistinguishable from a dead one. Every step
-  except the battery autoupdate is echoed back, and we wait on that echo rather
+  The nRF51 transmits nothing at all over the UART until it has received one syslink packet that passes both checksum bytes, so until RADIO_READY is
+  acknowledged a working nRF51 is indistinguishable from a dead one. Every step except the battery autoupdate is echoed back, and we wait on that echo rather
   than blind-delaying.
  */
 void AP_Syslink::update_config()

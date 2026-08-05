@@ -5,6 +5,7 @@
 #if AP_SYSLINK_ENABLED
 
 #include "AP_Syslink_Protocol.h"
+#include "AP_Syslink_MAVLinkPort.h"
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/utility/RingBuffer.h>
@@ -13,13 +14,6 @@
 /*
   Driver for the nRF51822 radio co-processor on Crazyflie 2.x, reached over a
   UART running the syslink framing protocol.
-
-  This class owns the UART outright: it frames outgoing packets, deframes
-  incoming ones and dispatches them by type to registered handlers. Nothing
-  else may open that port.
-
-  init() must run before GCS::setup_uarts(), because later phases register a
-  virtual MAVLink port that the GCS binds to during that call.
 
   See AP_Syslink.md.
  */
@@ -45,23 +39,19 @@ public:
     bool port_ready() const { return _port_ready; }
 
     /*
-      Queue one syslink packet; framing and checksum are added here. Safe to
-      call from any thread.
+      Queue one syslink packet; framing and checksum are added here. Safe to call from any thread.
 
-      Returns false if the packet does not fit the transmit buffer, in which
-      case it is dropped whole rather than truncated - a partial frame would
-      desynchronise the nRF51's parser.
+      Returns false if the packet does not fit the transmit buffer, in which  case it is dropped whole rather than truncated 
+      (a partial frame would desynchronise the nRF51's parser).
      */
     bool send_packet(AP_Syslink_Protocol::Type type, const uint8_t *data, uint8_t len);
     bool send_packet(AP_Syslink_Protocol::Type type) { return send_packet(type, nullptr, 0); }
 
-    // Handler for one received packet, called from the syslink thread.
-    // Takes the packet type so one handler can serve several types.
+    // Handler for one received packet, called from the syslink thread. Takes the packet type so one handler can serve several types.
     FUNCTOR_TYPEDEF(PacketHandler, void, uint8_t, const uint8_t *, uint8_t);
 
     /*
-      Register a handler for one packet type. Returns false if the table is
-      full or that type already has a handler. Handlers run on the syslink
+      Register a handler for one packet type. Returns false if the table is full or that type already has a handler. Handlers run on the syslink
       thread, so they must not block.
      */
     bool register_handler(AP_Syslink_Protocol::Type type, PacketHandler handler);
@@ -86,6 +76,11 @@ public:
 
     // True once the whole boot sequence has been sent.
     bool configured() const { return _config_state == ConfigState::DONE; }
+
+#if AP_SERIALMANAGER_REGISTER_ENABLED
+    // The virtual serial port carrying MAVLink over the radio.
+    AP_Syslink_MAVLinkPort &get_mavlink_port() { return _mavlink_port; }
+#endif
 
     // Most recent DEBUG_PROBE response; probe_time_ms is 0 if none received.
     const AP_Syslink_Protocol::DebugProbeData &get_debug_probe() const { return _probe; }
@@ -156,6 +151,10 @@ private:
     } _handlers[MAX_HANDLERS];
     HAL_Semaphore _handler_sem;
 
+#if AP_SERIALMANAGER_REGISTER_ENABLED
+    AP_Syslink_MAVLinkPort _mavlink_port;
+#endif
+
     Stats _stats;
     AP_Syslink_Protocol::DebugProbeData _probe;
     uint32_t _probe_time_ms;
@@ -165,8 +164,7 @@ private:
     uint32_t _last_1hz_ms;
 
     /*
-      Boot sequence. The nRF51 sends nothing at all until it has received one
-      valid syslink packet, so this must complete before anything else works.
+      Boot sequence. The nRF51 sends nothing at all until it has received one valid syslink packet, so this must complete before anything else works.
      */
     enum class ConfigState : uint8_t {
         READY,          // RADIO_READY, lifts the transmit gate; echoed
