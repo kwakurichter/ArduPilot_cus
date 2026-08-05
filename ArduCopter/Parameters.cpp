@@ -1301,8 +1301,14 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @Range: 0-50
     // @User: Advanced
     // @RebootRequired: True
-    AP_GROUPINFO("CF_RSSI_HZ", 28, ParametersG2, cf_rssi_hz, 0),         
-#endif    
+    AP_GROUPINFO("CF_RSSI_HZ", 28, ParametersG2, cf_rssi_hz, 0),
+
+#if AP_SYSLINK_ENABLED
+    // @Group: SYSL
+    // @Path: ../libraries/AP_Syslink/AP_Syslink.cpp
+    AP_SUBGROUPINFO(syslink, "SYSL", 29, ParametersG2, AP_Syslink),
+#endif
+#endif
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
 

@@ -5,6 +5,7 @@
 #include <AP_Common/AP_Common.h>
 #include "RC_Channel.h"
 #include <AP_Proximity/AP_Proximity.h>
+#include <AP_Syslink/AP_Syslink.h>
 
 #if MODE_FOLLOW_ENABLED
  # include <AP_Follow/AP_Follow.h>
@@ -676,6 +677,9 @@ public:
     // EKF variance filter cutoff
     AP_Float fs_ekf_filt_hz;
 
+#if AP_SYSLINK_ENABLED
+    AP_Syslink syslink;
+#endif
 #ifdef HAL_CF21
     AP_Float cf_tkoff_alt;
     AP_Float cf_hov_time;

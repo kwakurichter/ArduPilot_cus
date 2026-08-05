@@ -1,0 +1,203 @@
+# AP_Syslink
+
+Driver for the nRF51822 radio co-processor on Crazyflie 2.x.
+
+## The system
+
+A Crazyflie 2.x carries two MCUs on one board:
+
+```
+  GCS ── USB ── Crazyradio 2.0 ──── 2.4 GHz ESB ──── nRF51822 ── UART ── STM32
+                  (nRF52840)                        (radio)     1Mbaud   (ArduPilot)
+                                                        │
+                                          also: power, button, charging
+```
+
+ArduPilot runs on the STM32 and has no radio of its own. The nRF51 owns the
+radio and is reached over USART6 running a framed protocol called **syslink**.
+To ArduPilot the nRF51 is a dumb, lossy, packet-oriented serial link that also
+happens to report battery and button state.
+
+This library owns that UART outright and demultiplexes syslink packet types out
+to the rest of the vehicle. Nothing else may open USART6.
+
+## Framing
+
+1 Mbaud, 8N1, no hardware flow control on the STM32 side.
+
+```
++-----------+------+-----+=============+-----+-----+
+|   START   | TYPE | LEN | DATA        |   CKSUM   |
++-----------+------+-----+=============+-----+-----+
+```
+
+- `START` — two constant bytes, `0xBC 0xCF`
+- `TYPE` — one byte, packet type
+- `LEN` — one byte, length of `DATA`
+- `CKSUM` — two-byte Fletcher-8 over `TYPE`, `LEN` and `DATA` (RFC 1146)
+
+## Architecture
+
+```
+                    ┌──────────────────────────────────┐
+                    │            AP_Syslink            │
+   USART6  ────────►│  framing / Fletcher-8 / demux    │
+   (by index,       │  own thread @ PRIORITY_UART      │
+    SERIAL2)        └───┬───────────┬──────────┬───────┘
+                        │           │          │
+                   0x0C/0x0D      0x13       0xF0 …
+                        │           │          │
+                        ▼           ▼          ▼
+              ┌──────────────┐  ┌────────┐  ┌────────┐
+              │ MAVLinkPort  │  │battery │  │ debug  │
+              │RegisteredPort│  │        │  │ probe  │
+              └──────┬───────┘  └────────┘  └────────┘
+                     │
+                GCS_MAVLINK (COMM_2)
+```
+
+### Why a RegisteredPort, and no new SerialProtocol
+
+`AP_SerialManager::RegisteredPort` is an `AP_HAL::UARTDriver` subclass whose
+purpose is to present a non-UART transport to ArduPilot as a serial port.
+`AP_Networking::Port` is the reference implementation and solves nearly the same
+problem — MAVLink over a lossy, packetised, MTU-limited link. Two things come
+for free from that path:
+
+- `mavlink_packetise()` (`AP_HAL/utility/packetise.cpp`) returns exactly one
+  MAVLink frame's worth of bytes from a `ByteBuffer`, handling v1/v2 and signed
+  frames. That is the "one whole frame per chunk where it fits" requirement,
+  already written.
+- Overriding `txspace()` and `bw_in_bytes_per_second()` makes the GCS throttle
+  itself: `txspace()` feeds `comm_send_lock()`/`HAVE_PAYLOAD_SPACE`, and the
+  bandwidth hint paces parameter download (`GCS_Param.cpp`) and FTP bursts
+  (`GCS_FTP.cpp`) — the two flows most likely to bury a 5-deep radio queue.
+
+The physical UART is taken **by index** (`hal.serial(SYSL_PORT)`) rather than by
+registering a new `SerialProtocol` enum value. Two reasons:
+
+1. `AP_OSD_ParamSetting.cpp` carries an unguarded
+   `static_assert(SerialProtocol_NumProtocols == ARRAY_SIZE(SERIAL_PROTOCOL_VALUES))`,
+   and that file compiles on crazyflie2 even though `OSD_ENABLED` is 0. Any new
+   protocol number breaks the build unless the string table is extended in
+   lockstep.
+2. Upstream already claims 50 for `SerialProtocol_IOMCU`, so the obvious next
+   number collides on the 4.7.0 rebase.
+
+Set `SERIAL2_PROTOCOL = -1` so nothing else claims the port. The *virtual* port
+advertises the existing `SerialProtocol_MAVLink2`, so no new enum value is
+needed anywhere. Net new upstream surface: zero.
+
+With SERIAL2 disabled, the virtual port is expected to land on `MAVLINK_COMM_2`
+— the same channel the old in-GCS implementation used — so `SR2_*` stream rate
+parameters carry over unchanged. Confirm this at bring-up rather than assuming.
+
+## Packet types used
+
+| Type | Name | Direction | Phase |
+|------|------|-----------|-------|
+| 0x01 | `RADIO_CHANNEL` | →nRF, echoed | 2 |
+| 0x02 | `RADIO_DATARATE` | →nRF, echoed | 2 |
+| 0x05 | `RADIO_ADDRESS` | →nRF, echoed | 2 |
+| 0x07 | `RADIO_POWER` | →nRF, echoed | 2 |
+| 0x0B | `RADIO_READY` | →nRF, echoed | 2 |
+| 0x0C | `RADIO_MAVLINK` | both | 3 |
+| 0x0D | `RADIO_MAVLINK_BROADCAST` | both | 6 |
+| 0x0E | `RADIO_MAVLINK_SPACE` | nRF→ | 3 |
+| 0x13 | `PM_BATTERY_STATE` | nRF→ | 4 |
+| 0x14 | `PM_BATTERY_AUTOUPDATE` | →nRF | 4 |
+| 0x15/0x16 | `PM_SHUTDOWN_REQUEST`/`_ACK` | both | later |
+| 0xF0 | `DEBUG_PROBE` | request/response | 1 |
+
+## Constraints that bite
+
+**Chunks cap at 251 bytes, not 252.** One byte of the 252-byte ESB payload is an
+on-air marker separating MAVLink traffic from the nRF51's own CRTP-derived
+control packets. A longer chunk is **dropped, not truncated** — silently losing
+the tail would corrupt a frame undetectably.
+
+**A MAVLink v2 frame can exceed one chunk.** Up to 267 bytes unsigned, 280
+signed. `FILE_TRANSFER_PROTOCOL` lands near 261, and FTP is how a GCS fetches
+parameters and logs, so this is not an edge case. Oversized frames are split
+across chunks; losing either half costs the frame. No fragment header is needed
+or wanted — the far end feeds a byte-stream parser that resyncs on STX.
+
+**Two independent backpressure mechanisms guard different things.**
+
+- `SYSLINK_RADIO_MAVLINK_SPACE` (0x0E) reports free *radio* transmit slots,
+  peaking at 5, sent unsolicited whenever the count changes. In telemetry mode
+  the Crazyflie is a PRX, so chunks only leave in ack payloads when the ground
+  station polls; if it stops polling the queue fills. Track this locally
+  (decrement on send, refresh on report) and derive `txspace()` from it.
+- The `NRF_FLOW_CTRL` line (PA4, `GPIO(62)`) is the nRF51's UART RTS. It
+  reflects the nRF51's **UART receive FIFO**, not the radio queue — the nRF51
+  keeps draining syslink when the radio queue is full and simply discards
+  chunks, so this line never asserts for that condition.
+
+Note PA4 is not an STM32 USART6 CTS-capable pin, so this cannot be hardware flow
+control; it is polled as a GPIO. It is also RTS-only — there is no CTS in the
+other direction. Because a permanently deasserted line would leave the link
+silently dark, the gate has a timeout after which the driver transmits anyway
+and counts the event.
+
+**Broadcasts are not queued and consume no slot.** 0x0D transmits immediately
+and cannot fail for lack of room, so it must bypass the 0x0E slot accounting
+entirely. Telemetry and peer traffic interleave freely; the destination is
+carried by the packet type, not by any mode state on either side.
+
+**The radio is gated off for the first 3 seconds** after boot until either
+`RADIO_READY` (0x0B) arrives or the timeout expires. Sending it early shortens
+startup.
+
+**ArduPilot owns the radio configuration.** The nRF51's compiled-in defaults
+(channel 80, address `E7E7E7E7E7`) are not what the radio ends up using — the
+STM32 pushes stored channel, datarate and address at boot and those win. A
+mismatch between vehicle and ground station looks exactly like a packet-format
+failure, so verify both ends agree before debugging anything else. Each config
+packet is echoed back by the nRF51; wait on the echo rather than blind-delaying.
+
+**Battery quirks (0x13).**
+
+- `ISET` is *charge* current in mA, not discharge. Mapping it to `current_amps`
+  would report plausible nonsense in flight. Left unset (NaN).
+- `TEMP` is the nRF51 **die** temperature — not the battery, not ambient. It
+  reads above room temperature and climbs under radio load. Deliberately not
+  forwarded as a battery temperature. It is also gated on `hasCharger` in the
+  nRF51 firmware, so on Roadrunner/Bolt it would sit at a convincing 0 °C.
+- The field is only present when the nRF51 is built with
+  `PM_SYSLINK_INCLUDE_TEMP`, making the packet 17 bytes instead of 13. The
+  parser accepts both lengths so a firmware rebuild does not silently fail.
+- Nothing is sent until `PM_BATTERY_AUTOUPDATE` (0x14) is sent first.
+
+**Throughput.** The UART is the bottleneck, not the radio. At 1 Mbaud the
+ceiling is ~100 kB/s, but the nRF51's UART has no DMA — per-byte interrupt on a
+16 MHz Cortex-M0, and transmission busy-waits. Budget ~50 kB/s sustained duplex.
+Ample for telemetry; not a bulk data pipe.
+
+## Phases
+
+1. **Core** — UART ownership, framing/deframing, Fletcher-8, type demux, flow
+   control gate, debug probe, `SYSL` logging. *(this commit)*
+2. **Boot config** — channel/address/datarate/power parameters, echo-confirmed,
+   then `RADIO_READY`.
+3. **MAVLink telemetry** — `RegisteredPort` + `mavlink_packetise()` + 0x0E slot
+   accounting.
+4. **Battery** — 0x14 at init, parse 0x13, feed `AP_BattMonitor::handle_scripting()`.
+5. **Cleanup** — migrate `CF_*` radio parameters into `SYSL_*`.
+6. **P2P broadcast** — 0x0D, re-home the AI-deck mission-state broadcast.
+
+## Debugging
+
+`SYSLINK_DEBUG_PROBE` (0xF0) is the only real visibility into this link. The
+nRF51 replies with 8 bytes: whether address/channel/datarate commands were
+received, whether UART data was dropped, UART error flags and count, and two
+syslink RX checksum error counters. Those, plus this driver's own counters, are
+written to the `SYSL` log message at 1 Hz.
+
+If the link is dead, check in this order:
+
+1. `SYSL.RxP` climbing at all — if not, the nRF51 is not talking; check wiring
+   and that nothing else claimed SERIAL2.
+2. `SYSL.CkE` / probe `CKSUM1`,`CKSUM2` — framing or baud mismatch.
+3. Probe `ADDR`/`CHAN`/`RATE` all 1 — configuration actually landed (phase 2).
+4. Vehicle and ground station on the same channel and address.

@@ -34,6 +34,11 @@ void Copter::init_ardupilot()
 
     barometer.init();
 
+#if AP_SYSLINK_ENABLED
+    // must precede setup_uarts(): the driver registers a virtual MAVLink port
+    g2.syslink.init();
+#endif
+
     // setup telem slots with serial ports
     gcs().setup_uarts();
 
