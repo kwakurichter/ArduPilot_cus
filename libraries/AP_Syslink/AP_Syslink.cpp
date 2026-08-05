@@ -120,25 +120,11 @@ void AP_Syslink::init()
         return;
     }
 
-    /*
-      The port must carry SerialProtocol_Syslink rather than being left
-      unassigned: AP_SerialManager::init() calls disable_rxtx() on a
-      SerialProtocol_None port, and on STM32F4 nothing restores the pin
-      muxing afterwards, so begin() would land on disconnected pins.
-     */
-    _uart = AP::serialmanager().find_serial(AP_SerialManager::SerialProtocol_Syslink, 0);
-    if (_uart == nullptr) {
-        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: no port set to protocol Syslink");
-        return;
-    }
-
     _tx_buf = NEW_NOTHROW ByteBuffer(SYSLINK_TX_BUF_SIZE);
     if (_tx_buf == nullptr) {
         AP_BoardConfig::allocation_error("AP_Syslink tx buffer");
         return;
     }
-
-    _uart->begin(SYSLINK_BAUD, SYSLINK_UART_RX_SIZE, SYSLINK_UART_TX_SIZE);
 
     // the driver answers its own debug probe requests
     if (!register_handler(Type::DEBUG_PROBE,
@@ -255,8 +241,40 @@ bool AP_Syslink::send_packet(Type type, const uint8_t *data, uint8_t len)
     return true;
 }
 
+/*
+  Open the port. Must run on the driver thread.
+
+  The ChibiOS UARTDriver records the thread that calls begin() as the port
+  owner and then silently refuses reads from any other thread: _available()
+  returns 0 and _read() returns -1. Writes are not guarded, so opening the port
+  from the main thread produces a link that transmits perfectly and never
+  receives a byte.
+ */
+bool AP_Syslink::init_port()
+{
+    /*
+      The port must carry SerialProtocol_Syslink rather than being left
+      unassigned: AP_SerialManager::init() calls disable_rxtx() on a
+      SerialProtocol_None port, and on STM32F4 nothing restores the pin
+      muxing afterwards, so begin() would land on disconnected pins.
+     */
+    _uart = AP::serialmanager().find_serial(AP_SerialManager::SerialProtocol_Syslink, 0);
+    if (_uart == nullptr) {
+        return false;
+    }
+    _uart->begin(SYSLINK_BAUD, SYSLINK_UART_RX_SIZE, SYSLINK_UART_TX_SIZE);
+    return true;
+}
+
 void AP_Syslink::thread_main()
 {
+    if (!init_port()) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: no serial port with protocol %u",
+                      unsigned(AP_SerialManager::SerialProtocol_Syslink));
+        return;
+    }
+    _port_ready = true;
+
     while (true) {
         hal.scheduler->delay_microseconds(200);
 
@@ -284,6 +302,7 @@ void AP_Syslink::receive_bytes()
         if (n <= 0) {
             break;
         }
+        _stats.rx_bytes += n;
         for (ssize_t i = 0; i < n; i++) {
             parse_byte(buf[i]);
         }
@@ -407,6 +426,7 @@ void AP_Syslink::send_pending()
 
     const size_t written = _uart->write(buf, n);
     if (written > 0) {
+        _stats.tx_bytes += written;
         WITH_SEMAPHORE(_tx_sem);
         _tx_buf->advance(written);
     }
@@ -515,7 +535,14 @@ void AP_Syslink::update_config()
          */
         if (_config_state == ConfigState::READY) {
             if (_config_retries % 20 == 0) {
-                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Syslink: no echo from nRF51");
+                /*
+                  tx climbing with rx at zero means the nRF51 is not answering
+                  or the read path is broken; both at zero means nothing is
+                  leaving the STM32.
+                 */
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Syslink: no echo (tx %lu rx %lu bytes)",
+                              (unsigned long)_stats.tx_bytes,
+                              (unsigned long)_stats.rx_bytes);
             }
         } else if (_config_retries > SYSLINK_CONFIG_MAX_RETRIES) {
             GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Syslink: step %u not confirmed",
@@ -635,6 +662,9 @@ void AP_Syslink::update_stats_1hz()
     }
     _last_1hz_ms = now_ms;
 
+    // keep the probe data fresh for the next log line
+    request_debug_probe();
+
     if (!option_set(Option::LOG_STATS)) {
         return;
     }
@@ -643,6 +673,8 @@ void AP_Syslink::update_stats_1hz()
     // @LoggerMessage: SYSL
     // @Description: Syslink link statistics, local counters and nRF51 debug probe
     // @Field: TimeUS: Time since system startup
+    // @Field: RxB: raw bytes read from the UART
+    // @Field: TxB: raw bytes written to the UART
     // @Field: RxP: well-formed syslink packets received
     // @Field: CkE: receive checksum errors
     // @Field: Unh: packets received with no registered handler
@@ -654,9 +686,11 @@ void AP_Syslink::update_stats_1hz()
     // @Field: Ck1: nRF51 syslink receive checksum 1 error count
     // @Field: Ck2: nRF51 syslink receive checksum 2 error count
     AP::logger().WriteStreaming("SYSL",
-                                "TimeUS,RxP,CkE,Unh,TxP,TxD,FcT,Drp,UErr,Ck1,Ck2",
-                                "QIIIIIIBBBB",
+                                "TimeUS,RxB,TxB,RxP,CkE,Unh,TxP,TxD,FcT,Drp,UErr,Ck1,Ck2",
+                                "QIIIIIIIIBBBB",
                                 AP_HAL::micros64(),
+                                _stats.rx_bytes,
+                                _stats.tx_bytes,
                                 _stats.rx_packets,
                                 _stats.rx_cksum_errors,
                                 _stats.rx_unhandled,
@@ -668,9 +702,6 @@ void AP_Syslink::update_stats_1hz()
                                 _probe.cksum1,
                                 _probe.cksum2);
 #endif
-
-    // keep the probe data fresh for the next log line
-    request_debug_probe();
 }
 
 namespace AP {

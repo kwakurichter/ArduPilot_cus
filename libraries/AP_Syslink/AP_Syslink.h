@@ -38,8 +38,11 @@ public:
 
     bool enabled() const { return _enable != 0; }
 
-    // True once the UART is open and the driver thread is running.
+    // True once the driver thread is running.
     bool initialised() const { return _initialised; }
+
+    // True once the driver thread has opened the port.
+    bool port_ready() const { return _port_ready; }
 
     /*
       Queue one syslink packet; framing and checksum are added here. Safe to
@@ -67,6 +70,8 @@ public:
     bool request_debug_probe() { return send_packet(AP_Syslink_Protocol::Type::DEBUG_PROBE); }
 
     struct Stats {
+        uint32_t rx_bytes;           // raw bytes read from the UART
+        uint32_t tx_bytes;           // raw bytes written to the UART
         uint32_t rx_packets;         // well-formed packets received
         uint32_t rx_cksum_errors;    // Fletcher-8 mismatches
         uint32_t rx_unhandled;       // received with no registered handler
@@ -99,6 +104,7 @@ private:
     };
     bool option_set(Option opt) const { return (uint8_t(_options.get()) & uint8_t(opt)) != 0; }
 
+    bool init_port();
     void thread_main();
     void receive_bytes();
     void send_pending();
@@ -117,6 +123,7 @@ private:
 
     AP_HAL::UARTDriver *_uart;
     bool _initialised;
+    bool _port_ready;
 
     // receive state machine
     enum class RxState : uint8_t {

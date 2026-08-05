@@ -114,6 +114,34 @@ to land on `MAVLINK_COMM_2`
 — the same channel the old in-GCS implementation used — so `SR2_*` stream rate
 parameters carry over unchanged. Confirm this at bring-up rather than assuming.
 
+### The driver thread must own the port
+
+`begin()` must be called **from the driver thread**, not from `init()` on the
+main thread. The ChibiOS `UARTDriver` records the calling thread in
+`_uart_owner_thd` and then refuses reads from anyone else:
+
+```c
+uint32_t UARTDriver::_available()
+{
+    if (!_rx_initialised || _uart_owner_thd != chThdGetSelfX()) {
+        return 0;
+```
+
+`_read()` likewise returns -1. Neither reports an error. **Writes are not
+guarded at all**, so opening the port on the wrong thread yields a link that
+transmits perfectly and receives absolutely nothing — which looks exactly like
+dead hardware or an unresponsive peer.
+
+This is why `init_port()` runs at the top of `thread_main()`. `AP_Torqeedo`
+does the same thing, and says so in a comment on `init_internals()`.
+
+A `SCHED_TASK` in the vehicle's scheduler table would sidestep this, since the
+main loop would be both the opener and the reader. A dedicated thread is still
+the better fit at 1 Mbaud: the main loop would have to absorb up to ~250 bytes
+per iteration at 400 Hz against a 512-byte driver buffer, and this link stalls
+the nRF51's main loop for ~2.6 ms per full-size chunk. The thread just has to
+own the port.
+
 ## Packet types used
 
 | Type | Name | Direction | Phase |
