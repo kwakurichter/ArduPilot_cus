@@ -53,7 +53,8 @@ public:
     bool send_packet(AP_Syslink_Protocol::Type type) { return send_packet(type, nullptr, 0); }
 
     // Handler for one received packet, called from the syslink thread.
-    FUNCTOR_TYPEDEF(PacketHandler, void, const uint8_t *, uint8_t);
+    // Takes the packet type so one handler can serve several types.
+    FUNCTOR_TYPEDEF(PacketHandler, void, uint8_t, const uint8_t *, uint8_t);
 
     /*
       Register a handler for one packet type. Returns false if the table is
@@ -74,6 +75,12 @@ public:
         uint32_t flowctrl_timeouts;  // sent anyway after RTS stayed deasserted
     };
     const Stats &get_stats() const { return _stats; }
+
+    // True once the nRF51 has echoed RADIO_READY, proving the link works.
+    bool link_up() const { return _config_state > ConfigState::READY; }
+
+    // True once the whole boot sequence has been sent.
+    bool configured() const { return _config_state == ConfigState::DONE; }
 
     // Most recent DEBUG_PROBE response; probe_time_ms is 0 if none received.
     const AP_Syslink_Protocol::DebugProbeData &get_debug_probe() const { return _probe; }
@@ -99,7 +106,12 @@ private:
     void dispatch(uint8_t type, const uint8_t *data, uint8_t len);
     bool flow_control_ok();
     void update_stats_1hz();
-    void handle_debug_probe(const uint8_t *data, uint8_t len);
+    void handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t len);
+    void handle_config_echo(uint8_t type, const uint8_t *data, uint8_t len);
+
+    void update_config();
+    void send_config_step();
+    void advance_config();
 
     static void fletcher8(const uint8_t *data, uint16_t len, uint8_t &c0, uint8_t &c1);
 
@@ -129,7 +141,7 @@ private:
     ByteBuffer *_tx_buf;
     HAL_Semaphore _tx_sem;
 
-    static const uint8_t MAX_HANDLERS = 8;
+    static const uint8_t MAX_HANDLERS = 16;
     struct HandlerEntry {
         PacketHandler handler;
         uint8_t type;
@@ -144,6 +156,34 @@ private:
     uint32_t _flowctrl_blocked_ms;
     bool _flowctrl_failed;      // line stuck deasserted; gate disabled
     uint32_t _last_1hz_ms;
+
+    /*
+      Boot sequence. The nRF51 sends nothing at all until it has received one
+      valid syslink packet, so this must complete before anything else works.
+     */
+    enum class ConfigState : uint8_t {
+        READY,          // RADIO_READY, lifts the transmit gate; echoed
+        AUTOUPDATE,     // PM_BATTERY_AUTOUPDATE, enables battery and RSSI
+        CHANNEL,
+        DATARATE,
+        ADDRESS,
+        POWER,
+        DONE,
+    };
+    ConfigState _config_state = ConfigState::READY;
+    bool _config_sent;
+    uint32_t _config_sent_ms;
+    uint8_t _config_retries;
+    // 0xFF is not a valid packet type, so it can never match a real echo
+    uint8_t _config_expect = 0xFF;
+    uint8_t _config_echo_type = 0xFF;
+    uint32_t _config_echo_ms;
+
+    // parameters
+    AP_Int16 _channel;
+    AP_Int8 _datarate;
+    AP_Int16 _address;
+    AP_Int8 _txpower;
 };
 
 namespace AP {

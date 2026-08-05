@@ -42,8 +42,8 @@ to the rest of the vehicle. Nothing else may open USART6.
                     ┌──────────────────────────────────┐
                     │            AP_Syslink            │
    USART6  ────────►│  framing / Fletcher-8 / demux    │
-   (by index,       │  own thread @ PRIORITY_UART      │
-    SERIAL2)        └───┬───────────┬──────────┬───────┘
+   (SERIAL2,        │  own thread @ PRIORITY_UART      │
+    protocol 51)    └───┬───────────┬──────────┬───────┘
                         │           │          │
                    0x0C/0x0D      0x13       0xF0 …
                         │           │          │
@@ -167,6 +167,38 @@ and cannot fail for lack of room, so it must bypass the 0x0E slot accounting
 entirely. Telemetry and peer traffic interleave freely; the destination is
 carried by the packet type, not by any mode state on either side.
 
+**The link starts silent, and this is the single most important thing to get
+right.** The nRF51 sends *nothing* over the UART — no battery, no RSSI, no
+MAVLink, no echo — until it has received one syslink packet that passes **both**
+checksum bytes. Until that gate lifts, a perfectly working nRF51 is
+indistinguishable from a dead one, and there is no diagnostic output to look
+for: the nRF51's `DEBUG_PRINT` compiles to nothing unless built for SEGGER RTT,
+which goes over SWD, not the UART.
+
+Any valid packet lifts it. The driver sends `RADIO_READY` (0x0B) and waits for
+the echo, which is the definitive proof that baud rate, framing and checksum
+are all correct. It re-arms only on a `SYSOFF` power-down, so in practice it is
+a one-time handshake per boot.
+
+Note this is a *different* gate from the 3-second radio deafness in requirement
+7. That one gates radio reception only, not the UART, so waiting out the
+timeout will not start the flow.
+
+**Battery and RSSI share one enable.** The periodic RSSI report is emitted from
+inside the same `enableBatteryAutoupdate` check as the battery packet, so
+without `PM_BATTERY_AUTOUPDATE` (0x14) there is no RSSI either — which reads
+like a broken link rather than a disabled feature.
+
+**TYPE comes before LEN on the wire.** Swapping them produces a well-formed
+frame that will never lift the gate, with no error reported anywhere. The
+checksum starts both bytes at zero and covers `TYPE`, `LEN` and `DATA`, not the
+start bytes. Two frames to check an implementation against:
+
+```
+BC CF 0B 00 0B 16      RADIO_READY, zero length
+BC CF 14 00 14 28      PM_BATTERY_AUTOUPDATE, zero length
+```
+
 **The radio is gated off for the first 3 seconds** after boot until either
 `RADIO_READY` (0x0B) arrives or the timeout expires. Sending it early shortens
 startup.
@@ -199,9 +231,10 @@ Ample for telemetry; not a bulk data pipe.
 ## Phases
 
 1. **Core** — UART ownership, framing/deframing, Fletcher-8, type demux, flow
-   control gate, debug probe, `SYSL` logging. *(this commit)*
-2. **Boot config** — channel/address/datarate/power parameters, echo-confirmed,
-   then `RADIO_READY`.
+   control gate, debug probe, `SYSL` logging. *(done)*
+2. **Boot config** — `RADIO_READY` to lift the transmit gate, then
+   `PM_BATTERY_AUTOUPDATE`, then channel/datarate/address/power from `SYSL_*`
+   parameters. Every step but the autoupdate is echo-confirmed. *(done)*
 3. **MAVLink telemetry** — `RegisteredPort` + `mavlink_packetise()` + 0x0E slot
    accounting.
 4. **Battery** — 0x14 at init, parse 0x13, feed `AP_BattMonitor::handle_scripting()`.

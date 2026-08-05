@@ -42,6 +42,11 @@ using namespace AP_Syslink_Protocol;
  */
 #define SYSLINK_FLOWCTRL_TIMEOUT_MS 100
 
+// How long to wait for the nRF51 to echo a configuration packet before
+// resending it, and how many attempts a non-critical step gets.
+#define SYSLINK_CONFIG_RETRY_MS 100
+#define SYSLINK_CONFIG_MAX_RETRIES 5
+
 AP_Syslink *AP_Syslink::_singleton;
 
 const AP_Param::GroupInfo AP_Syslink::var_info[] = {
@@ -62,6 +67,39 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics
     // @User: Advanced
     AP_GROUPINFO("OPTIONS", 3, AP_Syslink, _options, 3),
+
+    // @Param: CHAN
+    // @DisplayName: Radio channel
+    // @Description: nRF51 radio channel. Channels are spaced 1MHz apart from 2400MHz, so channel 80 is 2480MHz. Must match the ground station.
+    // @Range: 0 125
+    // @RebootRequired: True
+    // @User: Standard
+    AP_GROUPINFO("CHAN", 4, AP_Syslink, _channel, 80),
+
+    // @Param: RATE
+    // @DisplayName: Radio datarate
+    // @Description: nRF51 radio datarate. Must match the ground station.
+    // @Values: 0:250Kbps,1:1Mbps,2:2Mbps
+    // @RebootRequired: True
+    // @User: Standard
+    AP_GROUPINFO("RATE", 5, AP_Syslink, _datarate, 2),
+
+    // @Param: ADDR
+    // @DisplayName: Radio address low byte
+    // @Description: Low byte of the 5-byte radio address. The upper four bytes are fixed at E7E7E7E7 following Crazyflie convention, so the full address is E7E7E7E7xx and the Crazyradio URI is radio://0/CHAN/RATE/E7E7E7E7xx. Must match the ground station.
+    // @Range: 0 255
+    // @RebootRequired: True
+    // @User: Standard
+    AP_GROUPINFO("ADDR", 6, AP_Syslink, _address, 0xE7),
+
+    // @Param: TXPOW
+    // @DisplayName: Radio transmit power
+    // @Description: nRF51 radio transmit power in dBm. The nRF51822 supports -30, -20, -16, -12, -8, -4, 0 and +4 dBm; other values are rounded down by the radio.
+    // @Range: -30 4
+    // @Units: dBm
+    // @RebootRequired: True
+    // @User: Advanced
+    AP_GROUPINFO("TXPOW", 7, AP_Syslink, _txpower, 0),
 
     AP_GROUPEND
 };
@@ -103,8 +141,29 @@ void AP_Syslink::init()
     _uart->begin(SYSLINK_BAUD, SYSLINK_UART_RX_SIZE, SYSLINK_UART_TX_SIZE);
 
     // the driver answers its own debug probe requests
-    if (!register_handler(Type::DEBUG_PROBE,  FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_debug_probe, void, const uint8_t *, uint8_t))) {
+    if (!register_handler(Type::DEBUG_PROBE,
+                          FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_debug_probe, void, uint8_t, const uint8_t *, uint8_t))) {
         GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
+    }
+
+    /*
+      Every configuration packet is echoed back by the nRF51. One handler
+      serves them all; the boot sequence uses the echo as confirmation rather
+      than blind-delaying, since a mismatch here is indistinguishable from a
+      packet-format failure later.
+     */
+    const Type echoed[] = {
+        Type::RADIO_READY,
+        Type::RADIO_CHANNEL,
+        Type::RADIO_DATARATE,
+        Type::RADIO_ADDRESS,
+        Type::RADIO_POWER,
+    };
+    for (const auto t : echoed) {
+        if (!register_handler(t, FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_config_echo, void, uint8_t, const uint8_t *, uint8_t))) {
+            GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
+            break;
+        }
     }
 
     if (!hal.scheduler->thread_create(FUNCTOR_BIND_MEMBER(&AP_Syslink::thread_main, void),
@@ -202,6 +261,7 @@ void AP_Syslink::thread_main()
         hal.scheduler->delay_microseconds(200);
 
         receive_bytes();
+        update_config();
         send_pending();
         update_stats_1hz();
     }
@@ -312,7 +372,7 @@ void AP_Syslink::dispatch(uint8_t type, const uint8_t *data, uint8_t len)
     }
 
     // handlers are never unregistered, so this is safe outside the lock
-    _handlers[idx].handler(data, len);
+    _handlers[idx].handler(type, data, len);
 }
 
 void AP_Syslink::send_pending()
@@ -395,13 +455,176 @@ bool AP_Syslink::flow_control_ok()
     return true;
 }
 
-void AP_Syslink::handle_debug_probe(const uint8_t *data, uint8_t len)
+void AP_Syslink::handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t len)
 {
+    (void)type;
     if (len < DEBUG_PROBE_LEN) {
         return;
     }
     memcpy(&_probe, data, sizeof(_probe));
     _probe_time_ms = AP_HAL::millis();
+}
+
+void AP_Syslink::handle_config_echo(uint8_t type, const uint8_t *data, uint8_t len)
+{
+    (void)data;
+    (void)len;
+    _config_echo_type = type;
+    _config_echo_ms = AP_HAL::millis();
+}
+
+/*
+  Drive the boot sequence.
+
+  The nRF51 transmits nothing at all over the UART until it has received one
+  syslink packet that passes both checksum bytes, so until RADIO_READY is
+  acknowledged a working nRF51 is indistinguishable from a dead one. Every step
+  except the battery autoupdate is echoed back, and we wait on that echo rather
+  than blind-delaying.
+ */
+void AP_Syslink::update_config()
+{
+    if (_config_state == ConfigState::DONE) {
+        return;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+
+    // current step acknowledged?
+    if (_config_sent &&
+        _config_echo_type == _config_expect &&
+        _config_echo_ms >= _config_sent_ms) {
+        if (_config_state == ConfigState::READY) {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Syslink: nRF51 link up");
+        }
+        advance_config();
+        return;
+    }
+
+    if (_config_sent && (now_ms - _config_sent_ms) < SYSLINK_CONFIG_RETRY_MS) {
+        return;     // still waiting for the echo
+    }
+
+    if (_config_sent) {
+        _config_retries++;
+        /*
+          RADIO_READY is retried indefinitely: nothing else can work until the
+          nRF51's transmit gate lifts, and the nRF51 may simply not have booted
+          yet. The remaining steps give up after a few attempts so a single
+          lost echo does not wedge the sequence.
+         */
+        if (_config_state == ConfigState::READY) {
+            if (_config_retries % 20 == 0) {
+                GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Syslink: no echo from nRF51");
+            }
+        } else if (_config_retries > SYSLINK_CONFIG_MAX_RETRIES) {
+            GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Syslink: step %u not confirmed",
+                          unsigned(_config_state));
+            advance_config();
+            return;
+        }
+    }
+
+    send_config_step();
+}
+
+void AP_Syslink::send_config_step()
+{
+    bool sent = false;
+
+    switch (_config_state) {
+    case ConfigState::READY:
+        _config_expect = uint8_t(Type::RADIO_READY);
+        sent = send_packet(Type::RADIO_READY);
+        break;
+
+    case ConfigState::AUTOUPDATE:
+        // enables both battery state and RSSI; not echoed
+        _config_expect = 0xFF;
+        sent = send_packet(Type::PM_BATTERY_AUTOUPDATE);
+        if (sent) {
+            advance_config();
+            return;
+        }
+        break;
+
+    case ConfigState::CHANNEL: {
+        const uint8_t chan = constrain_int16(_channel.get(), 0, 125);
+        _config_expect = uint8_t(Type::RADIO_CHANNEL);
+        sent = send_packet(Type::RADIO_CHANNEL, &chan, 1);
+        break;
+    }
+
+    case ConfigState::DATARATE: {
+        const uint8_t rate = constrain_int16(_datarate.get(), 0, 2);
+        _config_expect = uint8_t(Type::RADIO_DATARATE);
+        sent = send_packet(Type::RADIO_DATARATE, &rate, 1);
+        break;
+    }
+
+    case ConfigState::ADDRESS: {
+        /*
+          Five bytes, little-endian, so the low byte goes first. The upper four
+          are fixed at E7E7E7E7 by Crazyflie convention; SYSL_ADDR sets the
+          last byte, giving the E7E7E7E7xx of a radio:// URI.
+         */
+        const uint8_t addr[ADDRESS_LEN] = {
+            uint8_t(constrain_int16(_address.get(), 0, 255)),
+            0xE7, 0xE7, 0xE7, 0xE7
+        };
+        _config_expect = uint8_t(Type::RADIO_ADDRESS);
+        sent = send_packet(Type::RADIO_ADDRESS, addr, sizeof(addr));
+        break;
+    }
+
+    case ConfigState::POWER: {
+        const int8_t pwr = constrain_int16(_txpower.get(), -30, 4);
+        _config_expect = uint8_t(Type::RADIO_POWER);
+        sent = send_packet(Type::RADIO_POWER, (const uint8_t *)&pwr, 1);
+        break;
+    }
+
+    case ConfigState::DONE:
+        return;
+    }
+
+    if (sent) {
+        _config_sent = true;
+        _config_sent_ms = AP_HAL::millis();
+    }
+}
+
+void AP_Syslink::advance_config()
+{
+    _config_sent = false;
+    _config_retries = 0;
+    _config_expect = 0xFF;
+
+    switch (_config_state) {
+    case ConfigState::READY:
+        _config_state = ConfigState::AUTOUPDATE;
+        break;
+    case ConfigState::AUTOUPDATE:
+        _config_state = ConfigState::CHANNEL;
+        break;
+    case ConfigState::CHANNEL:
+        _config_state = ConfigState::DATARATE;
+        break;
+    case ConfigState::DATARATE:
+        _config_state = ConfigState::ADDRESS;
+        break;
+    case ConfigState::ADDRESS:
+        _config_state = ConfigState::POWER;
+        break;
+    case ConfigState::POWER:
+        _config_state = ConfigState::DONE;
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Syslink: radio configured ch%u E7E7E7E7%02X",
+                      unsigned(constrain_int16(_channel.get(), 0, 125)),
+                      unsigned(constrain_int16(_address.get(), 0, 255)));
+        break;
+    case ConfigState::DONE:
+        break;
+    }
 }
 
 void AP_Syslink::update_stats_1hz()
