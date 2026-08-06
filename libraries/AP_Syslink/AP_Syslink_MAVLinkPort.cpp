@@ -138,22 +138,7 @@ uint32_t AP_Syslink_MAVLinkPort::txspace()
         return 0;
     }
 
-    /*
-      Local buffer space only. This must NOT be bounded by the radio queue.
-
-      txspace() is not advisory: comm_send_lock() compares it against the
-      message size and, if short, sets chan_discard so comm_send_buffer()
-      throws the whole message away. Streams survive that because they are sent
-      again next cycle, but a one-shot reply does not - COMMAND_ACK is emitted
-      exactly once and never retried, so a vehicle that executes an arm or a
-      mode change still leaves the GCS reporting no response.
-
-      Bounding by free_slots() was also redundant. update() already refuses to
-      hand a chunk to the nRF51 while the queue is full, so nothing can get
-      past its depth whatever this returns. The write buffer is here precisely
-      to absorb bursts the radio cannot take immediately; a slow link should
-      add latency, not drop messages.
-     */
+    // Local buffer space only. This must NOT be bounded by the radio queue.
     return _writebuf->space();
 }
 
