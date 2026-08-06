@@ -256,6 +256,49 @@ ceiling is ~100 kB/s, but the nRF51's UART has no DMA — per-byte interrupt on 
 16 MHz Cortex-M0, and transmission busy-waits. Budget ~50 kB/s sustained duplex.
 Ample for telemetry; not a bulk data pipe.
 
+## Peer-to-peer broadcast
+
+`SYSLINK_RADIO_MAVLINK_BROADCAST` (0x0D) is exposed as a transport for other
+libraries — `AP_SwarmMesh` is the first consumer. AP_Syslink adds the syslink
+header and Fletcher-8 checksum on the way out and strips and verifies them on
+the way in, and does nothing else: the payload is never inspected in either
+direction, and the nRF51 forwards it verbatim, so what one vehicle sends is
+byte for byte what its peers receive.
+
+```cpp
+AP_Syslink *sl = AP::syslink();
+
+// receive: payload only, framing and checksum already stripped and verified
+sl->set_broadcast_handler(
+    FUNCTOR_BIND_MEMBER(&AP_SwarmMesh::handle_packet, void, const uint8_t *, uint8_t));
+
+// send: up to broadcast_max_len() bytes, framing added here
+sl->send_broadcast(buf, len);
+```
+
+Points that matter to a consumer:
+
+- **`broadcast_max_len()` is 251 bytes** and over-length packets are *rejected*,
+  not truncated — `send_broadcast()` returns false and counts it. Anything
+  larger needs fragmentation the caller owns, since this layer adds no sequence
+  or length field of its own.
+- **Broadcasts are unacked and never retried.** Reliability, ordering and
+  deduplication are the caller's to build. Unlike unicast there is no hardware
+  ack behind them.
+- **They consume no transmit slot.** The nRF51 sends them immediately rather
+  than queueing, so they neither fail for lack of radio room nor compete with
+  telemetry for the 5 deep unicast queue. They do share the syslink transmit
+  buffer, so a flood can still push back — `send_broadcast()` returns false and
+  `SYSL.TxD` rises.
+- **`send_broadcast()` returns false until the radio is configured.** Anything
+  sent earlier would go out on the nRF51's compiled-in defaults where no peer
+  is listening.
+- **The handler runs on the syslink thread** and must not block.
+- **Use `get_address()` for this vehicle's node id.** It is the radio address
+  low byte, so it cannot disagree with what peers actually see on the air.
+
+`SYSL.BTx` and `SYSL.BRx` count broadcasts sent and received.
+
 ## Throughput
 
 Downlink rate is **polls per second times bytes per radio packet**. One poll
@@ -362,7 +405,12 @@ chunks is 1285 bytes — or `update()` gets authorised to queue chunks that
    instead of two that can disagree, and no `AP_Param::find()` string lookup.
    The rest had no reader left. `ParametersG2` indices 21 to 28 are retired
    and must not be reused.
-6. **P2P broadcast** — 0x0D, re-home the AI-deck mission-state broadcast.
+6. **P2P broadcast** — 0x0D exposed as a transport for `AP_SwarmMesh`. *(done)*
+
+   Deliberately a bridge and nothing more, so the mesh library owns its own
+   wire format. The AI-deck mission-state broadcast that the phase 0 revert
+   removed can be re-homed onto `send_broadcast()` by whichever library ends up
+   owning peer state, rather than being rebuilt here.
 
 ## Debugging
 

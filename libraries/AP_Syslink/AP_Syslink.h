@@ -61,6 +61,9 @@ public:
     bool request_debug_probe() { return send_packet(AP_Syslink_Protocol::Type::DEBUG_PROBE); }
 
     struct Stats {
+        uint32_t bcast_tx;           // peer broadcasts queued
+        uint32_t bcast_rx;           // peer broadcasts received
+        uint32_t bcast_rejected;     // broadcasts refused, empty or over length
         uint32_t rx_bytes;           // raw bytes read from the UART
         uint32_t tx_bytes;           // raw bytes written to the UART
         uint32_t rx_packets;         // well-formed packets received
@@ -105,6 +108,40 @@ public:
     bool report_flow_control() const { return option_set(Option::REPORT_FLOW_CTRL); }
 
     /*
+      Peer-to-peer broadcast, for AP_SwarmMesh and anything else that needs to
+      reach every peer on the shared address.
+
+      This is transport only. send_broadcast() adds the syslink header and
+      Fletcher-8 checksum and nothing else; inbound packets reach the handler
+      with both already stripped and verified. The payload is never inspected
+      in either direction, and the nRF51 forwards it verbatim, so what one
+      vehicle sends is byte for byte what its peers receive.
+
+      Broadcasts are transmitted by the nRF51 immediately rather than queued.
+      They consume no unicast transmit slot and so cannot fail for lack of
+      radio room, and they do not compete with telemetry for the 5 deep queue.
+      They are also unacked and never retried: any reliability, ordering or
+      deduplication is the caller's to build.
+
+      Use get_address() for this vehicle's node id - it is the radio address
+      low byte, so it cannot disagree with what peers actually see.
+     */
+    static constexpr uint8_t broadcast_max_len() { return AP_Syslink_Protocol::MAVLINK_CHUNK_MAX; }
+
+    /*
+      Queue one broadcast. Returns false if the packet is empty, longer than
+      broadcast_max_len(), the radio is not configured yet, or the transmit
+      buffer is full - in which case it is dropped whole rather than
+      truncated, since a partial frame would desynchronise the nRF51.
+     */
+    bool send_broadcast(const uint8_t *data, uint8_t len);
+
+    // Sink for inbound broadcasts, called on the syslink thread with the
+    // payload only. Must not block. Replaces any previous handler.
+    FUNCTOR_TYPEDEF(BroadcastHandler, void, const uint8_t *, uint8_t);
+    void set_broadcast_handler(BroadcastHandler handler);
+
+    /*
       Power state from the nRF51's last PM_BATTERY_STATE report. Valid only
       once battery_time_ms() is non-zero.
      */
@@ -142,6 +179,7 @@ private:
     void handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t len);
     void handle_config_echo(uint8_t type, const uint8_t *data, uint8_t len);
     void handle_battery_state(uint8_t type, const uint8_t *data, uint8_t len);
+    void handle_broadcast(uint8_t type, const uint8_t *data, uint8_t len);
 
     void update_config();
     void send_config_step();
@@ -187,6 +225,9 @@ private:
 #if AP_SERIALMANAGER_REGISTER_ENABLED
     AP_Syslink_MAVLinkPort _mavlink_port;
 #endif
+
+    BroadcastHandler _broadcast_handler;
+    bool _have_broadcast_handler;
 
     Stats _stats;
     AP_Syslink_Protocol::DebugProbeData _probe;

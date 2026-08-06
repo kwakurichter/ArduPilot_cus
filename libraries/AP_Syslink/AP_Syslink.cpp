@@ -198,6 +198,16 @@ void AP_Syslink::init()
     }
 #endif
 
+    /*
+      Inbound peer broadcasts. Registered unconditionally so the receive path
+      exists before any consumer attaches; without a handler the payload is
+      counted and discarded.
+     */
+    if (!register_handler(Type::RADIO_MAVLINK_BROADCAST,
+                          FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_broadcast, void, uint8_t, const uint8_t *, uint8_t))) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
+    }
+
 #if AP_BATTERY_SCRIPTING_ENABLED
     if (_batt_instance >= 0 &&
         !register_handler(Type::PM_BATTERY_STATE,
@@ -543,6 +553,63 @@ void AP_Syslink::handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t l
     _probe_time_ms = AP_HAL::millis();
 }
 
+bool AP_Syslink::send_broadcast(const uint8_t *data, uint8_t len)
+{
+    if (data == nullptr || len == 0 || len > broadcast_max_len()) {
+        /*
+          The nRF51 discards an over-length chunk rather than truncating it,
+          so refusing here only makes a silent failure visible.
+         */
+        _stats.bcast_rejected++;
+        return false;
+    }
+
+    /*
+      Hold off until the radio is on the configured channel and address, for
+      the same reason telemetry does: anything sent earlier goes out on the
+      nRF51's compiled-in defaults, where no peer is listening.
+     */
+    if (!configured()) {
+        return false;
+    }
+
+    // send_packet() counts its own drop if the transmit buffer is full
+    if (!send_packet(Type::RADIO_MAVLINK_BROADCAST, data, len)) {
+        return false;
+    }
+
+    _stats.bcast_tx++;
+    return true;
+}
+
+void AP_Syslink::set_broadcast_handler(BroadcastHandler handler)
+{
+    WITH_SEMAPHORE(_handler_sem);
+    _broadcast_handler = handler;
+    _have_broadcast_handler = true;
+}
+
+void AP_Syslink::handle_broadcast(uint8_t type, const uint8_t *data, uint8_t len)
+{
+    (void)type;
+
+    _stats.bcast_rx++;
+
+    BroadcastHandler handler;
+    bool have;
+    {
+        WITH_SEMAPHORE(_handler_sem);
+        have = _have_broadcast_handler;
+        handler = _broadcast_handler;
+    }
+    if (!have || len == 0) {
+        return;
+    }
+
+    // payload only; the framing and checksum are already stripped and verified
+    handler(data, len);
+}
+
 bool AP_Syslink::is_charging() const
 {
     return (_batt_flags & BATTERY_FLAG_CHARGING) != 0;
@@ -817,13 +884,15 @@ void AP_Syslink::update_stats_1hz()
     // @Field: TxP: packets queued for transmission
     // @Field: TxD: packets dropped, transmit buffer full
     // @Field: FcT: transmits forced after flow control timeout
+    // @Field: BTx: peer broadcasts queued
+    // @Field: BRx: peer broadcasts received
     // @Field: Drp: nRF51 reports UART data dropped
     // @Field: UErr: nRF51 UART error flags
     // @Field: Ck1: nRF51 syslink receive checksum 1 error count
     // @Field: Ck2: nRF51 syslink receive checksum 2 error count
     AP::logger().WriteStreaming("SYSL",
-                                "TimeUS,RxB,TxB,RxP,CkE,Unh,TxP,TxD,FcT,Drp,UErr,Ck1,Ck2",
-                                "QIIIIIIIIBBBB",
+                                "TimeUS,RxB,TxB,RxP,CkE,Unh,TxP,TxD,FcT,BTx,BRx,Drp,UErr,Ck1,Ck2",
+                                "QIIIIIIIIIIBBBB",
                                 AP_HAL::micros64(),
                                 _stats.rx_bytes,
                                 _stats.tx_bytes,
@@ -833,6 +902,8 @@ void AP_Syslink::update_stats_1hz()
                                 _stats.tx_packets,
                                 _stats.tx_dropped,
                                 _stats.flowctrl_timeouts,
+                                _stats.bcast_tx,
+                                _stats.bcast_rx,
                                 _probe.dropped,
                                 _probe.uart_err,
                                 _probe.cksum1,
