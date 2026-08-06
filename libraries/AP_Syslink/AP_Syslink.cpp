@@ -71,7 +71,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Values: 0:Disabled,1:Enabled
     // @RebootRequired: True
     // @User: Standard
-    AP_GROUPINFO_FLAGS("ENABLE", 1, AP_Syslink, _enable, 1, AP_PARAM_FLAG_ENABLE),
+    AP_GROUPINFO_FLAGS("_ENABLE", 1, AP_Syslink, _enable, 1, AP_PARAM_FLAG_ENABLE),
 
     // index 2 was PORT, before the driver moved to find_serial()
 
@@ -82,7 +82,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Description{2}: Bit 2 fills each radio packet with as many whole frames as fit. Measured much slower on Crazyflie hardware, not faster, because the nRF51 stalls for about 2.6ms forwarding a full size chunk and services the radio from that same loop. Off by default.
     // @Description{3}: Bit 3 makes AP_Logger send 10 LOG_DATA messages per call instead of 1 and lifts the 5 message parameter burst clamp. Only enable it if the ground station polls fast enough to drain the result, or the link will saturate and drop.
     // @User: Advanced
-    AP_GROUPINFO("OPTIONS", 3, AP_Syslink, _options, 3),
+    AP_GROUPINFO("_OPTIONS", 3, AP_Syslink, _options, 3),
 
     // @Param: CHAN
     // @DisplayName: Radio channel
@@ -90,7 +90,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Range: 0 125
     // @RebootRequired: True
     // @User: Standard
-    AP_GROUPINFO("CHAN", 4, AP_Syslink, _channel, 80),
+    AP_GROUPINFO("_CHAN", 4, AP_Syslink, _channel, 80),
 
     // @Param: RATE
     // @DisplayName: Radio datarate
@@ -98,7 +98,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Values: 0:250Kbps,1:1Mbps,2:2Mbps
     // @RebootRequired: True
     // @User: Standard
-    AP_GROUPINFO("RATE", 5, AP_Syslink, _datarate, 2),
+    AP_GROUPINFO("_RATE", 5, AP_Syslink, _datarate, 2),
 
     // @Param: ADDR
     // @DisplayName: Radio address low byte
@@ -106,7 +106,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Range: 0 255
     // @RebootRequired: True
     // @User: Standard
-    AP_GROUPINFO("ADDR", 6, AP_Syslink, _address, 0xE7),
+    AP_GROUPINFO("_ADDR", 6, AP_Syslink, _address, 0xE7),
 
     // @Param: TXPOW
     // @DisplayName: Radio transmit power
@@ -115,7 +115,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Units: dBm
     // @RebootRequired: True
     // @User: Advanced
-    AP_GROUPINFO("TXPOW", 7, AP_Syslink, _txpower, 0),
+    AP_GROUPINFO("_TXPOW", 7, AP_Syslink, _txpower, 0),
 
     // @Param: BW
     // @DisplayName: Assumed link bandwidth
@@ -123,14 +123,14 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Range: 500 20000
     // @Units: B/s
     // @User: Advanced
-    AP_GROUPINFO("BW", 8, AP_Syslink, _link_bw, 4000),
+    AP_GROUPINFO("_BW", 8, AP_Syslink, _link_bw, 4000),
 
     // @Param: BATT
     // @DisplayName: Battery monitor instance
     // @Description: Battery monitor instance fed from the nRF51's power management reports. That instance's BATTn_MONITOR must be set to 29 (Scripting). Set to -1 to leave the battery monitor alone.
     // @Range: -1 9
     // @User: Standard
-    AP_GROUPINFO("BATT", 9, AP_Syslink, _batt_instance, 0),
+    AP_GROUPINFO("_BATT", 9, AP_Syslink, _batt_instance, 0),
 
     AP_GROUPEND
 };

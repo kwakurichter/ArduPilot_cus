@@ -9,6 +9,7 @@
 
 #include <AP_HAL/AP_HAL.h>
 #include <AP_HAL/utility/RingBuffer.h>
+#include <AP_Math/AP_Math.h>
 #include <AP_Param/AP_Param.h>
 
 /*
@@ -81,6 +82,14 @@ public:
     // The virtual serial port carrying MAVLink over the radio.
     AP_Syslink_MAVLinkPort &get_mavlink_port() { return _mavlink_port; }
 #endif
+
+    /*
+      Low byte of the radio address (SYSL_ADDR). Doubles as this vehicle's
+      peer identity: it is what distinguishes one Crazyflie from another on a
+      shared channel, so anything needing a node id should use it rather than
+      keep a second parameter that can disagree with the radio.
+     */
+    uint8_t get_address() const { return uint8_t(constrain_int16(_address.get(), 0, 255)); }
 
     // Bytes per second the GCS should assume for this link (SYSL_BW).
     uint16_t link_bw() const { return uint16_t(_link_bw.get()); }

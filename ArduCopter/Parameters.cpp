@@ -1232,82 +1232,17 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @User: Advanced
     AP_GROUPINFO("FS_EKF_FILT", 8, ParametersG2, fs_ekf_filt_hz, FS_EKF_FILT_DEFAULT),
 
-#ifdef HAL_CF21   
-    // @Param: CF_TKOFF_ALT
-    // @DisplayName: CC mode takeoff altitude
-    // @Description: Choose target takeoff altitude for companion computer mode
-    // @Units: m
-    // @Range: 0.1 5
-    // @User: Advanced
-    // @RebootRequired: True
-    AP_GROUPINFO("CF_TKOFF_ALT", 21, ParametersG2, cf_tkoff_alt, 1.0),         
-
-    // @Param: CF_HOV_TIME
-    // @DisplayName: CC mode hover time
-    // @Description: Companion computer mode hover period
-    // @Units: s
-    // @Range: 
-    // @User: Advanced
-    // @RebootRequired: True
-    AP_GROUPINFO("CF_HOV_TIME", 22, ParametersG2, cf_hov_time, 12.0), 
-
-    // @Param: CF_PEER_ID
-    // @DisplayName: Crazyflie peer ID
-    // @Description: Crazyflie peer message ID for swarming
-    // @Units:
-    // @Range: 
-    // @User: Advanced
-    // @RebootRequired: True
-    AP_GROUPINFO("CF_PEER_ID", 23, ParametersG2, cf_peer_id, 0),     
-
-    // @Param: CF_P2P_STREAM
-    // @DisplayName: Crazyflie P2P Stream
-    // @Description: Crazyflie peer to peer message stream bitmask
-    // @Bitmask: 0:Attitude, 1:MissionState, 2:Position, 3:Reserved
-    // @User: Advanced
-    AP_GROUPINFO("CF_P2P_STREAM", 24, ParametersG2, cf_p2p_stream, 0),   
-
-    // @Param: CF_ID
-    // @DisplayName: Crazyflie radio ID
-    // @Description: Crazyflie radio ID for nRF51 init
-    // @Units: byte
-    // @Range: 0-255
-    // @User: Advanced
-    // @RebootRequired: True
-    AP_GROUPINFO("CF_ID", 25, ParametersG2, cf_id, 231),       
-
-    // @Param: CF_CHANNEL
-    // @DisplayName: Crazyflie radio channel
-    // @Description: Crazyflie radio channel for nRF51 init
-    // @Units: byte
-    // @Range: 0-255
-    // @User: Advanced
-    // @RebootRequired: True
-    AP_GROUPINFO("CF_CHANNEL", 26, ParametersG2, cf_channel, 80),           
-
-    // @Param: CF_LOOPS
-    // @DisplayName: CC mode loops
-    // @Description: Companion computer mode mission trajectory loops
-    // @Units:
-    // @Range: 0-255
-    // @User: Advanced
-    // @RebootRequired: True
-    AP_GROUPINFO("CF_LOOPS", 27, ParametersG2, cf_loops, 1),     
-    
-    // @Param: CF_RSSI_HZ
-    // @DisplayName: Crazyflie rssi frequency
-    // @Description: Set the crazyflie rssi broadcast frequency
-    // @Units:
-    // @Range: 0-50
-    // @User: Advanced
-    // @RebootRequired: True
-    AP_GROUPINFO("CF_RSSI_HZ", 28, ParametersG2, cf_rssi_hz, 0),
-
+/*
+  The CF_ parameters retired with the move to AP_Syslink. CF_ID, CF_CHANNEL and
+  CF_P2P_STREAM configured the radio, which SYSL_CHAN, SYSL_ADDR and SYSL_RATE
+  now own; CF_PEER_ID duplicated the radio address, which SYSL_ADDR supplies;
+  the rest had no reader left. Indices 21 to 28 are retired with them and must
+  not be reused for anything else.
+ */
 #if AP_SYSLINK_ENABLED
     // @Group: SYSL
     // @Path: ../libraries/AP_Syslink/AP_Syslink.cpp
     AP_SUBGROUPINFO(syslink, "SYSL", 29, ParametersG2, AP_Syslink),
-#endif
 #endif
 
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION

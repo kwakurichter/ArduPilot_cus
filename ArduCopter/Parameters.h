@@ -680,16 +680,6 @@ public:
 #if AP_SYSLINK_ENABLED
     AP_Syslink syslink;
 #endif
-#ifdef HAL_CF21
-    AP_Float cf_tkoff_alt;
-    AP_Float cf_hov_time;
-    AP_Int8  cf_peer_id;
-    AP_Int32 cf_p2p_stream;
-    AP_Int8  cf_id;
-    AP_Int8  cf_channel;
-    AP_Int8  cf_loops;
-    AP_Int8  cf_rssi_hz;
-#endif    
 
 #if WEATHERVANE_ENABLED
     AC_WeatherVane weathervane;

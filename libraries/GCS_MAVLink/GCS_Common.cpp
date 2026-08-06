@@ -4156,6 +4156,8 @@ void GCS_MAVLINK::handle_heartbeat(const mavlink_message_t &msg) const
 }
 
 #ifdef HAL_CF21
+#include <AP_Syslink/AP_Syslink.h>
+
 static bool parse_u32_key(const char* text, const char* key, uint32_t &out)
 {
     const char* p = strstr(text, key);
@@ -4173,39 +4175,21 @@ static bool parse_u32_key(const char* text, const char* key, uint32_t &out)
     return true;
 }
 
-static uint8_t get_peer_id_from_param()
+/*
+  This vehicle's node id, taken from the radio address low byte. That is what
+  already distinguishes one Crazyflie from another on a shared channel, so a
+  separate peer id parameter would only offer a second value to disagree with
+  it.
+ */
+static uint8_t get_peer_id()
 {
-// cache lookup (find is not free)
-    static AP_Param *p = nullptr;
-    static enum ap_var_type t = AP_PARAM_NONE;
-
-    if (p == nullptr) {
-        p = AP_Param::find("CF_PEER_ID", &t, nullptr);
+#if AP_SYSLINK_ENABLED
+    const AP_Syslink *syslink = AP::syslink();
+    if (syslink != nullptr) {
+        return syslink->get_address();
     }
-    if (p == nullptr) {
-        return 21; // fallback
-    }
-
-    int32_t v = 0;
-    switch (t) {
-    case AP_PARAM_INT8:
-        v = ((AP_Int8*)p)->get();
-        break;
-    case AP_PARAM_INT16:
-        v = ((AP_Int16*)p)->get();
-        break;
-    case AP_PARAM_INT32:
-        v = ((AP_Int32*)p)->get();
-        break;
-    default:
-        return 21; // wrong type -> fallback
-    }
-
-    // clamp to byte
-    if (v < 0)   v = 0;
-    if (v > 255) v = 255;
-    //gcs().send_text(MAV_SEVERITY_ALERT, "P2P: Peer ID =%.ld",v);
-    return (uint8_t)v;
+#endif
+    return 0;
 }
 
 void GCS_MAVLINK::handle_ai_deck_mission_statustext(const mavlink_message_t &msg)
@@ -4245,7 +4229,7 @@ void GCS_MAVLINK::handle_ai_deck_mission_statustext(const mavlink_message_t &msg
     const uint16_t res116 = (uint16_t)res1_u;
 
     // Choose a source id
-    const uint8_t src_id = get_peer_id_from_param();
+    const uint8_t src_id = get_peer_id();
 
     // include a timestamp
     const uint32_t now_ms = AP_HAL::millis();
