@@ -55,7 +55,26 @@ private:
 
     bool init() override;
 
+    /*
+      Runs on the I2C bus thread. The ST API talks to the sensor over several
+      multi-register transfers per sample, which is milliseconds of blocking
+      I2C - far past the 100us the read_rangefinder scheduler slot allows, so
+      it must not happen on the main thread.
+     */
     void timer();
+
+    // one I2C read cycle; called only from timer()
+    void sample();
+
+    // sample handed from timer() to update(), guarded by _sem
+    HAL_Semaphore _sem;
+    float    _distance_m;
+    int8_t   _quality_pct;
+    bool     _new_sample;
+    bool     _sensor_lost;          // timer() gave up; update() reports it
+
+    // inter-measurement period, chosen from the distance mode in init()
+    uint32_t _measurement_period_ms;
 
 };
 
