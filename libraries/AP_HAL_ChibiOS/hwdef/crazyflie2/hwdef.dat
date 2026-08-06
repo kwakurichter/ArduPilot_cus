@@ -213,7 +213,7 @@ define HAL_PROXIMITY_ENABLED 0
 # Sensor backends cut down to what a Crazyflie deck actually carries
 # rangefinder ~18.6 KB, opticalflow ~2.7 KB
 define AP_RANGEFINDER_BACKEND_DEFAULT_ENABLED 0
-define AP_RANGEFINDER_VL53L1X_ENABLED 1
+define AP_RANGEFINDER_FLOWDECK_ENABLED 1
 
 define AP_OPTICALFLOW_BACKEND_DEFAULT_ENABLED 0
 define AP_OPTICALFLOW_FLOWDECK_ENABLED 1
