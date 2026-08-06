@@ -21,7 +21,6 @@
 
 #include <AP_HAL/utility/packetise.h>
 #include <AP_Math/AP_Math.h>
-#include <GCS_MAVLink/GCS_MAVLink.h>
 
 using namespace AP_Syslink_Protocol;
 
@@ -47,8 +46,7 @@ bool AP_Syslink_MAVLinkPort::init(AP_Syslink &syslink)
     /*
       Advertise MAVLink2 so the GCS binds a channel to this port. The serial
       manager searches hardware ports before registered ones, so with SERIAL0
-      and SERIAL1 on MAVLink this becomes MAVLINK_COMM_2 - the same channel the
-      old in-GCS implementation used, which keeps SR2_* stream rates working.
+      and SERIAL1 on MAVLink this becomes MAVLINK_COMM_2
      */
     state.idx = HAL_SYSLINK_SERIAL_IDX;
     state.protocol.set(AP_SerialManager::SerialProtocol_MAVLink2);
@@ -133,43 +131,6 @@ uint32_t AP_Syslink_MAVLinkPort::bw_in_bytes_per_second() const
     return _syslink->link_bw();
 }
 
-uint32_t AP_Syslink_MAVLinkPort::frame_len_at(uint32_t ofs, uint32_t avail) const
-{
-    if (ofs >= avail) {
-        return 0;
-    }
-    const int16_t b = _writebuf->peek(ofs);
-    if (b != MAVLINK_STX_MAVLINK1 && b != MAVLINK_STX) {
-        // not a frame boundary, so there is nothing safe to append
-        return 0;
-    }
-
-    uint8_t min_length = (b == MAVLINK_STX_MAVLINK1) ? 8 : 12;
-    if (avail - ofs < min_length) {
-        return 0;
-    }
-
-    const int16_t len = _writebuf->peek(ofs + 1);
-    if (len < 0) {
-        return 0;
-    }
-    if (b == MAVLINK_STX) {
-        const int16_t incompat = _writebuf->peek(ofs + 2);
-        if (incompat < 0) {
-            return 0;
-        }
-        if (incompat & MAVLINK_IFLAG_SIGNED) {
-            min_length += MAVLINK_SIGNATURE_BLOCK_LEN;
-        }
-    }
-
-    const uint32_t total = uint32_t(len) + min_length;
-    if (avail - ofs < total) {
-        return 0;       // frame still arriving
-    }
-    return total;
-}
-
 uint32_t AP_Syslink_MAVLinkPort::txspace()
 {
     WITH_SEMAPHORE(_sem);
@@ -215,25 +176,6 @@ uint8_t AP_Syslink_MAVLinkPort::free_slots() const
         return 0;
     }
     return MAVLINK_TX_SLOTS - _outstanding;
-}
-
-enum AP_HAL::UARTDriver::flow_control AP_Syslink_MAVLinkPort::get_flow_control(void)
-{
-    /*
-      Claiming flow control lifts two throttles that GCS_MAVLINK applies to
-      links without it: the 5 message parameter burst clamp, and
-      AP_Logger::handle_log_sending() dropping from 10 LOG_DATA per call to 1.
-
-      Off by default. Ten LOG_DATA per call at the rate update_send() runs
-      produces far more than this radio carries, and the excess does not queue
-      politely - it saturates the nRF51 and takes the link down. Opt in with
-      SYSL_OPTIONS bit 3 only alongside a ground station that polls fast
-      enough to drain it.
-     */
-    if (_syslink != nullptr && _syslink->report_flow_control()) {
-        return FLOW_CONTROL_ENABLE;
-    }
-    return FLOW_CONTROL_DISABLE;
 }
 
 void AP_Syslink_MAVLinkPort::handle_space(uint8_t type, const uint8_t *data, uint8_t len)
@@ -299,31 +241,6 @@ void AP_Syslink_MAVLinkPort::update()
                 _frame_remaining = mavlink_packetise(*_writebuf, avail);
                 if (_frame_remaining == 0) {
                     break;      // frame still arriving
-                }
-
-                /*
-                  Append further whole frames while they fit.
-
-                  Downlink throughput is polls per second times bytes per
-                  radio packet, and one poll carries exactly one packet
-                  whatever its size. A lone 109 byte LOG_DATA frame therefore
-                  wastes well over half of every 251 byte packet, so packing
-                  roughly doubles bulk download for the same poll rate.
-
-                  The cost is that one lost packet now damages two frames
-                  rather than one. Unicast has hardware ack and retry so loss
-                  is rare, but SYSL_OPTIONS bit 2 turns this off if it is not
-                  the right trade.
-                 */
-                if (_syslink->pack_frames() && _frame_remaining <= MAVLINK_CHUNK_MAX) {
-                    while (true) {
-                        const uint32_t next_len = frame_len_at(_frame_remaining, avail);
-                        if (next_len == 0 ||
-                            _frame_remaining + next_len > MAVLINK_CHUNK_MAX) {
-                            break;
-                        }
-                        _frame_remaining += next_len;
-                    }
                 }
             }
 

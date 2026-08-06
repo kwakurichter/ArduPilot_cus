@@ -81,7 +81,7 @@ enum class DataRate : uint8_t {
 static constexpr uint8_t ADDRESS_LEN = 5;
 
 /*
-  PM_BATTERY_STATE payload. TEMP is only present when the nRF51 is built with PM_SYSLINK_INCLUDE_TEMP, so the packet is either 13 or 17 bytes
+  PM_BATTERY_STATE payload.
 
   ISET is *charge* current, not discharge. TEMP is the nRF51 die temperature, not the battery's - see AP_Syslink.md.
  */
@@ -100,18 +100,5 @@ static constexpr uint8_t BATTERY_FLAG_CHARGING    = (1U << 0);
 static constexpr uint8_t BATTERY_FLAG_USB_POWERED = (1U << 1);
 static constexpr uint8_t BATTERY_FLAG_CAN_CHARGE  = (1U << 2);
 
-// DEBUG_PROBE response payload
-struct PACKED DebugProbeData {
-    uint8_t addr_set;   // 1 if a RADIO_ADDRESS command has been received
-    uint8_t chan_set;   // 1 if a RADIO_CHANNEL command has been received
-    uint8_t rate_set;   // 1 if a RADIO_DATARATE command has been received
-    uint8_t dropped;    // 1 if UART data has been dropped
-    uint8_t uart_err;   // UART error flags
-    uint8_t uart_cnt;   // UART error count
-    uint8_t cksum1;     // syslink RX checksum 1 error count
-    uint8_t cksum2;     // syslink RX checksum 2 error count
-};
-
-static constexpr uint8_t DEBUG_PROBE_LEN = 8;
 
 } // namespace AP_Syslink_Protocol

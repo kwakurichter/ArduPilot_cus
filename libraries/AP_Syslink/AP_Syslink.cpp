@@ -32,12 +32,6 @@ using namespace AP_Syslink_Protocol;
 // The nRF51's UART is fixed at 1 Mbaud, 8N1.
 #define SYSLINK_BAUD 1000000U
 
-/*
-  Must hold a full radio queue of framed chunks, or update() gets authorised by
-  the free slot count to queue chunks that send_packet() then has to reject.
-  Five packed chunks is 5 * (251 + 6) = 1285 bytes, so 1024 was too small the
-  moment frames began to be packed.
- */
 #define SYSLINK_TX_BUF_SIZE 2048
 #define SYSLINK_UART_RX_SIZE 512
 #define SYSLINK_UART_TX_SIZE 512
@@ -50,14 +44,11 @@ using namespace AP_Syslink_Protocol;
  */
 #define SYSLINK_FLOWCTRL_TIMEOUT_MS 100
 
-/*
-  The nRF51 reports battery state at 100Hz once enabled, which is far more than
-  the battery monitor has any use for.
- */
 #define SYSLINK_BATTERY_INTERVAL_MS 100
 
-// How long to wait for the nRF51 to echo a configuration packet before
-// resending it, and how many attempts a non-critical step gets.
+// The Crazyflie has one pack, and the nRF51 owns the only divider on it.
+#define AP_SYSLINK_BATT_INSTANCE 0
+
 #define SYSLINK_CONFIG_RETRY_MS 100
 #define SYSLINK_CONFIG_MAX_RETRIES 5
 
@@ -67,7 +58,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
 
     // @Param: ENABLE
     // @DisplayName: Syslink enable
-    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port whose SERIALn_PROTOCOL is set to 51 (Syslink).
+    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port whose SERIALn_PROTOCOL is set to 50 (Syslink).
     // @Values: 0:Disabled,1:Enabled
     // @RebootRequired: True
     // @User: Standard
@@ -78,9 +69,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @Param: OPTIONS
     // @DisplayName: Syslink options
     // @Description: Bitmask of syslink driver options.
-    // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics,2:Pack multiple MAVLink frames per radio packet,3:Claim flow control to the GCS
-    // @Description{2}: Bit 2 fills each radio packet with as many whole frames as fit. Measured much slower on Crazyflie hardware, not faster, because the nRF51 stalls for about 2.6ms forwarding a full size chunk and services the radio from that same loop. Off by default.
-    // @Description{3}: Bit 3 makes AP_Logger send 10 LOG_DATA messages per call instead of 1 and lifts the 5 message parameter burst clamp. Only enable it if the ground station polls fast enough to drain the result, or the link will saturate and drop.
+    // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics
     // @User: Advanced
     AP_GROUPINFO("_OPTIONS", 3, AP_Syslink, _options, 3),
 
@@ -125,12 +114,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_BW", 8, AP_Syslink, _link_bw, 4000),
 
-    // @Param: BATT
-    // @DisplayName: Battery monitor instance
-    // @Description: Battery monitor instance fed from the nRF51's power management reports. That instance's BATTn_MONITOR must be set to 29 (Scripting). Set to -1 to leave the battery monitor alone.
-    // @Range: -1 9
-    // @User: Standard
-    AP_GROUPINFO("_BATT", 9, AP_Syslink, _batt_instance, 0),
+    // index 9 was BATT; the battery always feeds instance 0
 
     AP_GROUPEND
 };
@@ -157,14 +141,8 @@ void AP_Syslink::init()
         return;
     }
 
-    // the driver answers its own debug probe requests
-    if (!register_handler(Type::DEBUG_PROBE,
-                          FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_debug_probe, void, uint8_t, const uint8_t *, uint8_t))) {
-        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
-    }
-
     /*
-      Every configuration packet is echoed back by the nRF51. One handler serves them all; the boot sequence uses the echo as confirmation rather than blind-delaying
+      Every configuration packet is echoed back by the nRF51. One handler serves them all; the boot sequence uses the echo as confirmation
      */
     const Type echoed[] = {
         Type::RADIO_READY,
@@ -209,8 +187,7 @@ void AP_Syslink::init()
     }
 
 #if AP_BATTERY_SCRIPTING_ENABLED
-    if (_batt_instance >= 0 &&
-        !register_handler(Type::PM_BATTERY_STATE,
+    if (!register_handler(Type::PM_BATTERY_STATE,
                           FUNCTOR_BIND_MEMBER(&AP_Syslink::handle_battery_state, void, uint8_t, const uint8_t *, uint8_t))) {
         GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Syslink: handler table full");
     }
@@ -306,9 +283,6 @@ bool AP_Syslink::send_packet(Type type, const uint8_t *data, uint8_t len)
 
 /*
   Open the port. Must run on the driver thread.
-
-  The ChibiOS UARTDriver records the thread that calls begin() as the port owner and then silently refuses reads from any other thread: _available()
-  returns 0 and _read() returns -1. Writes are not guarded, so opening the port from the main thread produces a link that transmits perfectly and never receives a byte.
  */
 bool AP_Syslink::init_port()
 {
@@ -543,16 +517,6 @@ bool AP_Syslink::flow_control_ok()
     return true;
 }
 
-void AP_Syslink::handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t len)
-{
-    (void)type;
-    if (len < DEBUG_PROBE_LEN) {
-        return;
-    }
-    memcpy(&_probe, data, sizeof(_probe));
-    _probe_time_ms = AP_HAL::millis();
-}
-
 bool AP_Syslink::send_broadcast(const uint8_t *data, uint8_t len)
 {
     if (data == nullptr || len == 0 || len > broadcast_max_len()) {
@@ -622,9 +586,7 @@ bool AP_Syslink::is_usb_powered() const
 
 #if AP_BATTERY_SCRIPTING_ENABLED
 /*
-  PM_BATTERY_STATE from the nRF51, which owns the charger and the only voltage
-  divider on the pack. Fed to the battery monitor's scripting backend, which is
-  a supported public entry point and costs no new backend type.
+  PM_BATTERY_STATE from the nRF51, fed to the battery monitor's scripting backend.
  */
 void AP_Syslink::handle_battery_state(uint8_t type, const uint8_t *data, uint8_t len)
 {
@@ -642,11 +604,6 @@ void AP_Syslink::handle_battery_state(uint8_t type, const uint8_t *data, uint8_t
 
     _batt_flags = data[0];
     _batt_time_ms = AP_HAL::millis();
-
-    const int8_t instance = _batt_instance.get();
-    if (instance < 0) {
-        return;
-    }
 
     if (_batt_time_ms - _last_battery_ms < SYSLINK_BATTERY_INTERVAL_MS) {
         return;
@@ -681,11 +638,9 @@ void AP_Syslink::handle_battery_state(uint8_t type, const uint8_t *data, uint8_t
       without a charger it is never sampled and stays a convincing 0 C.
      */
 
-    if (!AP::battery().handle_scripting(instance, state) && !_batt_warned) {
+    if (!AP::battery().handle_scripting(AP_SYSLINK_BATT_INSTANCE, state) && !_batt_warned) {
         _batt_warned = true;
-        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-                      "Syslink: set BATT%u_MONITOR=29 (Scripting)",
-                      unsigned(instance + 1));
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "Syslink: set BATT_MONITOR=29 (Scripting)");
     }
 }
 #endif // AP_BATTERY_SCRIPTING_ENABLED
@@ -701,9 +656,7 @@ void AP_Syslink::handle_config_echo(uint8_t type, const uint8_t *data, uint8_t l
 /*
   Drive the boot sequence.
 
-  The nRF51 transmits nothing at all over the UART until it has received one syslink packet that passes both checksum bytes, so until RADIO_READY is
-  acknowledged a working nRF51 is indistinguishable from a dead one. Every step except the battery autoupdate is echoed back, and we wait on that echo rather
-  than blind-delaying.
+  The nRF51 transmits nothing at all over the UART until it has received one syslink packet that passes both checksum bytes.
  */
 void AP_Syslink::update_config()
 {
@@ -865,16 +818,13 @@ void AP_Syslink::update_stats_1hz()
     }
     _last_1hz_ms = now_ms;
 
-    // keep the probe data fresh for the next log line
-    request_debug_probe();
-
     if (!option_set(Option::LOG_STATS)) {
         return;
     }
 
 #if HAL_LOGGING_ENABLED
     // @LoggerMessage: SYSL
-    // @Description: Syslink link statistics, local counters and nRF51 debug probe
+    // @Description: Syslink link statistics
     // @Field: TimeUS: Time since system startup
     // @Field: RxB: raw bytes read from the UART
     // @Field: TxB: raw bytes written to the UART
@@ -886,13 +836,9 @@ void AP_Syslink::update_stats_1hz()
     // @Field: FcT: transmits forced after flow control timeout
     // @Field: BTx: peer broadcasts queued
     // @Field: BRx: peer broadcasts received
-    // @Field: Drp: nRF51 reports UART data dropped
-    // @Field: UErr: nRF51 UART error flags
-    // @Field: Ck1: nRF51 syslink receive checksum 1 error count
-    // @Field: Ck2: nRF51 syslink receive checksum 2 error count
     AP::logger().WriteStreaming("SYSL",
-                                "TimeUS,RxB,TxB,RxP,CkE,Unh,TxP,TxD,FcT,BTx,BRx,Drp,UErr,Ck1,Ck2",
-                                "QIIIIIIIIIIBBBB",
+                                "TimeUS,RxB,TxB,RxP,CkE,Unh,TxP,TxD,FcT,BTx,BRx",
+                                "QIIIIIIIIII",
                                 AP_HAL::micros64(),
                                 _stats.rx_bytes,
                                 _stats.tx_bytes,
@@ -903,11 +849,7 @@ void AP_Syslink::update_stats_1hz()
                                 _stats.tx_dropped,
                                 _stats.flowctrl_timeouts,
                                 _stats.bcast_tx,
-                                _stats.bcast_rx,
-                                _probe.dropped,
-                                _probe.uart_err,
-                                _probe.cksum1,
-                                _probe.cksum2);
+                                _stats.bcast_rx);
 #endif
 }
 

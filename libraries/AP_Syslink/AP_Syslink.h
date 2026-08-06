@@ -57,8 +57,6 @@ public:
      */
     bool register_handler(AP_Syslink_Protocol::Type type, PacketHandler handler);
 
-    // Ask the nRF51 for a DEBUG_PROBE response.
-    bool request_debug_probe() { return send_packet(AP_Syslink_Protocol::Type::DEBUG_PROBE); }
 
     struct Stats {
         uint32_t bcast_tx;           // peer broadcasts queued
@@ -87,44 +85,26 @@ public:
 #endif
 
     /*
-      Low byte of the radio address (SYSL_ADDR). Doubles as this vehicle's
-      peer identity: it is what distinguishes one Crazyflie from another on a
-      shared channel, so anything needing a node id should use it rather than
-      keep a second parameter that can disagree with the radio.
+      Low byte of the radio address (SYSL_ADDR). Doubles as this vehicle's peer identity: 
+      it is what distinguishes one Crazyflie from another on a shared channel
      */
     uint8_t get_address() const { return uint8_t(constrain_int16(_address.get(), 0, 255)); }
 
     // Bytes per second the GCS should assume for this link (SYSL_BW).
     uint16_t link_bw() const { return uint16_t(_link_bw.get()); }
 
-    // Whether to pack several whole MAVLink frames into one radio chunk.
-    bool pack_frames() const { return option_set(Option::PACK_FRAMES); }
-
     /*
-      Whether the virtual port claims flow control to the GCS. Off by default:
-      it makes AP_Logger send 10 LOG_DATA per call instead of 1, which produces
-      far more than this radio can carry and collapses the link.
-     */
-    bool report_flow_control() const { return option_set(Option::REPORT_FLOW_CTRL); }
-
-    /*
-      Peer-to-peer broadcast, for AP_SwarmMesh and anything else that needs to
-      reach every peer on the shared address.
+      Peer-to-peer broadcast.
 
       This is transport only. send_broadcast() adds the syslink header and
-      Fletcher-8 checksum and nothing else; inbound packets reach the handler
-      with both already stripped and verified. The payload is never inspected
-      in either direction, and the nRF51 forwards it verbatim, so what one
-      vehicle sends is byte for byte what its peers receive.
+      Fletcher-8 checksum and nothing else.
 
       Broadcasts are transmitted by the nRF51 immediately rather than queued.
       They consume no unicast transmit slot and so cannot fail for lack of
       radio room, and they do not compete with telemetry for the 5 deep queue.
-      They are also unacked and never retried: any reliability, ordering or
-      deduplication is the caller's to build.
+      They are also unacked and never retried.
 
-      Use get_address() for this vehicle's node id - it is the radio address
-      low byte, so it cannot disagree with what peers actually see.
+      Use get_address() for this vehicle's node id.
      */
     static constexpr uint8_t broadcast_max_len() { return AP_Syslink_Protocol::MAVLINK_CHUNK_MAX; }
 
@@ -136,22 +116,17 @@ public:
      */
     bool send_broadcast(const uint8_t *data, uint8_t len);
 
-    // Sink for inbound broadcasts, called on the syslink thread with the
-    // payload only. Must not block. Replaces any previous handler.
+    // Sink for inbound broadcasts, called on the syslink thread with the payload only. Must not block.
     FUNCTOR_TYPEDEF(BroadcastHandler, void, const uint8_t *, uint8_t);
     void set_broadcast_handler(BroadcastHandler handler);
 
     /*
-      Power state from the nRF51's last PM_BATTERY_STATE report. Valid only
-      once battery_time_ms() is non-zero.
+      Power state from the nRF51's last PM_BATTERY_STATE report. Valid only once battery_time_ms() is non-zero.
      */
     bool is_charging() const;
     bool is_usb_powered() const;
     uint32_t battery_time_ms() const { return _batt_time_ms; }
 
-    // Most recent DEBUG_PROBE response; probe_time_ms is 0 if none received.
-    const AP_Syslink_Protocol::DebugProbeData &get_debug_probe() const { return _probe; }
-    uint32_t get_debug_probe_time_ms() const { return _probe_time_ms; }
 
 private:
     static AP_Syslink *_singleton;
@@ -163,8 +138,6 @@ private:
     enum class Option : uint8_t {
         USE_FLOW_CONTROL = (1U << 0),
         LOG_STATS        = (1U << 1),
-        PACK_FRAMES      = (1U << 2),
-        REPORT_FLOW_CTRL = (1U << 3),
     };
     bool option_set(Option opt) const { return (uint8_t(_options.get()) & uint8_t(opt)) != 0; }
 
@@ -176,7 +149,6 @@ private:
     void dispatch(uint8_t type, const uint8_t *data, uint8_t len);
     bool flow_control_ok();
     void update_stats_1hz();
-    void handle_debug_probe(uint8_t type, const uint8_t *data, uint8_t len);
     void handle_config_echo(uint8_t type, const uint8_t *data, uint8_t len);
     void handle_battery_state(uint8_t type, const uint8_t *data, uint8_t len);
     void handle_broadcast(uint8_t type, const uint8_t *data, uint8_t len);
@@ -230,8 +202,6 @@ private:
     bool _have_broadcast_handler;
 
     Stats _stats;
-    AP_Syslink_Protocol::DebugProbeData _probe;
-    uint32_t _probe_time_ms;
 
     // power management state from PM_BATTERY_STATE
     uint32_t _last_battery_ms;
@@ -270,7 +240,6 @@ private:
     AP_Int16 _address;
     AP_Int8 _txpower;
     AP_Int16 _link_bw;
-    AP_Int8 _batt_instance;
 };
 
 namespace AP {

@@ -51,18 +51,6 @@ public:
     bool is_initialized() override { return true; }
     bool tx_pending() override { return false; }
 
-    /*
-      Report flow control as enabled. This link genuinely has it, and in a
-      stronger form than a UART's RTS/CTS: txspace() is derived from the free
-      slot count the nRF51 reports for its own transmit queue, so the GCS
-      cannot overrun the radio by trusting it.
-
-      This is not cosmetic. GCS_MAVLINK::have_flow_control() gates two
-      throttles meant for dumb serial links - parameter streaming is clamped
-      to 5 messages per burst without it, and log download drops from 10
-      LOG_DATA messages per call to 1.
-     */
-    enum flow_control get_flow_control(void) override;
 
 private:
     uint32_t txspace() override;
@@ -78,13 +66,6 @@ private:
 
     bool init_buffers(uint32_t rx_size, uint32_t tx_size);
 
-    /*
-      Length of the whole MAVLink frame starting at `ofs` bytes into the write
-      buffer, or 0 if the buffer does not hold all of it yet. Mirrors
-      mavlink_packetise()'s header arithmetic, which cannot be reused for this
-      because it only ever inspects offset 0.
-     */
-    uint32_t frame_len_at(uint32_t ofs, uint32_t avail) const;
 
     AP_Syslink *_syslink;
     ByteBuffer *_readbuf;

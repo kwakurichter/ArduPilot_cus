@@ -13,7 +13,6 @@
 #endif
 
 // Serial index reported for the virtual MAVLink port this driver registers.
-// Kept clear of AP_Networking (21+) and AP_DroneCAN (41+, 51+).
 #ifndef HAL_SYSLINK_SERIAL_IDX
 #define HAL_SYSLINK_SERIAL_IDX 61
 #endif

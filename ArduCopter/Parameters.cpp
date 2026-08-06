@@ -1232,13 +1232,6 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @User: Advanced
     AP_GROUPINFO("FS_EKF_FILT", 8, ParametersG2, fs_ekf_filt_hz, FS_EKF_FILT_DEFAULT),
 
-/*
-  The CF_ parameters retired with the move to AP_Syslink. CF_ID, CF_CHANNEL and
-  CF_P2P_STREAM configured the radio, which SYSL_CHAN, SYSL_ADDR and SYSL_RATE
-  now own; CF_PEER_ID duplicated the radio address, which SYSL_ADDR supplies;
-  the rest had no reader left. Indices 21 to 28 are retired with them and must
-  not be reused for anything else.
- */
 #if AP_SYSLINK_ENABLED
     // @Group: SYSL
     // @Path: ../libraries/AP_Syslink/AP_Syslink.cpp

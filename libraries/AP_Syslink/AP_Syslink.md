@@ -45,12 +45,12 @@ to the rest of the vehicle. Nothing else may open USART6.
    (SERIAL2,        │  own thread @ PRIORITY_UART      │
     protocol 51)    └───┬───────────┬──────────┬───────┘
                         │           │          │
-                   0x0C/0x0D      0x13       0xF0 …
+                    0x0C/0x0E      0x0D       0x13
                         │           │          │
                         ▼           ▼          ▼
               ┌──────────────┐  ┌────────┐  ┌────────┐
-              │ MAVLinkPort  │  │battery │  │ debug  │
-              │RegisteredPort│  │        │  │ probe  │
+              │ MAVLinkPort  │  │broadcast│ │battery │
+              │RegisteredPort│  │AP_Swarm │ │        │
               └──────┬───────┘  └────────┘  └────────┘
                      │
                 GCS_MAVLINK (COMM_2)
@@ -157,7 +157,6 @@ own the port.
 | 0x13 | `PM_BATTERY_STATE` | nRF→ | 4 |
 | 0x14 | `PM_BATTERY_AUTOUPDATE` | →nRF | 4 |
 | 0x15/0x16 | `PM_SHUTDOWN_REQUEST`/`_ACK` | both | later |
-| 0xF0 | `DEBUG_PROBE` | request/response | 1 |
 
 ## Constraints that bite
 
@@ -305,25 +304,24 @@ Downlink rate is **polls per second times bytes per radio packet**. One poll
 carries exactly one packet whatever its size, so a half-empty packet is a
 halved link.
 
-That suggests filling every packet: a `LOG_DATA` frame is about 109 bytes and
-alone in a 251 byte packet it wastes over half a poll, so packing whole frames
-until they no longer fit halves the chunk count for a given number of bytes.
+The obvious move is to fill every packet, and it does not work here. Packing
+whole frames until they no longer fit halves the chunk count for a given number
+of bytes, but measured on a Crazyflie 2.1 it ran log download at about 500 B/s
+against 2-8 kB/s unpacked.
 
-**On this hardware that is a large net loss, and packing is off by default.**
-Measured on a Crazyflie 2.1, log download ran at 2-8 kB/s with packing off and
-about 500 B/s with it on.
+Polls per second is not independent of packet size. The nRF51 has no UART DMA —
+a per byte interrupt on a 16 MHz Cortex-M0, busy-waiting on transmit — so
+forwarding a full size chunk stalls its main loop for roughly 2.6 ms, and the
+radio is serviced from that same loop. Bigger packets directly reduce how often
+it can answer a poll, and that costs far more than the occupancy gains. The
+packing code has been removed.
 
-The model above is wrong in its key assumption: polls per second is *not*
-independent of packet size. The nRF51 has no UART DMA — it takes a per byte
-interrupt on a 16 MHz Cortex-M0 and busy-waits on transmit — so forwarding a
-full size chunk stalls its main loop for roughly 2.6 ms, and the radio is
-serviced from that same loop. Bigger packets therefore directly reduce how
-often the radio can answer a poll, and that costs far more than the occupancy
-gains.
-
-`SYSL_OPTIONS` bit 2 still enables it, since the trade could go the other way
-against a co-processor that forwards by DMA, or a ground station polling too
-slowly to exploit small packets.
+Claiming flow control to the GCS was tried and removed for the same reason.
+`GCS_MAVLINK::have_flow_control()` gates two throttles meant for dumb serial
+links — the 5 message parameter burst clamp, and `AP_Logger` dropping from 10
+`LOG_DATA` per call to 1 — but ten per call produces far more than this radio
+carries, and the excess saturates the nRF51 and takes the link down rather than
+queueing politely.
 
 Three separate mechanisms pace traffic, and they apply to different things:
 
@@ -331,23 +329,11 @@ Three separate mechanisms pace traffic, and they apply to different things:
 |---|---|---|
 | `bw_in_bytes_per_second()` | parameter download, FTP bursts | `SYSL_BW` |
 | `txspace()` from free slots | everything | radio queue depth |
-| `have_flow_control()` | param burst clamp, `LOG_DATA` per call | `SYSL_OPTIONS` bit 3 |
 
 **`SYSL_BW` does not affect log download.** `AP_Logger` paces `LOG_DATA` by
 `HAVE_PAYLOAD_SPACE()` and a per-call message count, never by the bandwidth
 hint, so raising it to speed up logs achieves nothing. It matters for
 parameters and FTP.
-
-`get_flow_control()` can report `FLOW_CONTROL_ENABLE`, which lifts two
-throttles `GCS_MAVLINK::have_flow_control()` applies to links without it:
-parameter streaming is clamped to 5 messages per burst, and
-`AP_Logger::handle_log_sending()` drops from 10 `LOG_DATA` per call to 1.
-
-**It is off by default, and enabling it took the link down in testing.** Ten
-`LOG_DATA` per call at the rate `update_send()` runs produces far more than
-this radio carries; the excess does not queue politely, it saturates the nRF51
-and the connection is lost. `SYSL_OPTIONS` bit 3 opts in, and is only worth it
-alongside a ground station polling fast enough to drain the result.
 
 ### Credit accounting, not absolute credit
 
@@ -414,11 +400,8 @@ chunks is 1285 bytes — or `update()` gets authorised to queue chunks that
 
 ## Debugging
 
-`SYSLINK_DEBUG_PROBE` (0xF0) is the only real visibility into this link. The
-nRF51 replies with 8 bytes: whether address/channel/datarate commands were
-received, whether UART data was dropped, UART error flags and count, and two
-syslink RX checksum error counters. Those, plus this driver's own counters, are
-written to the `SYSL` log message at 1 Hz.
+This driver's own counters are the visibility into this link, written to the
+`SYSL` log message at 1 Hz.
 
 ### Stub log files around a download
 
@@ -445,6 +428,6 @@ If the link is dead, check in this order:
 
 1. `SYSL.RxP` climbing at all — if not, the nRF51 is not talking; check wiring
    and that nothing else claimed SERIAL2.
-2. `SYSL.CkE` / probe `CKSUM1`,`CKSUM2` — framing or baud mismatch.
-3. Probe `ADDR`/`CHAN`/`RATE` all 1 — configuration actually landed (phase 2).
+2. `SYSL.CkE` climbing — framing or baud mismatch.
+3. `"Syslink: radio configured"` seen — the channel and address actually landed.
 4. Vehicle and ground station on the same channel and address.
