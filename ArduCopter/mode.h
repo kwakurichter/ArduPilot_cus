@@ -1101,7 +1101,13 @@ public:
     bool init(bool ignore_checks) override;
     void run() override;
 
+#ifdef HAL_CF21
+    // The Crazyflie navigates indoors from optical flow and the ToF deck, with
+    // no GPS and no terrain database, so GUIDED must not gate on either.
+    bool requires_position() const override { return false; }
+#else
     bool requires_position() const override { return true; }
+#endif
     bool has_manual_throttle() const override { return false; }
     bool allows_arming(AP_Arming::Method method) const override;
     bool is_autopilot() const override { return true; }
@@ -1109,7 +1115,11 @@ public:
     bool in_guided_mode() const override { return true; }
     bool move_vehicle_on_ekf_reset() const override;
 
+#ifdef HAL_CF21
+    bool requires_terrain_failsafe() const override { return false; }
+#else
     bool requires_terrain_failsafe() const override { return true; }
+#endif
 
 #if AP_COPTER_ADVANCED_FAILSAFE_ENABLED
     // Return the type of this mode for use by advanced failsafe
