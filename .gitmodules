@@ -45,3 +45,6 @@
 [submodule "modules/littlefs"]
 	path = modules/littlefs
 	url = https://github.com/ArduPilot/littlefs.git
+[submodule "modules/libdw1000"]
+	path = modules/libdw1000
+	url = https://github.com/bitcraze/libdw1000.git
