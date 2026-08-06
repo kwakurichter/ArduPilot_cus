@@ -757,6 +757,13 @@ private:
     static void bdshot_config_icu_dshot_f1(stm32_tim_t* TIMx, uint8_t chan, uint8_t ccr_ch);
     static uint32_t bdshot_get_output_rate_hz(const enum output_mode mode);
 
+#ifdef HAL_CF21_BRUSHLESS
+    static bool cf21_is_tim2_motor_group(const pwm_group &group);
+    static void cf21_set_tim2_motor_lines_tx(const pwm_group &group, bool bidir);
+    static void cf21_set_tim2_motor_lines_rx(const pwm_group &group);
+    static void cf21_reset_escs_for_bdshot(const pwm_group &group);
+#endif
+
     /*
       setup neopixel (WS2812B) output data for a given output channel
      */
