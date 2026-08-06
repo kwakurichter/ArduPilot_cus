@@ -63,6 +63,7 @@ const AP_Param::GroupInfo AP_RangeFinder_Params::var_info[] = {
     // @Values: 46:BenewakeTFS20L
     // @Values: 47:DTS6012M
     // @Values: 48:LightWare-GRF-I2C
+    // @Values: 50:CrazyflieFlowDeck
     // @Values: 100:SITL
     // @User: Standard
     AP_GROUPINFO_FLAGS("TYPE", 1, AP_RangeFinder_Params, type, 0, AP_PARAM_FLAG_ENABLE),
@@ -187,6 +188,13 @@ const AP_Param::GroupInfo AP_RangeFinder_Params::var_info[] = {
     // @Values: 0:Forward, 1:Forward-Right, 2:Right, 3:Back-Right, 4:Back, 5:Back-Left, 6:Left, 7:Forward-Left, 24:Up, 25:Down
     // @User: Advanced
     AP_GROUPINFO("ORIENT", 53, AP_RangeFinder_Params, orientation, AP_RANGEFINDER_DEFAULT_ORIENTATION),
+
+    // @Param: MODE
+    // @DisplayName: Distance Mode
+    // @Description: Sets the ToF sensor distance mode. Only used by the Crazyflie FlowDeck (VL53L1X) backend.
+    // @Values: 0:Short, 1:Medium, 2:Long
+    // @User: Advanced
+    AP_GROUPINFO("MODE", 63, AP_RangeFinder_Params, distance_mode, 1),
 
     AP_GROUPEND
 };
