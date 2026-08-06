@@ -175,6 +175,9 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 #if AP_BEACON_ENABLED
     SCHED_TASK_CLASS(AP_Beacon,            &copter.g2.beacon,           update,         400,  50,  39),
 #endif
+#if AP_RANGING_ENABLED
+    SCHED_TASK_CLASS(AP_Ranging,           &copter.g2.ranging,          update,          50,  50,  40),
+#endif
     SCHED_TASK(update_altitude,       10,    100,  42),
     SCHED_TASK(run_nav_updates,       50,    100,  45),
     SCHED_TASK(update_throttle_hover,100,     90,  48),
@@ -705,6 +708,9 @@ void Copter::ten_hz_logging_loop()
 #endif
 #if AP_BEACON_ENABLED
         g2.beacon.log();
+#endif
+#if AP_RANGING_ENABLED
+        g2.ranging.log();
 #endif
     }
 #if AP_WINCH_ENABLED

@@ -654,6 +654,12 @@ const AP_Param::GroupInfo ParametersG2::var_info[] = {
     AP_SUBGROUPINFO(beacon, "BCN", 14, ParametersG2, AP_Beacon),
 #endif
 
+#if AP_RANGING_ENABLED
+    // @Group: RNG
+    // @Path: ../libraries/AP_Ranging/AP_Ranging.cpp
+    AP_SUBGROUPINFO(ranging, "RNG", 47, ParametersG2, AP_Ranging),
+#endif
+
 #if HAL_PROXIMITY_ENABLED
     // @Group: PRX
     // @Path: ../libraries/AP_Proximity/AP_Proximity.cpp
@@ -1187,6 +1193,9 @@ ParametersG2::ParametersG2(void) :
 #endif
 #if AP_BEACON_ENABLED
     , beacon()
+#endif
+#if AP_RANGING_ENABLED
+    , ranging()
 #endif
 #if HAL_PROXIMITY_ENABLED
     , proximity()

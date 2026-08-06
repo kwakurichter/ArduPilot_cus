@@ -104,6 +104,11 @@
  #include <AP_Beacon/AP_Beacon.h>
 #endif
 
+#include <AP_Ranging/AP_Ranging_config.h>
+#if AP_RANGING_ENABLED
+ #include <AP_Ranging/AP_Ranging.h>
+#endif
+
 #if AP_AVOIDANCE_ENABLED
  #include <AC_Avoidance/AC_Avoid.h>
 #endif

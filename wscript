@@ -578,6 +578,7 @@ def configure(cfg):
             cfg.end_msg('disabled', color='YELLOW')
 
     cfg.load('littlefs')
+    cfg.load('libdw1000')
     cfg.load('static_linking')
     cfg.load('build_summary')
 
@@ -932,6 +933,9 @@ def build(bld):
     if bld.get_board().with_littlefs:
         bld.env.AP_LIBRARIES_OBJECTS_KW['use'] += ['littlefs']
         bld.littlefs()
+
+    # Crazyflie LocoDeck (DWM1000) support, used by AP_Ranging
+    bld.libdw1000()
 
     _build_cmd_tweaks(bld)
 
