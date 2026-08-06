@@ -4176,9 +4176,7 @@ static bool parse_u32_key(const char* text, const char* key, uint32_t &out)
 }
 
 /*
-  This vehicle's node id, taken from the radio address low byte. That is what
-  already distinguishes one Crazyflie from another on a shared channel, so a
-  separate peer id parameter would only offer a second value to disagree with
+  This vehicle's node id, taken from the radio address low byte.
   it.
  */
 static uint8_t get_peer_id()

@@ -105,9 +105,7 @@ SERIAL_ORDER OTG1 USART3 USART6 USART2
 # port, and on STM32F4 nothing restores the pin muxing afterwards.
 define DEFAULT_SERIAL2_PROTOCOL SerialProtocol_Syslink
 
-# AP_Syslink registers a virtual MAVLink port for the radio. Registered ports
-# default off below 2MB flash and without networking or DroneCAN, so enable
-# them explicitly.
+# AP_Syslink registers a virtual MAVLink port for the radio.
 define AP_SERIALMANAGER_REGISTER_ENABLED 1
 define DEFAULT_SERIAL2_BAUD 1000
 
