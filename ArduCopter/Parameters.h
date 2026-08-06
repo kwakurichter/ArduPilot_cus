@@ -5,6 +5,7 @@
 #include <AP_Common/AP_Common.h>
 #include "RC_Channel_Copter.h"
 #include <AP_Proximity/AP_Proximity.h>
+#include <AP_Syslink/AP_Syslink.h>
 
 class ModeRTL;
 
@@ -675,6 +676,10 @@ public:
 
     // EKF variance filter cutoff
     AP_Float fs_ekf_filt_hz;
+
+#if AP_SYSLINK_ENABLED
+    AP_Syslink syslink;
+#endif
 
 #if WEATHERVANE_ENABLED
     AC_WeatherVane weathervane;

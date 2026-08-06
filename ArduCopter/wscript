@@ -32,6 +32,7 @@ def build(bld):
             'AC_AutoTune',
             'AP_KDECAN',
             'AP_SurfaceDistance',
+            'AP_Syslink',   # Crazyflie nRF51822 radio co-processor
             'vl53l1x_api',  # Added for FlowDeck Support via ST VL53L1x API
         ],
     )

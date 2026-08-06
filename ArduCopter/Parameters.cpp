@@ -1087,6 +1087,12 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     // @User: Advanced
     AP_GROUPINFO("FS_EKF_FILT", 8, ParametersG2, fs_ekf_filt_hz, FS_EKF_FILT_DEFAULT),
 
+#if AP_SYSLINK_ENABLED
+    // @Group: SYSL
+    // @Path: ../libraries/AP_Syslink/AP_Syslink.cpp
+    AP_SUBGROUPINFO(syslink, "SYSL", 29, ParametersG2, AP_Syslink),
+#endif
+
 #if AP_INERTIALSENSOR_FAST_SAMPLE_WINDOW_ENABLED
     // @Param: FSTRATE_ENABLE
     // @DisplayName: Enable the fast Rate thread

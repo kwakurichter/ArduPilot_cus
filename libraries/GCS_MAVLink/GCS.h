@@ -530,6 +530,10 @@ protected:
 
     void handle_heartbeat(const mavlink_message_t &msg);
 
+#ifdef HAL_CF21    
+    void handle_ai_deck_mission_statustext(const mavlink_message_t &msg);
+#endif    
+
     virtual bool persist_streamrates() const { return false; }
     void handle_request_data_stream(const mavlink_message_t &msg);
 

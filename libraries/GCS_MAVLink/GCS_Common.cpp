@@ -4344,6 +4344,96 @@ void GCS_MAVLINK::handle_heartbeat(const mavlink_message_t &msg)
     }
 }
 
+#ifdef HAL_CF21
+#include <AP_Syslink/AP_Syslink.h>
+
+static bool parse_u32_key(const char* text, const char* key, uint32_t &out)
+{
+    const char* p = strstr(text, key);
+    if (!p) return false;
+
+    p += strlen(key);
+    if (*p != '=') return false;
+    p++;
+
+    char* end = nullptr;
+    unsigned long v = strtoul(p, &end, 10);
+    if (end == p) return false;
+
+    out = (uint32_t)v;
+    return true;
+}
+
+/*
+  This vehicle's node id, taken from the radio address low byte.
+  it.
+ */
+static uint8_t get_peer_id()
+{
+#if AP_SYSLINK_ENABLED
+    const AP_Syslink *syslink = AP::syslink();
+    if (syslink != nullptr) {
+        return syslink->get_address();
+    }
+#endif
+    return 0;
+}
+
+void GCS_MAVLINK::handle_ai_deck_mission_statustext(const mavlink_message_t &msg)
+{
+    mavlink_statustext_t st{};
+    mavlink_msg_statustext_decode(&msg, &st);
+
+    // If we ever send chunked statustext, ignore non-first chunks for now:
+    if (st.chunk_seq != 0) {
+        return;
+    }
+
+    // Make a safe, null-terminated string copy
+    char text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN + 1];
+    memcpy(text, st.text, MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN);
+    text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN] = '\0';
+
+    // Fast reject: must start with "MS1,"
+    if (strncmp(text, "MS1,", 4) != 0) {
+        return;
+    }
+
+    // Parse fields (accept strict "MS1,st=%u,val=%u,seq=%u,res0=%u,res1=%u")
+    uint32_t st_u = 0, val_u = 0, seq_u = 0, res0_u = 0, res1_u = 0;
+    // Require st + seq; val optional
+    if (!parse_u32_key(text, "st", st_u))  return;
+    if (!parse_u32_key(text, "seq", seq_u)) return;
+    (void)parse_u32_key(text, "val", val_u);
+    (void)parse_u32_key(text, "res0", res0_u);
+    (void)parse_u32_key(text, "res1", res1_u);
+
+    // Clamp to your intended sizes
+    const uint8_t  st8  = (uint8_t)st_u;
+    const uint16_t val16 = (uint16_t)val_u;
+    const uint16_t seq16 = (uint16_t)seq_u;
+    const uint16_t res016 = (uint16_t)res0_u;
+    const uint16_t res116 = (uint16_t)res1_u;
+
+    // Choose a source id
+    const uint8_t src_id = get_peer_id();
+
+    // include a timestamp
+    const uint32_t now_ms = AP_HAL::millis();
+
+    // Log message
+    AP::logger().Write("MS1", "TimeUS,PID,seq,st,val,TimeMS,res0,res1", "QBHBHIhh",
+                AP_HAL::micros64(),
+                src_id,
+                seq16,
+                st8,
+                val16,
+                now_ms,
+                res016,
+                res116);
+}
+#endif
+
 /*
   handle messages which don't require vehicle specific data
  */
@@ -4503,6 +4593,12 @@ void GCS_MAVLINK::handle_message(const mavlink_message_t &msg)
 #endif
 
     case MAVLINK_MSG_ID_STATUSTEXT:
+#ifdef HAL_CF21
+        // keep existing logging behavior
+        if (chan == MAVLINK_COMM_1) {
+            handle_ai_deck_mission_statustext(msg);
+        }
+#endif
         handle_statustext(msg);
         break;
 
