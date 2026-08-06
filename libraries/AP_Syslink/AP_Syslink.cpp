@@ -56,9 +56,9 @@ AP_Syslink *AP_Syslink::_singleton;
 
 const AP_Param::GroupInfo AP_Syslink::var_info[] = {
 
-    // @Param: ENABLE
+    // @Param: _ENABLE
     // @DisplayName: Syslink enable
-    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port whose SERIALn_PROTOCOL is set to 50 (Syslink).
+    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port whose SERIALn_PROTOCOL is set to 51 (Syslink).
     // @Values: 0:Disabled,1:Enabled
     // @RebootRequired: True
     // @User: Standard
@@ -66,14 +66,14 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
 
     // index 2 was PORT, before the driver moved to find_serial()
 
-    // @Param: OPTIONS
+    // @Param: _OPTIONS
     // @DisplayName: Syslink options
     // @Description: Bitmask of syslink driver options.
     // @Bitmask: 0:Use UART flow control line,1:Log SYSL statistics
     // @User: Advanced
     AP_GROUPINFO("_OPTIONS", 3, AP_Syslink, _options, 3),
 
-    // @Param: CHAN
+    // @Param: _CHAN
     // @DisplayName: Radio channel
     // @Description: nRF51 radio channel. Channels are spaced 1MHz apart from 2400MHz, so channel 80 is 2480MHz. Must match the ground station.
     // @Range: 0 125
@@ -81,7 +81,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("_CHAN", 4, AP_Syslink, _channel, 80),
 
-    // @Param: RATE
+    // @Param: _RATE
     // @DisplayName: Radio datarate
     // @Description: nRF51 radio datarate. Must match the ground station.
     // @Values: 0:250Kbps,1:1Mbps,2:2Mbps
@@ -89,7 +89,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("_RATE", 5, AP_Syslink, _datarate, 2),
 
-    // @Param: ADDR
+    // @Param: _ADDR
     // @DisplayName: Radio address low byte
     // @Description: Low byte of the 5-byte radio address. The upper four bytes are fixed at E7E7E7E7 following Crazyflie convention, so the full address is E7E7E7E7xx and the Crazyradio URI is radio://0/CHAN/RATE/E7E7E7E7xx. Must match the ground station.
     // @Range: 0 255
@@ -97,20 +97,18 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("_ADDR", 6, AP_Syslink, _address, 0xE7),
 
-    // @Param: TXPOW
+    // @Param: _TXPOW
     // @DisplayName: Radio transmit power
     // @Description: nRF51 radio transmit power in dBm. The nRF51822 supports -30, -20, -16, -12, -8, -4, 0 and +4 dBm; other values are rounded down by the radio.
     // @Range: -30 4
-    // @Units: dBm
     // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO("_TXPOW", 7, AP_Syslink, _txpower, 0),
 
-    // @Param: BW
+    // @Param: _BW
     // @DisplayName: Assumed link bandwidth
     // @Description: Bytes per second the GCS layer should assume for the radio link. Paces parameter download and MAVLink FTP burst reads only; it does not affect log download, which is bounded by the transmit queue instead. Too high overruns the 5 deep radio queue and loses more to drops than it gains.
     // @Range: 500 20000
-    // @Units: B/s
     // @User: Advanced
     AP_GROUPINFO("_BW", 8, AP_Syslink, _link_bw, 4000),
 
