@@ -39,6 +39,23 @@ bool AP_Ranging_DW1000::init_device()
         return false;
     }
 
+    /*
+      service_radio() drives the whole exchange off a polled read of the IRQ
+      line, so an unmapped pin is fatal: hal.gpio->read() answers 0 for a pin
+      that is not in the board's GPIO table, which reads as "no interrupt
+      pending" forever. Without this check the driver reports itself ready,
+      never ranges, and leaves a 3.3kHz callback polling a dead pin on a SPI
+      bus it shares with the optical flow sensor.
+
+      The crazyflie2 hwdefs currently comment out DW1000_IRQ to give USART3
+      back, so this is the expected path there.
+     */
+    if (!hal.gpio->valid_pin(HAL_DW1000_IRQ_PIN)) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: IRQ pin GPIO(%u) not in hwdef",
+                      unsigned(HAL_DW1000_IRQ_PIN));
+        return false;
+    }
+
     // hand our hardware ops to libdw1000. dwInit() only touches the device
     // struct (no bus traffic), so it needs no semaphore.
     _ops.spiRead     = &AP_Ranging_DW1000::spiRead;
