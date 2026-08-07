@@ -4421,8 +4421,14 @@ void GCS_MAVLINK::handle_ai_deck_mission_statustext(const mavlink_message_t &msg
     // include a timestamp
     const uint32_t now_ms = AP_HAL::millis();
 
-    // Log message
-    AP::logger().Write("MS1", "TimeUS,PID,seq,st,val,TimeMS,res0,res1", "QBHBHIhh",
+    /*
+      Streaming, not Write(): the rate limiter only throttles messages marked
+      streaming, so a plain Write() here would ignore LOG_FILE_RATEMAX and
+      keep writing at whatever rate the AI deck happens to send statustext at.
+      This is opportunistic telemetry, so it should be the first thing dropped
+      when the log backend is under pressure, not exempt from the limit.
+     */
+    AP::logger().WriteStreaming("MS1", "TimeUS,PID,seq,st,val,TimeMS,res0,res1", "QBHBHIhh",
                 AP_HAL::micros64(),
                 src_id,
                 seq16,
