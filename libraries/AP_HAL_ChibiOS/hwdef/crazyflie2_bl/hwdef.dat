@@ -167,6 +167,13 @@ define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 # define HAL_GYROFFT_ENABLED 1
 
 define HAL_CF21                        #Crazyflie advanced features support
+
+# Identify this build as the Crazyflie port rather than stock ArduCopter.
+# Upstream's vendor hook: this becomes the GCS-visible string, while
+# THISFIRMWARE is preserved as fw_string_original and still written to logs.
+# FW_MAJOR/MINOR/PATCH stay at 4.7.0 - ground stations key feature detection
+# off them, so they must keep reporting the ArduPilot API level.
+define AP_CUSTOM_FIRMWARE_STRING "ArduSwarm v2.0.0"
 define HAL_CF21_BRUSHLESS              #BDSHOT support
 
 # TIM2_CH4 (motor 4) has no DMA stream of its own on this part, and the only

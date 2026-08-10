@@ -161,6 +161,13 @@ define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 
 define HAL_CF21                        #Crazyflie advanced features support
 
+# Identify this build as the Crazyflie port rather than stock ArduCopter.
+# Upstream's vendor hook: this becomes the GCS-visible string, while
+# THISFIRMWARE is preserved as fw_string_original and still written to logs.
+# FW_MAJOR/MINOR/PATCH stay at 4.7.0 - ground stations key feature detection
+# off them, so they must keep reporting the ArduPilot API level.
+define AP_CUSTOM_FIRMWARE_STRING "ArduSwarm v2.0.0"
+
 # ---------------------------------------------------------------------------
 # Flash diet to make room for Lua scripting on the 1MB F405.
 # Comment a line back out to get the feature back.
