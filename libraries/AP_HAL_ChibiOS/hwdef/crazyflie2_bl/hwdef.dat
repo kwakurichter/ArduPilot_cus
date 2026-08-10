@@ -169,6 +169,13 @@ define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 define HAL_CF21                        #Crazyflie advanced features support
 define HAL_CF21_BRUSHLESS              #BDSHOT support
 
+# TIM2_CH4 (motor 4) has no DMA stream of its own on this part, and the only
+# one it could share is TIM2_UP, which the DShot output needs. Working around
+# that in hardware is not practical, so motor 4 simply reports no bdshot
+# telemetry. This stops the generic allocator trying to share UP for input
+# capture and failing the whole timer group.
+define HAL_BDSHOT_NO_SHARE_UP_STREAM 1
+
 # ---------------------------------------------------------------------------
 # Flash diet to make room for Lua scripting on the 1MB F405.
 # Comment a line back out to get the feature back.
