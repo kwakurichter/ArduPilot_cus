@@ -270,63 +270,86 @@ void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta
 }
 
 // --- Read X,Y motion counts, quality all at the same time ---
+/*
+  Read the PMW3901 motion report as a burst.
+
+  Reading the fields individually costs six SPI transactions, each with its
+  own chip-select assertion and a t_SRR delay between them, and the periodic
+  callback holds the SPI bus semaphore for all of it. Burst mode streams the
+  whole report under one chip-select, so this is two transfers and one delay
+  on a bus shared with the SD card and the Loco deck.
+
+  Layout streamed from REG_MOTION_BURST, per the PMW3901 datasheet and
+  matching AP_OpticalFlow_Pixart's MotionBurst struct:
+
+    0      motion
+    1      observation
+    2-3    delta_x, little endian
+    4-5    delta_y
+    6      squal
+    7      rawdata_sum
+    8      max_raw
+    9      min_raw
+    10-11  shutter
+
+  Note reads send the bare register address; only writes set the MSB. That is
+  the PixArt convention, and this driver never calls set_read_flag(), so the
+  HAL leaves the address alone.
+ */
 bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality)
 {
-    // 0x02: Motion
-    // 0x03: Delta X L
-    // 0x04: Delta X H
-    // 0x05: Delta Y L
-    // 0x06: Delta Y H
-    // 0x07: Squal
+    struct PACKED {
+        uint8_t motion;
+        uint8_t observation;
+        int16_t delta_x;
+        int16_t delta_y;
+        uint8_t squal;
+        uint8_t rawdata_sum;
+        uint8_t max_raw;
+        uint8_t min_raw;
+        uint8_t shutter_upper;
+        uint8_t shutter_lower;
+    } burst;
 
-    uint8_t raw_data[6];
+    // the read length below is sizeof(burst); if packing ever changed we would
+    // silently clock out the wrong number of bytes
+    static_assert(sizeof(burst) == 12, "PMW3901 motion burst must be 12 bytes");
 
-    // 1. Read Motion (0x02)
-    if (!_dev->read_registers(0x02, &raw_data[0], 1)) return false;
-    uint8_t motion = raw_data[0];
+    delta_x = 0;
+    delta_y = 0;
+    quality = 0;
 
-    // Safety delay per datasheet (t_SRR = 20us). This ensures the sensor is ready for the next address.
-    hal.scheduler->delay_microseconds(20);
-
-    // 2. Read Delta X Low (0x03)
-    if (!_dev->read_registers(0x03, &raw_data[1], 1)) return false;
-    uint8_t xl = raw_data[1];
-    hal.scheduler->delay_microseconds(20);
-
-    // 3. Read Delta X High (0x04)
-    if (!_dev->read_registers(0x04, &raw_data[2], 1)) return false;
-    uint8_t xh = raw_data[2];
-    hal.scheduler->delay_microseconds(20);
-
-    // 4. Read Delta Y Low (0x05)
-    if (!_dev->read_registers(0x05, &raw_data[3], 1)) return false;
-    uint8_t yl = raw_data[3];
-    hal.scheduler->delay_microseconds(20);
-
-    // 5. Read Delta Y High (0x06)
-    if (!_dev->read_registers(0x06, &raw_data[4], 1)) return false;
-    uint8_t yh = raw_data[4];
-    hal.scheduler->delay_microseconds(20);
-
-    // 6. Read SQUAL (0x07)
-    if (!_dev->read_registers(0x07, &raw_data[5], 1)) return false;
-    quality = raw_data[5];
-
-    // Parse the data
-    int16_t dx = ((int16_t)xh << 8) | xl;
-    int16_t dy = ((int16_t)yh << 8) | yl;
-
-    // Check if motion occurred. Even if bit 7 is 0, we should still return the deltas (which might be 0) to keep the integration valid.
-    if (!(motion & 0x80)) {
-        // we could return true with 0 deltas, but for now keep raw values for integration
+    // Hold CS across both transfers; the burst aborts if it is released early.
+    if (!_dev->set_chip_select(true)) {
+        return false;
     }
-    
-    delta_x = dx;
-    delta_y = dy;
+
+    uint8_t reg = REG_MOTION_BURST;
+    bool ok = _dev->transfer(&reg, 1, nullptr, 0);
+    if (ok) {
+        // t_SRAD_MOTBR: the sensor needs this long before the report streams out
+        hal.scheduler->delay_microseconds(150);
+        ok = _dev->transfer(nullptr, 0, (uint8_t *)&burst, sizeof(burst));
+    }
+
+    _dev->set_chip_select(false);
+
+    if (!ok) {
+        return false;
+    }
+
+    /*
+      Deltas are reported whether or not the motion bit is set: a still frame
+      is a genuine zero-displacement sample, and dropping it would leave the
+      integration in timer() accumulating dt without the matching flow.
+     */
+    delta_x = burst.delta_x;
+    delta_y = burst.delta_y;
+    quality = burst.squal;
 
     return true;
 }
- 
+
 // --- Update Measurement ---
 void AP_OpticalFlow_FlowDeck::timer()
 {

@@ -29,6 +29,7 @@ private:
     static const uint8_t REG_ID_INV = 0x5F;     // Inverse ID register
     static const uint8_t REG_MOTION = 0x02;     // Motion register (not sure)
     static const uint8_t REG_QUALITY = 0x07;     // Quality register (not sure)
+    static const uint8_t REG_MOTION_BURST = 0x16;  // PMW3901 motion burst; streams the whole report
 
     // read a register from the sensor
     uint8_t reg_read(uint8_t reg);
