@@ -46,9 +46,6 @@ bool AP_Ranging_DW1000::init_device()
       pending" forever. Without this check the driver reports itself ready,
       never ranges, and leaves a 3.3kHz callback polling a dead pin on a SPI
       bus it shares with the optical flow sensor.
-
-      The crazyflie2 hwdefs currently comment out DW1000_IRQ to give USART3
-      back, so this is the expected path there.
      */
     if (!hal.gpio->valid_pin(HAL_DW1000_IRQ_PIN)) {
         GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: IRQ pin GPIO(%u) not in hwdef",
