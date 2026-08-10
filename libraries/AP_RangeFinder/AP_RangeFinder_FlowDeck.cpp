@@ -16,51 +16,27 @@ extern const AP_HAL::HAL& hal;
 
 extern "C" void VL53L1_set_aphal_device(AP_HAL::I2CDevice*);
 
-// Constructor
-AP_RangeFinder_FlowDeck::AP_RangeFinder_FlowDeck(RangeFinder::RangeFinder_State &_state_in, AP_RangeFinder_Params &_params_in, AP_HAL::OwnPtr<AP_HAL::I2CDevice> _dev)
-    : AP_RangeFinder_Backend(_state_in, _params_in), dev(std::move(_dev))
+/* Initialise sensor using ST API calls.
+   Called by AP_RangeFinder_Backend_I2C::configure(), which deletes us on failure. */
+bool AP_RangeFinder_FlowDeck::init()
 {
+    VL53L1_Error st_status = VL53L1_ERROR_NONE;
+
     // Zero initialize the ST LL driver data structure
     memset(&st_dev, 0, sizeof(st_dev));
 
     // Setup the platform data within the ST device structure
     // This links the generic ST API to ArduPilot HAL implementations
-    VL53L1_set_aphal_device(dev.get());
+    VL53L1_set_aphal_device(&dev);
 
     // Replace st_ll_data accesses:
-    st_dev_ptr->i2c_slave_address = _params_in.address.get();
+    st_dev_ptr->i2c_slave_address = params.address.get();
 
     st_dev_ptr->comms_type = 1; // 1 = I2C
 
     st_dev_ptr->comms_speed_khz = 400; // Default I2C speed
-}
 
-/* Static detect function */
-AP_RangeFinder_Backend *AP_RangeFinder_FlowDeck::detect(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev)
-{
-    if (!dev) {
-        return nullptr;
-    }
-    AP_RangeFinder_FlowDeck *sensor = new AP_RangeFinder_FlowDeck(_state, _params, std::move(dev));
-    if (!sensor) {
-        gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: Failed to allocate sensor object\n"); //DEBUG
-        return nullptr;
-    }
-    if (!sensor->init()) {
-        // Init function will print detailed errors
-        delete sensor;
-        return nullptr;
-    }
-    gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Detected and initialized successfully\n"); //DEBUG
-    return sensor;
-}
-
-/* Initialise sensor using ST API calls */
-bool AP_RangeFinder_FlowDeck::init()
-{
-    VL53L1_Error st_status = VL53L1_ERROR_NONE;
-
-    WITH_SEMAPHORE(dev->get_semaphore()); // Ensure exclusive I2C access during init
+    WITH_SEMAPHORE(dev.get_semaphore()); // Ensure exclusive I2C access during init
 
     // -- Ensure sensor is booted --
 
@@ -116,6 +92,7 @@ bool AP_RangeFinder_FlowDeck::init()
     }
 
     VL53L1X_INTER_MEASUREMENT_MS = ((VL53L1X_TIMING_BUDGET_US / 1000) + 5); // Timing budget + min 4 ms
+    _measurement_period_ms = VL53L1X_INTER_MEASUREMENT_MS;
 
     st_status = VL53L1_SetDistanceMode(st_dev_ptr, mode_to_set);
     if (st_status != VL53L1_ERROR_NONE) {
@@ -153,151 +130,139 @@ bool AP_RangeFinder_FlowDeck::init()
 
     is_initialized = true;
     set_status(RangeFinder::Status::Good); // Set initial status
-    
+
     gcs().send_text(MAV_SEVERITY_DEBUG, "VL53L1X: Initialization complete.\n"); //DEBUG
-    
+
+    /*
+      Poll on the bus thread at the sensor's own measurement cadence. Doing
+      this from update() instead would put several millisecond-scale I2C
+      transfers inside a 100us scheduler slot on the main thread.
+     */
+    dev.register_periodic_callback(_measurement_period_ms * 1000U,
+                                   FUNCTOR_BIND_MEMBER(&AP_RangeFinder_FlowDeck::timer, void));
+
     return true;
 }
 
-/* Update state */
-void AP_RangeFinder_FlowDeck::update(void)
+/*
+  Read one sample. Runs on the I2C bus thread via the periodic callback, so
+  the several millisecond-scale ST API transfers below stay off the main loop.
+  Only the decoded result is handed to update(), under _sem.
+ */
+void AP_RangeFinder_FlowDeck::sample(void)
 {
-    if (!is_initialized) {
-        // Attempt re-initialization periodically
-        // static uint32_t last_init_attempt_ms = 0;
-        // if (AP_HAL::millis() - last_init_attempt_ms > 5000) { // Retry every 5s
-        //     last_init_attempt_ms = AP_HAL::millis();
-        //     init(); // Attempt to re-initialize
-        // }
-        // If not initialized, do nothing more in update
-        return;
-    }
-
     VL53L1_Error st_status = VL53L1_ERROR_NONE;
     uint8_t data_ready = 0;
     VL53L1_RangingMeasurementData_t measurement_data;
-    bool read_ok = false;
 
-    // Non-blocking check if data is ready
     {
-        WITH_SEMAPHORE(dev->get_semaphore());
+        WITH_SEMAPHORE(dev.get_semaphore());
         st_status = VL53L1_GetMeasurementDataReady(st_dev_ptr, &data_ready);
+        if (st_status != VL53L1_ERROR_NONE) {
+            WITH_SEMAPHORE(_sem);
+            _sensor_lost = true;
+            return;
+        }
+        if (!data_ready) {
+            return;     // sample still integrating
+        }
+
+        st_status = VL53L1_GetRangingMeasurementData(st_dev_ptr, &measurement_data);
+        if (st_status == VL53L1_ERROR_NONE) {
+            // re-arm immediately so the next integration overlaps our processing
+            st_status = VL53L1_ClearInterruptAndStartMeasurement(st_dev_ptr);
+        } else {
+            // try to unstick the sensor even though this read failed
+            VL53L1_ClearInterruptAndStartMeasurement(st_dev_ptr);
+        }
+        if (st_status != VL53L1_ERROR_NONE) {
+            WITH_SEMAPHORE(_sem);
+            _sensor_lost = true;
+            return;
+        }
     }
 
-    // Handle I2C error during check
-    if (st_status != VL53L1_ERROR_NONE) {
-        // Log periodically
-        static uint32_t last_comm_fail_ms = 0;
-        if (AP_HAL::millis() - last_comm_fail_ms > 2000) {
-            gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: GetMeasurementDataReady failed (%d)\n", (int)st_status); //DEBUG
-            last_comm_fail_ms = AP_HAL::millis();
+    const bool valid =
+        measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID ||
+        measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID_MIN_RANGE_CLIPPED ||
+        measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID_NO_WRAP_CHECK_FAIL;
+
+    if (!valid) {
+        return;     // sensor reported a bad sample; update() times it out
+    }
+
+    // Signal quality from the reported sigma: lower sigma is a better fix.
+    const float min_sigma_mm = 5.0f;
+    const float max_sigma_mm = 50.0f;
+    const float sigma_mm = (float)measurement_data.SigmaMilliMeter;
+
+    int8_t quality;
+    if (measurement_data.SigmaMilliMeter == 0) {
+        quality = RangeFinder::SIGNAL_QUALITY_UNKNOWN;
+    } else if (sigma_mm < min_sigma_mm) {
+        quality = 100;
+    } else if (sigma_mm > max_sigma_mm) {
+        quality = 0;
+    } else {
+        quality = (int8_t)constrain_int16(100 * (1.0f - (sigma_mm - min_sigma_mm) / (max_sigma_mm - min_sigma_mm)), 0, 100);
+    }
+
+    WITH_SEMAPHORE(_sem);
+    _distance_m   = measurement_data.RangeMilliMeter * 0.001f;
+    _quality_pct  = quality;
+    _new_sample   = true;
+    _sensor_lost  = false;      // a good read clears an earlier I2C failure
+}
+
+/*
+  Publish whatever the bus thread last read. Main thread, no I2C here.
+ */
+void AP_RangeFinder_FlowDeck::update(void)
+{
+    if (!is_initialized) {
+        return;
+    }
+
+    bool got_sample = false;
+    bool lost = false;
+    {
+        WITH_SEMAPHORE(_sem);
+        if (_new_sample) {
+            state.distance_m         = _distance_m;
+            state.signal_quality_pct = _quality_pct;
+            state.last_reading_ms    = AP_HAL::millis();
+            _new_sample = false;
+            got_sample = true;
         }
-        // If communication fails consistently, sensor is likely disconnected
-        if (AP_HAL::millis() - state.last_reading_ms > SENSOR_TIMEOUT_MS * 2) {
-             set_status(RangeFinder::Status::NotConnected);
-             gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: Sensor Disconnected!\n"); //DEBUG
-             is_initialized = false; // Force re-init attempt next time
-        } else {
-            set_status(RangeFinder::Status::NoData); // Transient error
+        lost = _sensor_lost;
+    }
+
+    if (got_sample) {
+        update_status();
+        if (state.status != RangeFinder::Status::Good) {
+            set_status(RangeFinder::Status::Good);
         }
         return;
     }
 
-    if (!data_ready) {
-        // No new data yet. Check for timeout if we previously had good readings.
-        if ((state.status == RangeFinder::Status::Good) &&
-            (AP_HAL::millis() - state.last_reading_ms > SENSOR_TIMEOUT_MS)) {
-            set_status(RangeFinder::Status::NoData);
-            state.signal_quality_pct = 0;
-        }
-        return; // No new data
+    const uint32_t since_ms = AP_HAL::millis() - state.last_reading_ms;
+
+    // Sustained I2C failure means the deck is gone, not just a dropped sample.
+    if (lost && since_ms > SENSOR_TIMEOUT_MS * 2) {
+        set_status(RangeFinder::Status::NotConnected);
+        state.signal_quality_pct = 0;
+        return;
     }
 
-    // Data is ready, get the measurement data
-    {
-        WITH_SEMAPHORE(dev->get_semaphore());
-        st_status = VL53L1_GetRangingMeasurementData(st_dev_ptr, &measurement_data);
-
-        if (st_status == VL53L1_ERROR_NONE) {
-            // Clear interrupt and start next measurement immediately after successful read
-            st_status = VL53L1_ClearInterruptAndStartMeasurement(st_dev_ptr);
-            if (st_status == VL53L1_ERROR_NONE) {
-                read_ok = true; // Mark as successful read and trigger
-            } else {
-                gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: ClearInterruptAndStartMeasurement failed (%d)\n", (int)st_status); //DEBUG
-                // Continue processing the data we got, but flag init state
-                 is_initialized = false;
-                 // Use NoData to indicate a problem preventing valid data flow
-                 set_status(RangeFinder::Status::NoData);
-            }
-        } else {
-             gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: GetRangingMeasurementData failed (%d)\n", (int)st_status); //DEBUG
-             // Attempt to clear interrupt anyway to potentially recover state
-             VL53L1_ClearInterruptAndStartMeasurement(st_dev_ptr);
-        }
-    } // Semaphore released
-
-
-    if (read_ok) {
-        // Process valid measurement data
-        if (measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID ||
-            measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID_MIN_RANGE_CLIPPED ||
-            measurement_data.RangeStatus == VL53L1_RANGESTATUS_RANGE_VALID_NO_WRAP_CHECK_FAIL)
-        {
-            state.distance_m = measurement_data.RangeMilliMeter * 0.001f;
-            state.last_reading_ms = AP_HAL::millis();
-
-            // Calculate signal quality
-            const float min_sigma_mm = 5.0f;  // Lower sigma = better quality
-            const float max_sigma_mm = 50.0f;
-            float sigma_mm = (float)measurement_data.SigmaMilliMeter; // Adjust scaling based on actual format
-
-            if (measurement_data.SigmaMilliMeter == 0) { // Check for zero sigma
-                state.signal_quality_pct = RangeFinder::SIGNAL_QUALITY_UNKNOWN; // Or 100?
-            } else if (sigma_mm < min_sigma_mm) {
-                state.signal_quality_pct = 100;
-            } else if (sigma_mm > max_sigma_mm) {
-                 state.signal_quality_pct = 0;
-            } else {
-                state.signal_quality_pct = 100 * (1.0f - (sigma_mm - min_sigma_mm) / (max_sigma_mm - min_sigma_mm));
-            }
-            state.signal_quality_pct = constrain_int16(state.signal_quality_pct, 0, 100);
-
-            // Update ArduPilot status based on distance and limits
-            update_status();
-
-            // If status was bad, mark as Good now
-            if (state.status != RangeFinder::Status::Good) {
-                 set_status(RangeFinder::Status::Good);
-            }
-
-        } else {
-            // Measurement reported an error status by the sensor
-             static uint32_t last_err_log_ms = 0;
-             if (AP_HAL::millis() - last_err_log_ms > 2000) {
-                  gcs().send_text(MAV_SEVERITY_ALERT, "VL53L1X: Invalid measurement status: %u\n", measurement_data.RangeStatus); //DEBUG
-                  last_err_log_ms = AP_HAL::millis();
-             }
-            set_status(RangeFinder::Status::NoData); // Report NoData for transient sensor errors
-            state.signal_quality_pct = 0;
-        }
-
-    } else {
-        // Read failed or ClearInterrupt failed
-        if (state.status == RangeFinder::Status::Good || state.status == RangeFinder::Status::NoData) {
-            // If we were previously working, mark as NoData or Error
-            if (AP_HAL::millis() - state.last_reading_ms > SENSOR_TIMEOUT_MS) {
-                 set_status(RangeFinder::Status::NoData);
-                 state.signal_quality_pct = 0;
-            }
-        }
-        // If ClearInterrupt failed, is_initialized is false, will likely become NotConnected soon
+    if (since_ms > SENSOR_TIMEOUT_MS) {
+        set_status(RangeFinder::Status::NoData);
+        state.signal_quality_pct = 0;
     }
 }
 
 void AP_RangeFinder_FlowDeck::timer(void)
 {
-    //
+    sample();
 }
 
 #endif // AP_RANGEFINDER_FLOWDECK_ENABLED

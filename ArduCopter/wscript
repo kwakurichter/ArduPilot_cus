@@ -1,16 +1,14 @@
-#!/usr/bin/env python
-# encoding: utf-8
+#!/usr/bin/env python3
 
 def build(bld):
     vehicle = bld.path.name
     bld.env.append_value(
         'INCLUDES',
-        [   
+        [
             'libraries/vl53l1x_api/core/inc',       # for Crazyflie FlowDeck support
             'libraries/vl53l1x_api/platform/inc',   # for Crazyflie FlowDeck support
-            'modules/libdw1000/inc',                # for Crazyflie LocoDeck support
         ],
-    )        
+    )
     bld.ap_stlib(
         name=vehicle + '_libs',
         ap_vehicle=vehicle,
@@ -23,19 +21,18 @@ def build(bld):
             'AC_WPNav',
             'AP_Camera',
             'AP_IRLock',
-            'AP_InertialNav',
             'AP_Motors',
             'AP_Avoidance',
             'AP_AdvancedFailsafe',
             'AP_SmartRTL',
             'AP_WheelEncoder',
             'AP_Winch',
-            'AP_Follow',
             'AP_LTM_Telem',
             'AP_Devo_Telem',
             'AC_AutoTune',
             'AP_KDECAN',
             'AP_SurfaceDistance',
+            'AP_Syslink',   # Crazyflie nRF51822 radio co-processor
             'vl53l1x_api',  # Added for FlowDeck Support via ST VL53L1x API
         ],
     )

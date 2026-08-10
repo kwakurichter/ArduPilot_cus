@@ -4,8 +4,8 @@
 # MCU class and specific type
 MCU STM32F4xx STM32F405xx
 
-# board ID for firmware load
-APJ_BOARD_ID 12
+# board ID. See Tools/AP_Bootloader/board_types.txt
+APJ_BOARD_ID TARGET_HW_CRAZYFLIE
 
 # crystal frequency
 OSCILLATOR_HZ 8000000
@@ -73,17 +73,17 @@ PB6 I2C1_SCL I2C1 # E_SCL
 PB7 I2C1_SDA I2C1 # E_SCL
 
 # radio setup 
-PA4 NRF_FLOW_CTRL INPUT # goes low when we can write to uart
+PA4 NRF_FLOW_CTRL INPUT GPIO(62) # goes low when we can write to uart
 #PB13 NRF_SWCLK
 #PB15 NRF_SWIO
 PC6 USART6_TX USART6 # NRF_RT
 PC7 USART6_RX USART6 # NRF_RX
 
 # USART3 for telemetry
-# PC10 USART3_TX USART3 # E_TX1
-# PC11 USART3_RX USART3 # E_RX1
-PC10 DW1000_RESET INPUT PULLUP   GPIO(61)  # RSTn (released=input, pulsed low in sw)
-PC11 DW1000_IRQ   INPUT PULLDOWN GPIO(60)  # IRQ (active high), polled as a flag
+PC10 USART3_TX USART3 # E_TX1
+PC11 USART3_RX USART3 # E_RX1
+# PC10 DW1000_RESET INPUT PULLUP   GPIO(61)  # RSTn (released=input, pulsed low in sw)
+# PC11 DW1000_IRQ   INPUT PULLDOWN GPIO(60)  # IRQ (active high), polled as a flag
 
 # setup I2C order
 I2C_ORDER I2C3 I2C1
@@ -92,8 +92,20 @@ I2C_ORDER I2C3 I2C1
 define HAL_I2C_MAX_CLOCK 400000
 
 # order of UARTs (and USB)
-# SERIAL_ORDER OTG1 USART3 USART6 USART2
-SERIAL_ORDER OTG1 EMPTY USART6 USART2
+SERIAL_ORDER OTG1 USART3 USART6 USART2
+# SERIAL_ORDER OTG1 EMPTY USART6 USART2
+
+# SERIAL2 is the nRF51822 radio, driven by AP_Syslink which owns the port
+# outright and registers its own virtual MAVLink port. This must not be
+# SerialProtocol_None: the serial manager calls disable_rxtx() on a None
+# port, and on STM32F4 nothing restores the pin muxing afterwards.
+define DEFAULT_SERIAL2_PROTOCOL SerialProtocol_Syslink
+
+# AP_Syslink registers a virtual MAVLink port for the radio. Upstream gates
+# this on flash size > 1MB, which excludes the F405, so it must be forced on
+# here or AP_Syslink_MAVLinkPort compiles away and the downlink goes silent.
+define AP_SERIALMANAGER_REGISTER_ENABLED 1
+define DEFAULT_SERIAL2_BAUD 1000
 
 define HAL_STORAGE_SIZE 15360
 STORAGE_FLASH_PAGE 1
@@ -121,7 +133,7 @@ BARO LPS2XH:probe_InvensenseIMU I2C:0:0x5D 0x69
 # no built-in compass, but probe the i2c bus for all possible
 # external compass types
 define ALLOW_ARM_NO_COMPASS
-define HAL_PROBE_EXTERNAL_I2C_COMPASSES
+define AP_COMPASS_PROBING_ENABLED 1
 define HAL_I2C_INTERNAL_MASK 0
 define HAL_COMPASS_AUTO_ROT_DEFAULT 2
 
@@ -142,14 +154,92 @@ define AP_RANGEFINDER_ENABLED 1       #FlowDeck Support
 define AP_OPTICALFLOW_ENABLED 1       #FlowDeck Support
 define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 # define AP_SCRIPTING_ENABLED 1       #Lua Script Support
+# define SCRIPTING_STACK_SIZE (12*1024) #Default is 17kB. 12 is sufficient for simple state machines
 
-undef HAL_GYROFFT_ENABLED             #Notch Filtering Support
-define HAL_GYROFFT_ENABLED 1
+# undef HAL_GYROFFT_ENABLED             #Notch Filtering Support
+# define HAL_GYROFFT_ENABLED 1
 
 define HAL_CF21                        #Crazyflie advanced features support
 
-define HAL_VISUALODOM_ENABLED 1        #OptiTrack Support
-define EK3_FEATURE_EXTERNAL_NAV 1      #OptiTrack Support
+# ---------------------------------------------------------------------------
+# Flash diet to make room for Lua scripting on the 1MB F405.
+# Comment a line back out to get the feature back.
+# ---------------------------------------------------------------------------
+
+# Hardware the Crazyflie has no connector for (~46 KB)
+define AP_FRSKY_TELEM_ENABLED 0
+define AP_CAMERA_ENABLED 0
+define AC_PRECLAND_ENABLED 0
+define HAL_RALLY_ENABLED 0
+define AP_RSSI_ENABLED 0
+define HAL_PARACHUTE_ENABLED 0
+define AP_VIDEOTX_ENABLED 0
+define AP_RELAY_ENABLED 0
+define AP_SERVORELAYEVENTS_ENABLED 0
+define AP_ICENGINE_ENABLED 0
+define HAL_EFI_ENABLED 0
+undef AP_LANDINGGEAR_ENABLED
+define AP_LANDINGGEAR_ENABLED 0
+
+# Terrain database needs SD card map tiles (~5.5 KB)
+define AP_TERRAIN_AVAILABLE 0
+
+# buzzer (~2.8 KB)
+define AP_NOTIFY_TONEALARM_ENABLED 0
+
+# No airspeed sensor. minimize_common.inc force-enables the individual
+# backends, so each has to be turned off or it fails to compile against
+# a base class that no longer exists (~8.5 KB)
+define AP_AIRSPEED_ENABLED 0
+undef AP_AIRSPEED_MS4525_ENABLED
+undef AP_AIRSPEED_ASP5033_ENABLED
+undef AP_AIRSPEED_ANALOG_ENABLED
+undef AP_AIRSPEED_MS5525_ENABLED
+undef AP_AIRSPEED_SDP3X_ENABLED
+undef AP_AIRSPEED_NMEA_ENABLED
+undef AP_AIRSPEED_DRONECAN_ENABLED
+define AP_AIRSPEED_MS4525_ENABLED 0
+define AP_AIRSPEED_ASP5033_ENABLED 0
+define AP_AIRSPEED_ANALOG_ENABLED 0
+define AP_AIRSPEED_MS5525_ENABLED 0
+define AP_AIRSPEED_SDP3X_ENABLED 0
+define AP_AIRSPEED_NMEA_ENABLED 0
+define AP_AIRSPEED_DRONECAN_ENABLED 0
+
+# No proximity sensor (~6.9 KB)
+define AP_AVOIDANCE_ENABLED 0
+define HAL_PROXIMITY_ENABLED 0
+
+# Sensor backends cut down to what a Crazyflie deck actually carries
+# rangefinder ~18.6 KB, opticalflow ~2.7 KB
+define AP_RANGEFINDER_BACKEND_DEFAULT_ENABLED 0
+define AP_RANGEFINDER_FLOWDECK_ENABLED 1
+
+define AP_OPTICALFLOW_BACKEND_DEFAULT_ENABLED 0
+define AP_OPTICALFLOW_FLOWDECK_ENABLED 1
+
+# Drops probing for every external I2C magnetometer (~17 KB)
+# define AP_COMPASS_QMC5883L_ENABLED 1
+define AP_COMPASS_I2C_BACKEND_DEFAULT_ENABLED 0
+
+# No GPS receiver indoors; the AP_GPS front end stays for EKF plumbing (~9.3 KB)
+undef AP_GPS_UBLOX_ENABLED
+define AP_GPS_UBLOX_ENABLED 0
+
+# Flight modes a 27g indoor quad has no use for. These were previously
+# uncommented in ArduCopter/APM_Config.h, which applied them to every board
+# built from this tree; they belong here with the rest of the flash diet.
+# minimize_common.inc already covers MOUNT, OSD, ZIGZAG and FOLLOW.
+define MODE_ACRO_ENABLED 0
+define MODE_BRAKE_ENABLED 0
+define MODE_DRIFT_ENABLED 0
+define MODE_FLIP_ENABLED 0
+define MODE_SMARTRTL_ENABLED 0
+define MODE_SPORT_ENABLED 0
+define MODE_THROW_ENABLED 0
+
+# define HAL_VISUALODOM_ENABLED 1        #OptiTrack Support
+# define EK3_FEATURE_EXTERNAL_NAV 1      #OptiTrack Support
 undef MODE_GUIDED_NOGPS_ENABLED        #AI Deck support
 define MODE_GUIDED_NOGPS_ENABLED 1
 

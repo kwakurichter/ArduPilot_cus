@@ -293,6 +293,11 @@ public:
     void rcout_thread();
 
     /*
+      Force group trigger from all callers rather than just from the main thread
+    */
+    void force_trigger_groups(bool onoff) override { force_trigger = onoff; }
+
+    /*
      timer information
      */
     void timer_info(ExpandingString &str) override;
@@ -417,7 +422,7 @@ private:
             uint8_t prev_telem_chan;
             Shared_DMA *curr_ic_dma_handle; // a shortcut to avoid logic errors involving the wrong lock
             uint16_t telempsc;
-            dmar_uint_t dma_buffer_copy[GCR_TELEMETRY_BUFFER_LEN];
+            dmar_uint_t dma_buffer_copy[GCR_TELEMETRY_BIT_LEN];
 #if RCOU_DSHOT_TIMING_DEBUG
             uint16_t telem_rate[4];
             uint16_t telem_err_rate[4];
@@ -591,6 +596,8 @@ private:
     uint8_t _dshot_cycle;
     // virtual timer for post-push() pulses
     virtual_timer_t _dshot_rate_timer;
+    // force triggering of groups, this is used by the rate thread to ensure output occurs
+    bool force_trigger;
 
 #if HAL_DSHOT_ENABLED
     // dshot commands
@@ -750,11 +757,21 @@ private:
     static void bdshot_config_icu_dshot_f1(stm32_tim_t* TIMx, uint8_t chan, uint8_t ccr_ch);
     static uint32_t bdshot_get_output_rate_hz(const enum output_mode mode);
 
+    /*
+      Crazyflie 2.1 brushless deck hooks, implemented in RCOutput_CF21.cpp.
+      Empty inlines on every other board, so the call sites in RCOutput.cpp and
+      RCOutput_bdshot.cpp stay unconditional and compile away to nothing here.
+     */
 #ifdef HAL_CF21_BRUSHLESS
     static bool cf21_is_tim2_motor_group(const pwm_group &group);
     static void cf21_set_tim2_motor_lines_tx(const pwm_group &group, bool bidir);
     static void cf21_set_tim2_motor_lines_rx(const pwm_group &group);
     static void cf21_reset_escs_for_bdshot(const pwm_group &group);
+#else
+    static bool cf21_is_tim2_motor_group(const pwm_group &) { return false; }
+    static void cf21_set_tim2_motor_lines_tx(const pwm_group &, bool) {}
+    static void cf21_set_tim2_motor_lines_rx(const pwm_group &) {}
+    static void cf21_reset_escs_for_bdshot(const pwm_group &) {}
 #endif
 
     /*

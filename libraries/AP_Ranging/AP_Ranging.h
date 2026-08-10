@@ -96,6 +96,12 @@ private:
     AP_Enum<Type> _type;
     AP_Int16      _node_id;   // this node's UWB address (RNG_NODE_ID)
     AP_Int8       _debug;     // debug verbosity (RNG_DEBUG): 0=off
+    AP_Int8       _num_nodes; // number of nodes in the network (RNG_NUM_NODES)
+    AP_Int16      _ant_delay; // DW1000 antenna delay, device ticks (RNG_ANT_DLY)
+    AP_Int16      _poll_ms;   // base poll cadence, ms (RNG_POLL_MS)
+    AP_Int8       _channel;   // UWB RF channel (RNG_CHAN)
+    AP_Int16      _reply_us;  // TWR reply delay, us (RNG_REPLY_US)
+    AP_Int16      _xchg_ms;   // exchange timeout, ms (RNG_XCHG_MS)
 
     // backend driver
     AP_Ranging_Backend *_driver;

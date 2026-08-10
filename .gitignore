@@ -151,7 +151,8 @@ segv_*out
 /ArduSub/scripts/
 /ArduSub/repl/
 persistent.dat
-dumpstack_*out
+dumpstack*out
+dumpcore*out
 build.tmp.binaries/
 tasklist.json
 modules/esp_idf
@@ -171,10 +172,7 @@ ENV/
 env.bak/
 venv.bak/
 autotest_result_*_junit.xml
-
-# Ignore ESP-IDF SDK defines
-/libraries/AP_HAL_ESP32/targets/esp32/esp-idf/sdkconfig
-/libraries/AP_HAL_ESP32/targets/esp32s3/esp-idf/sdkconfig
+.python-version
 
 # Ignore ArduSwarm stuff
 /libraries/AP_Ranging/dev_notes.md

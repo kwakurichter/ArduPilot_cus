@@ -5,7 +5,7 @@
 #if AP_RANGEFINDER_FLOWDECK_ENABLED
 
 #include "AP_RangeFinder.h"
-#include "AP_RangeFinder_Backend.h"
+#include "AP_RangeFinder_Backend_I2C.h"
 
 #include <AP_HAL/I2CDevice.h>
 #include <AP_HAL/utility/sparse-endian.h>
@@ -20,15 +20,17 @@ extern "C" {
 }
 
 
-class AP_RangeFinder_FlowDeck : public AP_RangeFinder_Backend
+class AP_RangeFinder_FlowDeck : public AP_RangeFinder_Backend_I2C
 {
 
 public:
-    // Constructor
-    AP_RangeFinder_FlowDeck(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev);
-
     // Static detection function
-    static AP_RangeFinder_Backend *detect(RangeFinder::RangeFinder_State &_state, AP_RangeFinder_Params &_params, AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev);
+    static AP_RangeFinder_Backend *detect(RangeFinder::RangeFinder_State &_state,
+                                          AP_RangeFinder_Params &_params,
+                                          class AP_HAL::I2CDevice &dev) {
+        // this will free the object if configuration fails:
+        return configure(NEW_NOTHROW AP_RangeFinder_FlowDeck(_state, _params, dev));
+    }
 
     // Update state method
     void update(void) override;
@@ -40,8 +42,8 @@ protected:
     }
 
 private:
-    // I2C device handle
-    AP_HAL::OwnPtr<AP_HAL::I2CDevice> dev;
+    // constructor; `dev` is owned by the base class
+    using AP_RangeFinder_Backend_I2C::AP_RangeFinder_Backend_I2C;
 
     /* Full ST device wrapper – contains LL driver data plus user fields */
     VL53L1_Dev_t st_dev;
@@ -51,9 +53,28 @@ private:
 
     bool is_initialized = false;    // Initialization status flag
 
-    bool init();
+    bool init() override;
 
+    /*
+      Runs on the I2C bus thread. The ST API talks to the sensor over several
+      multi-register transfers per sample, which is milliseconds of blocking
+      I2C - far past the 100us the read_rangefinder scheduler slot allows, so
+      it must not happen on the main thread.
+     */
     void timer();
+
+    // one I2C read cycle; called only from timer()
+    void sample();
+
+    // sample handed from timer() to update(), guarded by _sem
+    HAL_Semaphore _sem;
+    float    _distance_m;
+    int8_t   _quality_pct;
+    bool     _new_sample;
+    bool     _sensor_lost;          // timer() gave up; update() reports it
+
+    // inter-measurement period, chosen from the distance mode in init()
+    uint32_t _measurement_period_ms;
 
 };
 
