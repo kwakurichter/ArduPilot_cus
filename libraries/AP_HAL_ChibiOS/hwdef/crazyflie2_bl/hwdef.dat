@@ -168,6 +168,15 @@ define AP_BATTERY_SCRIPTING_ENABLED 1 #Battery Monitor Support
 
 define HAL_CF21                        #Crazyflie advanced features support
 
+# AP_SwarmMesh over the nRF51 radio. Upstream gates the library on >2MB of
+# flash, which excludes the F405, so it has to be forced on here along with
+# the syslink transport. Peer table is capped hard: PeerState is ~168 bytes
+# and this part has nothing like the RAM the default tiers assume.
+define AP_SWARMMESH_ENABLED 1
+define AP_SWARMMESH_SYSLINK_ENABLED 1
+define AP_SWARMMESH_SERIAL_ENABLED 0
+define AP_SWARMMESH_MAX_PEERS 8
+
 # Identify this build as the Crazyflie port rather than stock ArduCopter.
 # Upstream's vendor hook: this becomes the GCS-visible string, while
 # THISFIRMWARE is preserved as fw_string_original and still written to logs.

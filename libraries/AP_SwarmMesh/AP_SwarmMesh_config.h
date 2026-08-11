@@ -14,6 +14,11 @@
 #define AP_SWARMMESH_SERIAL_ENABLED AP_SWARMMESH_ENABLED
 #endif
 
+#ifndef AP_SWARMMESH_SYSLINK_ENABLED
+// off unless a board asks for it: only the Crazyflie has an nRF51 to talk to
+#define AP_SWARMMESH_SYSLINK_ENABLED 0
+#endif
+
 #ifndef AP_SWARMMESH_SITL_ENABLED
 #define AP_SWARMMESH_SITL_ENABLED (AP_SWARMMESH_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_SITL)
 #endif

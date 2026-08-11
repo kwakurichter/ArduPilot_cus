@@ -23,6 +23,10 @@
 #include "AP_SwarmMesh_Serial.h"
 #endif
 
+#if AP_SWARMMESH_SYSLINK_ENABLED
+#include "AP_SwarmMesh_Syslink.h"
+#endif
+
 #if AP_SWARMMESH_SITL_ENABLED
 #include "AP_SwarmMesh_SITL.h"
 #endif
@@ -43,7 +47,7 @@ const AP_Param::GroupInfo AP_SwarmMesh::var_info[] = {
     // @Param: _TYPE
     // @DisplayName: Communication backend
     // @Description: Which communication backend are you using
-    // @Values: 0:None,1:Serial,10:SITL
+    // @Values: 0:None,1:Serial,2:Syslink,10:SITL
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE", 0, AP_SwarmMesh, _type, 0, AP_PARAM_FLAG_ENABLE),
 
@@ -192,6 +196,11 @@ void AP_SwarmMesh::init(void)
     case Type::Serial:
 #if AP_SWARMMESH_SERIAL_ENABLED
         _driver = NEW_NOTHROW AP_SwarmMesh_Serial(*this);
+#endif
+        break;
+    case Type::Syslink:
+#if AP_SWARMMESH_SYSLINK_ENABLED
+        _driver = NEW_NOTHROW AP_SwarmMesh_Syslink(*this);
 #endif
         break;
 #if AP_SWARMMESH_SITL_ENABLED

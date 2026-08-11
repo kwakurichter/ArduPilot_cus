@@ -42,6 +42,7 @@ public:
     enum class Type : uint8_t {
         None    = 0,
         Serial  = 1,
+        Syslink = 2,
 #if AP_SWARMMESH_SITL_ENABLED
         SITL    = 10
 #endif

@@ -86,6 +86,7 @@ public:
         // Reserving Serial Protocol 47 for SerialProtocol_IQ
         SerialProtocol_PPP = 48,
         SerialProtocol_IBUS_Telem = 49,                // i-BUS telemetry data, ie via sensor port of FS-iA6B
+        SerialProtocol_IOMCU = 50,                     // IOMCU
         SerialProtocol_SwarmMesh = 51,                 // AP_SwarmMesh, upstream PR 33881
         SerialProtocol_Syslink = 52,                   // Crazyflie nRF51822 radio co-processor, see AP_Syslink
         SerialProtocol_NumProtocols                    // must be the last value
