@@ -80,10 +80,10 @@ PC6 USART6_TX USART6 # NRF_RT
 PC7 USART6_RX USART6 # NRF_RX
 
 # USART3 for telemetry
-PC10 USART3_TX USART3 # E_TX1
-PC11 USART3_RX USART3 # E_RX1
-# PC10 DW1000_RESET INPUT PULLUP   GPIO(61)  # RSTn (released=input, pulsed low in sw)
-# PC11 DW1000_IRQ   INPUT PULLDOWN GPIO(60)  # IRQ (active high), polled as a flag
+# PC10 USART3_TX USART3 # E_TX1
+# PC11 USART3_RX USART3 # E_RX1
+PC10 DW1000_RESET INPUT PULLUP   GPIO(61)  # RSTn (released=input, pulsed low in sw)
+PC11 DW1000_IRQ   INPUT PULLDOWN GPIO(60)  # IRQ (active high), polled as a flag
 
 # setup I2C order
 I2C_ORDER I2C3 I2C1
@@ -92,8 +92,8 @@ I2C_ORDER I2C3 I2C1
 define HAL_I2C_MAX_CLOCK 400000
 
 # order of UARTs (and USB)
-SERIAL_ORDER OTG1 USART3 USART6 USART2
-# SERIAL_ORDER OTG1 EMPTY USART6 USART2
+# SERIAL_ORDER OTG1 USART3 USART6 USART2
+SERIAL_ORDER OTG1 EMPTY USART6 USART2
 
 # SERIAL2 is the nRF51822 radio, driven by AP_Syslink which owns the port
 # outright and registers its own virtual MAVLink port. This must not be
