@@ -85,7 +85,7 @@ PC11 USART3_RX USART3 # E_RX1
 
 # Loco Positioning Deck
 # PC10 DW1000_RESET INPUT PULLUP   GPIO(61)  # RSTn (released=input, pulsed low in sw)
-PC11 DW1000_IRQ   INPUT PULLDOWN GPIO(60)  # IRQ (active high), polled as a flag
+PB5 DW1000_IRQ   INPUT PULLDOWN GPIO(60)  # IRQ (active high), polled as a flag
 
 # setup I2C order
 I2C_ORDER I2C3 I2C1
