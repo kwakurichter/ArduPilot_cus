@@ -14,6 +14,7 @@
  */
 
 #include "AP_Ranging_Backend.h"
+#include <GCS_MAVLink/GCS.h>
 
 #if AP_RANGING_ENABLED
 
@@ -24,9 +25,15 @@ AP_Ranging_Backend::AP_Ranging_Backend(AP_Ranging &frontend) : _frontend(fronten
 }
 
 // Get parameters from the frontend
-uint8_t AP_Ranging_Backend::get_node_id() const    { return (uint8_t)_frontend._node_id.get(); }
+uint8_t AP_Ranging_Backend::get_node_id() const    { return gcs().sysid_this_mav(); }
 int8_t AP_Ranging_Backend::get_debug() const       { return _frontend._debug.get(); }
-uint8_t AP_Ranging_Backend::get_num_nodes() const  { return (uint8_t)_frontend._num_nodes.get(); }
+uint8_t AP_Ranging_Backend::get_peer_id(uint8_t n) const
+{
+    if (n >= AP_RANGING_MAX_NODES) {
+        return 0;
+    }
+    return (uint8_t)constrain_int16(_frontend._peer_id[n].get(), 0, 255);
+}
 uint16_t AP_Ranging_Backend::get_ant_delay() const { return (uint16_t)_frontend._ant_delay.get(); }
 uint16_t AP_Ranging_Backend::get_poll_ms() const   { return (uint16_t)_frontend._poll_ms.get(); }
 uint8_t  AP_Ranging_Backend::get_channel() const   { return (uint8_t)_frontend._channel.get(); }

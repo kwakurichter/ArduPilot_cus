@@ -35,12 +35,7 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE", 0, AP_Ranging, _type, 0, AP_PARAM_FLAG_ENABLE),
 
-    // @Param: _NODE_ID
-    // @DisplayName: UWB node address, should be contiguous from 0.
-    // @Description: This vehicle's UWB node address. Each ranging node on the network must have a unique id.
-    // @Range: 0 255
-    // @User: Advanced
-    AP_GROUPINFO("_NODE_ID", 1, AP_Ranging, _node_id, 0),
+    // index 1 was NODE_ID; this node's id is MAV_SYSID now
 
     // @Param: _DEBUG
     // @DisplayName: UWB ranging debug output
@@ -49,12 +44,35 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_DEBUG", 2, AP_Ranging, _debug, 0),
 
-    // @Param: _NUM_NODES
-    // @DisplayName: UWB network node count
-    // @Description: Number of nodes in the UWB network. Each node initiates ranging to node ids 0..(RNG_NUM_NODES-1), skipping its own RNG_NODE_ID. Node ids should be contiguous from 0.
-    // @Range: 1 8
-    // @User: Advanced
-    AP_GROUPINFO("_NUM_NODES", 3, AP_Ranging, _num_nodes, 2),
+    // index 3 was NUM_NODES; the peer roster below replaced it
+
+    // @Param: _PEER_1
+    // @DisplayName: Ranging peer 1 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_1", 10, AP_Ranging, _peer_id[0], 0),
+
+    // @Param: _PEER_2
+    // @DisplayName: Ranging peer 2 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_2", 11, AP_Ranging, _peer_id[1], 0),
+
+    // @Param: _PEER_3
+    // @DisplayName: Ranging peer 3 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_3", 12, AP_Ranging, _peer_id[2], 0),
+
+    // @Param: _PEER_4
+    // @DisplayName: Ranging peer 4 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_4", 13, AP_Ranging, _peer_id[3], 0),
 
     // @Param: _ANT_DLY
     // @DisplayName: UWB antenna delay
@@ -312,14 +330,14 @@ void AP_Ranging::send_tunnel()
     };
     struct PACKED Payload {
         uint8_t  version;    // bump if the layout below ever changes
-        uint8_t  node_id;    // this vehicle
+        uint8_t  node_id;    // this vehicle's MAV_SYSID
         uint8_t  count;      // slots populated
         uint8_t  reserved;
         PeerSlot peer[AP_RANGING_MAX_NODES];
     } payload {};
 
     payload.version = 1;
-    payload.node_id = uint8_t(constrain_int16(_node_id.get(), 0, 255));
+    payload.node_id = gcs().sysid_this_mav();
     payload.count   = num_nodes;
 
     for (uint8_t i = 0; i < AP_RANGING_MAX_NODES; i++) {

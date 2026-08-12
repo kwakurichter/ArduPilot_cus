@@ -118,7 +118,6 @@ private:
 
     // cached config
     uint8_t  _node_id = 0;
-    uint8_t  _num_nodes = 2;
 
     // Tuning now comes from params (RNG_POLL_MS / _REPLY_US / _XCHG_MS / _CHAN)
     // via the get_*() accessors. Reply delay is converted to device ticks here:

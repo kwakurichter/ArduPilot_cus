@@ -50,8 +50,9 @@ protected:
     // debug verbosity (RNG_DEBUG); >0 means debug output is enabled
     int8_t get_debug() const;
 
-    // number of nodes in the network (RNG_NUM_NODES)
-    uint8_t get_num_nodes() const;
+    // MAV_SYSID of peer slot n from the RNG_PEER_n roster, 0 if unused
+    // MAV_SYSID of peer slot n from the RNG_PEER_n roster, 0 if unused
+    uint8_t get_peer_id(uint8_t n) const;
 
     // DW1000 antenna delay in device ticks (RNG_ANT_DLY)
     uint16_t get_ant_delay() const;

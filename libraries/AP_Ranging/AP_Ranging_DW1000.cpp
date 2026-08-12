@@ -87,8 +87,7 @@ bool AP_Ranging_DW1000::init_device()
         }
 
         _node_id   = get_node_id();
-        _num_nodes = get_num_nodes();
-        _next_peer = _node_id;   // round-robin starts just past us
+        _next_peer = 0;          // roster index, not an id: start of RNG_PEER_n
         configure_radio();
         arm_receiver();          // start listening
     }
@@ -97,7 +96,13 @@ bool AP_Ranging_DW1000::init_device()
     _dev->register_periodic_callback(300, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void));
 
     _initialised = true;
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: ready (node %u of %u)", (unsigned)_node_id, (unsigned)_num_nodes);
+    uint8_t peers = 0;
+    for (uint8_t i = 0; i < AP_RANGING_MAX_NODES; i++) {
+        if (get_peer_id(i) != 0 && get_peer_id(i) != _node_id) {
+            peers++;
+        }
+    }
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: ready (sysid %u, %u peers)", (unsigned)_node_id, (unsigned)peers);
     return true;
 }
 
@@ -212,17 +217,22 @@ uint64_t AP_Ranging_DW1000::reply_delay_ticks() const
     return (uint64_t)((double)get_reply_us() / TIME_RES);
 }
 
-// round-robin the next neighbour id in [0, _num_nodes), skipping our own id.
-// returns _node_id if there is no other node to poll.
+/*
+  Round-robin the configured peer roster, skipping empty slots and our own id.
+  Returns _node_id when there is nobody to poll, which start_poll() treats as
+  "do nothing".
+
+  This walks RNG_PEER_1..n rather than counting from zero: node ids are
+  MAV_SYSIDs now, so they are sparse. The old form polled 0.._num_nodes-1
+  directly, which only worked while ids happened to be dense and zero based.
+ */
 uint8_t AP_Ranging_DW1000::next_poll_target()
 {
-    if (_num_nodes <= 1) {
-        return _node_id;
-    }
-    for (uint8_t i = 0; i < _num_nodes; i++) {
-        _next_peer = (_next_peer + 1) % _num_nodes;
-        if (_next_peer != _node_id) {
-            return _next_peer;
+    for (uint8_t i = 0; i < AP_RANGING_MAX_NODES; i++) {
+        _next_peer = (_next_peer + 1) % AP_RANGING_MAX_NODES;
+        const uint8_t id = get_peer_id(_next_peer);
+        if (id != 0 && id != _node_id) {
+            return id;
         }
     }
     return _node_id;
