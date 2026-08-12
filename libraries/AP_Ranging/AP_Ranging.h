@@ -85,6 +85,14 @@ public:
     // a method for vehicles to call to make onboard log messages
     void log();
 
+    /*
+      Emit the peer table to the companion computer as a MAVLink TUNNEL on the
+      port named by RNG_FWD_PORT. Rate limited internally and deliberately not
+      tied to the log bitmask: forwarding is a live data path, and coupling it
+      to logging means it silently stops when the bitmask is trimmed.
+     */
+    void send_tunnel();
+
 private:
 
     static AP_Ranging *_singleton;
@@ -102,6 +110,12 @@ private:
     AP_Int8       _channel;   // UWB RF channel (RNG_CHAN)
     AP_Int16      _reply_us;  // TWR reply delay, us (RNG_REPLY_US)
     AP_Int16      _xchg_ms;   // exchange timeout, ms (RNG_XCHG_MS)
+    AP_Int8       _fwd_port;  // serial port to forward the peer table to (RNG_FWD_PORT), -1 off
+
+    // resolved once per RNG_FWD_PORT change rather than per send
+    int8_t   _fwd_port_resolved = -2;   // -2 == never resolved
+    uint8_t  _fwd_chan = UINT8_MAX;     // UINT8_MAX == port is not a MAVLink port
+    uint32_t _last_tunnel_ms;
 
     // backend driver
     AP_Ranging_Backend *_driver;

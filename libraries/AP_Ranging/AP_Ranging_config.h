@@ -24,3 +24,12 @@
 #ifndef AP_RANGING_DW1000_ENABLED
 #define AP_RANGING_DW1000_ENABLED AP_RANGING_BACKEND_DEFAULT_ENABLED
 #endif
+
+/*
+  MAV_TUNNEL_PAYLOAD_TYPE for the forwarded peer table. 200-212 are taken by
+  STORM32 and ModalAI; this is an unallocated value rather than a registered
+  one, so it could collide if the enum is ever extended over it.
+ */
+#ifndef AP_RANGING_TUNNEL_PAYLOAD_TYPE
+#define AP_RANGING_TUNNEL_PAYLOAD_TYPE 220
+#endif

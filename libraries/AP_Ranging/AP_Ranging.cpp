@@ -21,6 +21,7 @@
 #include "AP_Ranging_DW1000.h"
 
 #include <AP_Logger/AP_Logger.h>
+#include <GCS_MAVLink/GCS.h>
 
 extern const AP_HAL::HAL &hal;
 
@@ -95,6 +96,13 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_XCHG_MS", 8, AP_Ranging, _xchg_ms, 30),
 
+    // @Param: _FWD_PORT
+    // @DisplayName: Ranging forward serial port
+    // @Description: Serial port number that the UWB peer table is forwarded to as a MAVLink TUNNEL message, so a companion computer can consume ranges without parsing logs. Slots are stable, so a given peer keeps its slot index for the life of the vehicle and can be tracked across messages. The port must already be configured as a MAVLink port. -1 disables forwarding.
+    // @Range: -1 9
+    // @User: Advanced
+    AP_GROUPINFO("_FWD_PORT", 9, AP_Ranging, _fwd_port, -1),
+
     AP_GROUPEND
 };
 
@@ -151,6 +159,7 @@ void AP_Ranging::update(void)
         return;
     }
     _driver->update();
+    send_tunnel();
 }
 
 // return the number of peer nodes currently tracked
@@ -254,6 +263,91 @@ void AP_Ranging::log()
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
 }
 #endif
+
+
+/*
+  Forward the peer table to a companion computer as a MAVLink TUNNEL.
+
+  TUNNEL rather than a purpose-built message because a fork cannot add to the
+  common dialect without both ends carrying generated headers, and rather than
+  DISTANCE_SENSOR because that means "obstacle at this orientation" and is
+  consumed by ArduPilot's own proximity and avoidance code - peer ranges would
+  be read as obstacles on a link the flight controller also parses.
+
+  The slot index is carried explicitly rather than implied by array position.
+  A node keeps its slot for the life of the vehicle, so the companion can
+  difference a peer's range over time, and an explicit index keeps that true
+  even if the payload is ever reordered or truncated.
+ */
+void AP_Ranging::send_tunnel()
+{
+#if HAL_GCS_ENABLED
+    const int8_t port = _fwd_port.get();
+    if (port < 0 || !device_ready()) {
+        return;
+    }
+
+    // 10Hz, matching the log cadence; the ranging cycle is slower than this
+    const uint32_t now_ms = AP_HAL::millis();
+    if (now_ms - _last_tunnel_ms < 100) {
+        return;
+    }
+    _last_tunnel_ms = now_ms;
+
+    // resolve the port to a channel once, and again only when the parameter moves
+    if (port != _fwd_port_resolved) {
+        _fwd_port_resolved = port;
+        _fwd_chan = gcs().get_channel_from_port_number((uint8_t)port);
+    }
+    if (_fwd_chan == UINT8_MAX) {
+        return;     // not configured as a MAVLink port
+    }
+
+    struct PACKED PeerSlot {
+        uint8_t slot;        // stable slot index, not implied by position
+        uint8_t peer_id;     // 0 when the slot is unused
+        uint8_t healthy;     // 1 if this range is recent
+        uint8_t reserved;
+        float   range_m;
+    };
+    struct PACKED Payload {
+        uint8_t  version;    // bump if the layout below ever changes
+        uint8_t  node_id;    // this vehicle
+        uint8_t  count;      // slots populated
+        uint8_t  reserved;
+        PeerSlot peer[AP_RANGING_MAX_NODES];
+    } payload {};
+
+    payload.version = 1;
+    payload.node_id = uint8_t(constrain_int16(_node_id.get(), 0, 255));
+    payload.count   = num_nodes;
+
+    for (uint8_t i = 0; i < AP_RANGING_MAX_NODES; i++) {
+        payload.peer[i].slot = i;
+        if (i < num_nodes) {
+            payload.peer[i].peer_id = (uint8_t)node_state[i].id;
+            payload.peer[i].healthy = node_healthy(i) ? 1 : 0;
+            payload.peer[i].range_m = node_state[i].distance;
+        }
+    }
+
+    static_assert(sizeof(Payload) <= MAVLINK_MSG_TUNNEL_FIELD_PAYLOAD_LEN,
+                  "ranging tunnel payload does not fit a TUNNEL message");
+
+    if (!HAVE_PAYLOAD_SPACE((mavlink_channel_t)_fwd_chan, TUNNEL)) {
+        return;
+    }
+
+    uint8_t buf[MAVLINK_MSG_TUNNEL_FIELD_PAYLOAD_LEN] {};
+    memcpy(buf, &payload, sizeof(payload));
+
+    mavlink_msg_tunnel_send((mavlink_channel_t)_fwd_chan,
+                            0, 0,               // broadcast: any listener on this port
+                            AP_RANGING_TUNNEL_PAYLOAD_TYPE,
+                            sizeof(payload),
+                            buf);
+#endif  // HAL_GCS_ENABLED
+}
 
 // singleton instance
 AP_Ranging *AP_Ranging::_singleton;
