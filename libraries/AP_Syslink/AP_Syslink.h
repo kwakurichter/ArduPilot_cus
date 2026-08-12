@@ -85,10 +85,15 @@ public:
 #endif
 
     /*
-      Low byte of the radio address (SYSL_ADDR). Doubles as this vehicle's peer identity: 
-      it is what distinguishes one Crazyflie from another on a shared channel
+      Low byte of the radio address, and this vehicle's peer identity: it is
+      what distinguishes one Crazyflie from another on a shared channel.
+
+      Taken from MAV_SYSID rather than a parameter of its own. A vehicle needs
+      exactly one identity, and having the radio address and the MAVLink system
+      id set separately meant they could disagree, which routes peer traffic to
+      the wrong vehicle while both still look correctly configured.
      */
-    uint8_t get_address() const { return uint8_t(constrain_int16(_address.get(), 0, 255)); }
+    uint8_t get_address() const;
 
     // Bytes per second the GCS should assume for this link (SYSL_BW).
     uint16_t link_bw() const { return uint16_t(_link_bw.get()); }
@@ -237,7 +242,6 @@ private:
     // parameters
     AP_Int16 _channel;
     AP_Int8 _datarate;
-    AP_Int16 _address;
     AP_Int8 _txpower;
     AP_Int16 _link_bw;
 };

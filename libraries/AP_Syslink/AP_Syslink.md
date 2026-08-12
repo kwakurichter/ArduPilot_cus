@@ -385,9 +385,9 @@ chunks is 1285 bytes — or `update()` gets authorised to queue chunks that
 5. **Cleanup** — retire the `CF_*` parameters. *(done)*
 
    `CF_ID`, `CF_CHANNEL` and `CF_P2P_STREAM` configured the radio and are
-   replaced by `SYSL_CHAN`, `SYSL_ADDR` and `SYSL_RATE`. `CF_PEER_ID`
+   replaced by `SYSL_CHAN` and `SYSL_RATE`. `CF_PEER_ID`
    duplicated the radio address, so the AI-deck mission statustext now takes
-   its node id from `SYSL_ADDR` via `AP::syslink()->get_address()` — one value
+   its node id from `MAV_SYSID` via `AP::syslink()->get_address()` — one value
    instead of two that can disagree, and no `AP_Param::find()` string lookup.
    The rest had no reader left. `ParametersG2` indices 21 to 28 are retired
    and must not be reused.

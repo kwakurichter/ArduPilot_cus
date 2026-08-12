@@ -54,11 +54,20 @@ using namespace AP_Syslink_Protocol;
 
 AP_Syslink *AP_Syslink::_singleton;
 
+/*
+  This vehicle's identity on the air. MAV_SYSID is the vehicle's one global
+  id, so the radio address follows it rather than being set separately.
+ */
+uint8_t AP_Syslink::get_address() const
+{
+    return gcs().sysid_this_mav();
+}
+
 const AP_Param::GroupInfo AP_Syslink::var_info[] = {
 
     // @Param: _ENABLE
     // @DisplayName: Syslink enable
-    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port whose SERIALn_PROTOCOL is set to 51 (Syslink).
+    // @Description: Enable the nRF51822 radio co-processor driver. The driver takes exclusive ownership of the serial port whose SERIALn_PROTOCOL is set to 52 (Syslink).
     // @Values: 0:Disabled,1:Enabled
     // @RebootRequired: True
     // @User: Standard
@@ -89,13 +98,7 @@ const AP_Param::GroupInfo AP_Syslink::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("_RATE", 5, AP_Syslink, _datarate, 2),
 
-    // @Param: _ADDR
-    // @DisplayName: Radio address low byte
-    // @Description: Low byte of the 5-byte radio address. The upper four bytes are fixed at E7E7E7E7 following Crazyflie convention, so the full address is E7E7E7E7xx and the Crazyradio URI is radio://0/CHAN/RATE/E7E7E7E7xx. Must match the ground station.
-    // @Range: 0 255
-    // @RebootRequired: True
-    // @User: Standard
-    AP_GROUPINFO("_ADDR", 6, AP_Syslink, _address, 0xE7),
+    // index 6 was ADDR; the radio address low byte is MAV_SYSID now
 
     // @Param: _TXPOW
     // @DisplayName: Radio transmit power
@@ -746,11 +749,11 @@ void AP_Syslink::send_config_step()
     case ConfigState::ADDRESS: {
         /*
           Five bytes, little-endian, so the low byte goes first. The upper four
-          are fixed at E7E7E7E7 by Crazyflie convention; SYSL_ADDR sets the
+          are fixed at E7E7E7E7 by Crazyflie convention; MAV_SYSID sets the
           last byte, giving the E7E7E7E7xx of a radio:// URI.
          */
         const uint8_t addr[ADDRESS_LEN] = {
-            uint8_t(constrain_int16(_address.get(), 0, 255)),
+            get_address(),
             0xE7, 0xE7, 0xE7, 0xE7
         };
         _config_expect = uint8_t(Type::RADIO_ADDRESS);
@@ -801,7 +804,7 @@ void AP_Syslink::advance_config()
         _config_state = ConfigState::DONE;
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Syslink: radio configured ch%u E7E7E7E7%02X",
                       unsigned(constrain_int16(_channel.get(), 0, 125)),
-                      unsigned(constrain_int16(_address.get(), 0, 255)));
+                      unsigned(get_address()));
         break;
     case ConfigState::DONE:
         break;

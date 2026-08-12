@@ -47,17 +47,10 @@ AP_SwarmMesh_Syslink::AP_SwarmMesh_Syslink(AP_SwarmMesh &frontend) :
     }
 
     /*
-      The radio address low byte is this vehicle's peer identity on the air,
-      and SwarmMesh routes by sysid. They have to agree or packets are
-      attributed to, and addressed to, the wrong vehicle. Warn rather than
-      refuse: the link still works, but every peer id would be wrong.
+      No identity check here any more: AP_Syslink::get_address() returns
+      MAV_SYSID, which is the same value SwarmMesh routes by, so the two
+      cannot disagree.
      */
-    const uint8_t addr = _syslink->get_address();
-    if (addr != frontend_sysid()) {
-        GCS_SEND_TEXT(MAV_SEVERITY_WARNING,
-                      "SwarmMesh: SYSL_ADDR %u != sysid %u", unsigned(addr), unsigned(frontend_sysid()));
-    }
-
     _syslink->set_broadcast_handler(
         FUNCTOR_BIND_MEMBER(&AP_SwarmMesh_Syslink::handle_broadcast, void, const uint8_t *, uint8_t));
 
