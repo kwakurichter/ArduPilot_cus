@@ -177,7 +177,7 @@ define AP_SWARMMESH_MAX_PEERS 8
 # THISFIRMWARE is preserved as fw_string_original and still written to logs.
 # FW_MAJOR/MINOR/PATCH stay at 4.7.0 - ground stations key feature detection
 # off them, so they must keep reporting the ArduPilot API level.
-define AP_CUSTOM_FIRMWARE_STRING "ArduSwarm v2.0.0"
+define AP_CUSTOM_FIRMWARE_STRING "ArduSwarm v2.1.0"
 
 # ---------------------------------------------------------------------------
 # Flash diet to make room for Lua scripting on the 1MB F405.
