@@ -149,6 +149,11 @@ private:
     AP_Int8  _address;              // address on the bus (allows selecting between 8 possible I2C addresses for px4flow)
     AP_Float  _height_override;              // height of the sensor above the ground. Only used in rover
     AP_Int16 _options;              // options parameter
+#if AP_OPTICALFLOW_FLOWDECK_ENABLED
+    AP_Int16 _flowdeck_delta_max;   // maximum accepted absolute raw delta count
+    AP_Int16 _flowdeck_squal_min;   // minimum accepted PMW3901 surface quality
+    AP_Float _flowdeck_scale;       // PMW3901 angular scale in radians per count
+#endif
 
     // method called by backend to update frontend state:
     void update_state(const OpticalFlow_state &state);

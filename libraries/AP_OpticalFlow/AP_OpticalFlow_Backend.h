@@ -57,6 +57,13 @@ protected:
     // get the flow scaling parameters
     Vector2f _flowScaler(void) const { return Vector2f(frontend._flowScalerX, frontend._flowScalerY); }
 
+#if AP_OPTICALFLOW_FLOWDECK_ENABLED
+    // get FlowDeck-specific parameters
+    int16_t _flowdeck_delta_max(void) const { return frontend._flowdeck_delta_max; }
+    int16_t _flowdeck_squal_min(void) const { return frontend._flowdeck_squal_min; }
+    float _flowdeck_scale(void) const { return frontend._flowdeck_scale; }
+#endif
+
     // get the yaw angle in radians
     float _yawAngleRad(void) const { return cd_to_rad(float(frontend._yawAngle_cd)); }
 

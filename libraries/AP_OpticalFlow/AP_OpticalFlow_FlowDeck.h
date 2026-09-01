@@ -13,9 +13,6 @@ public:
     /// constructor
     AP_OpticalFlow_FlowDeck(const char *devname, AP_OpticalFlow &_frontend);
 
-    // initialise the sensor
-    void init() override;
-
     // read latest values from sensor and fill in x,y and totals.
     void update() override;
 
@@ -49,8 +46,8 @@ private:
     // read raw motion data
     void read_motion_count(int16_t *delta_x, int16_t *delta_y);
 
-    // read raw motion data and quality at the same time
-    bool read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality);
+    // read raw motion data, quality and status at the same time
+    bool read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality, uint8_t &motion);
     
     // For Camera Use
     void enable_frame_buffer();
@@ -59,14 +56,29 @@ private:
     // Activate LED
     void setLED(bool ledOn);
     
-    // Variables to store sensor state
+    struct Accumulator {
+        Vector2f flow_sum;
+        Vector2f gyro_integral;
+        float dt;
+        uint32_t quality_sum;
+        uint16_t sample_count;
+    } accumulator;
+
+    struct Diagnostics {
+        uint32_t read_count;
+        uint32_t accepted_count;
+        uint32_t spi_fail_count;
+        uint32_t motion_reject_count;
+        uint32_t delta_reject_count;
+        uint32_t squal_reject_count;
+        uint32_t gap_reject_count;
+        uint32_t publish_count;
+    } diagnostics;
+
+    void log_diagnostics();
+
     uint32_t last_flow_us;            // timestamp of last flow reading
-    uint32_t last_update_ms;          // system time of last update
-    Vector2f gyro_sum;                // sum of gyro sensor values since last frame
-    uint16_t gyro_sum_count;          // number of gyro samples in sum
-    Vector2f flow_sum;
-    float flow_dt;
-    uint32_t qual_sum;
+    uint32_t last_diagnostics_ms;     // timestamp of last diagnostic log message
 };
 
 #endif // AP_OPTICALFLOW_FLOWDECK_ENABLED

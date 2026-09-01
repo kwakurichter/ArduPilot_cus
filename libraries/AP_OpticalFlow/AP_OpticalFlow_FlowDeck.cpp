@@ -19,25 +19,21 @@
  
 #include <AP_HAL/AP_HAL.h>
 #include <AP_AHRS/AP_AHRS.h>
-#include <AP_Math/crc.h>
+#include <AP_Logger/AP_Logger.h>
 #include <utility>
-#include <stdio.h>
 #include <GCS_MAVLink/GCS.h>
 
-#define FLOWDECK_PIXEL_SCALING      (4.2e-3)
+#define FLOWDECK_MOTION_VALID 0xB0
  
 extern const AP_HAL::HAL& hal;
  
 // --- Constructor ---
 AP_OpticalFlow_FlowDeck::AP_OpticalFlow_FlowDeck(const char *devname, AP_OpticalFlow &_frontend) :
     OpticalFlow_backend(_frontend),
+    accumulator{},
+    diagnostics{},
     last_flow_us(0),
-    last_update_ms(0),
-    gyro_sum(0,0),
-    gyro_sum_count(0),
-    flow_sum(0,0),
-    flow_dt(0),
-    qual_sum(0)
+    last_diagnostics_ms(0)
 {
     _dev = std::move(hal.spi->get_device(devname));
 }
@@ -45,7 +41,6 @@ AP_OpticalFlow_FlowDeck::AP_OpticalFlow_FlowDeck(const char *devname, AP_Optical
 // --- Detect the sensor ---
 AP_OpticalFlow_FlowDeck *AP_OpticalFlow_FlowDeck::detect(const char *devname, AP_OpticalFlow &_frontend)
 {
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck::detect START\n"); // DEBUG
     AP_OpticalFlow_FlowDeck *sensor = new AP_OpticalFlow_FlowDeck(devname, _frontend);
     if (!sensor) {
         return nullptr;
@@ -60,12 +55,10 @@ AP_OpticalFlow_FlowDeck *AP_OpticalFlow_FlowDeck::detect(const char *devname, AP
 // --- Setup the device ---
 bool AP_OpticalFlow_FlowDeck::setup_sensor()
 {
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck::setup_sensor START\n"); // DEBUG
     if (!_dev) {
-        gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: FAILED to get SPI device\n"); // DEBUG
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "FlowDeck: SPI device not found");
         return false;
     }
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Got SPI device OK\n"); // DEBUG
  
     // Get semaphore (threading)
     WITH_SEMAPHORE(_dev->get_semaphore());
@@ -73,8 +66,6 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     // --- Reset Sensor ---
     _dev->set_chip_select(false);  // HIGH (inactive)
     hal.scheduler->delay(40);
-
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Resetting sensor...\n"); // DEBUG
 
     // Reset sequence by toggling CS: HIGH->LOW->HIGH
     _dev->set_chip_select(false);  // HIGH (inactive)
@@ -92,22 +83,14 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     reg_write(0x3A, 0x5A);
     hal.scheduler->delay(5);  // delay
     
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Power on reset sent.\n"); // DEBUG
-    
-    // --- End of Reset Sequence ---
-
     // --- ID Check with Retries ---
-
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Checking ID (will retry up to 10 times)...\n"); // DEBUG
     
     uint8_t id = 0;
     uint8_t id_inv = 0;
     bool id_ok = false;
-    for (int i = 0; i < 10; i++) { // Loop up to 5 times
+    for (int i = 0; i < 10; i++) {
         id = reg_read(REG_ID);         // Read register 0x00
         id_inv = reg_read(REG_ID_INV); // Read register 0x5F
-
-        //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Attempt %d: Read ID=0x%02X, InvID=0x%02X\n", i + 1, id, id_inv); // DEBUG
 
         if (id == 0x49 && id_inv == 0xB6) { // Check for expected values
             id_ok = true;
@@ -120,27 +103,10 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
 
     // Check if ID was successful after retries
     if (!id_ok) {
-         gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: ID check FAILED after multiple attempts!\n"); // DEBUG
-         return false; // Exit setup if ID check failed
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "FlowDeck: sensor ID check failed");
+        return false;
     }
 
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: ID check OK\n"); // DEBUG
-
-    // --- End of ID Check ---
- 
-    // Register periodic callback for sensor reading (every 10ms = 100Hz)
-
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Registering periodic callback...\n"); // DEBUG
-
-    bool registered = _dev->register_periodic_callback(10000, FUNCTOR_BIND_MEMBER(&AP_OpticalFlow_FlowDeck::timer, void));
-    if (!registered) {
-        gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: FAILED to register periodic callback\n"); // DEBUG
-    } else {
-        //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Periodic callback registered OK\n"); // DEBUG
-    }
-
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Init Registers\n"); // DEBUG
- 
     // --- Initialize sensor with required configuration ---
     initRegisters();    // Write registers for improved performance
 
@@ -150,16 +116,17 @@ bool AP_OpticalFlow_FlowDeck::setup_sensor()
     reg_read(0x04);
     reg_read(0x05);
     reg_read(0x06);
-    hal.scheduler->delay(1);  // delay
-    // --- End of Sensor Initialization
-
-    //gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Turn on LED\n"); // DEBUG
+    hal.scheduler->delay(1);
 
     // Turn on LED
     setLED(true);   // Not Working?
 
-    gcs().send_text(MAV_SEVERITY_ALERT, "FlowDeck: Setup Done!\n"); // DEBUG
-     
+    // Register only after configuration is complete so the callback cannot access a sensor that is still being reset or programmed.
+    if (_dev->register_periodic_callback(10000, FUNCTOR_BIND_MEMBER(&AP_OpticalFlow_FlowDeck::timer, void)) == nullptr) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "FlowDeck: callback registration failed");
+        return false;
+    }
+
     return true;
 }
  
@@ -168,10 +135,7 @@ uint8_t AP_OpticalFlow_FlowDeck::reg_read(uint8_t reg)
 {
     uint8_t value_read = 0;
 
-    bool success = _dev->read_registers(reg, &value_read, 1);   // MSB = 1
-
-    if (!success) {
-        // gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to read register 0x%02X\n", reg); // DEBUG
+    if (!_dev->read_registers(reg, &value_read, 1)) {
         return 0;
     }
 
@@ -182,15 +146,8 @@ uint8_t AP_OpticalFlow_FlowDeck::reg_read(uint8_t reg)
 void AP_OpticalFlow_FlowDeck::reg_write(uint8_t reg, uint8_t value)
 {
     uint8_t write_address = reg | 0x80; // MSB = 0
-    
-    bool success = _dev->write_register(write_address, value);
-
-    if (!success) {
-        // gcs().send_text(MAV_SEVERITY_DEBUG, "Failed to write 0x%02X to register 0x%02X\n", value, reg); // DEBUG
-    }
-    
-    hal.scheduler->delay_microseconds(50);  // Add delay in-between writes
-
+    _dev->write_register(write_address, value);
+    hal.scheduler->delay_microseconds(50);  // Add delay inbetween writes
 }
 
 // --- Enable Frame Buffer (For Camera Use) ---
@@ -273,15 +230,6 @@ void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta
 /*
   Read the PMW3901 motion report as a burst.
 
-  Reading the fields individually costs six SPI transactions, each with its
-  own chip-select assertion and a t_SRR delay between them, and the periodic
-  callback holds the SPI bus semaphore for all of it. Burst mode streams the
-  whole report under one chip-select, so this is two transfers and one delay
-  on a bus shared with the SD card and the Loco deck.
-
-  Layout streamed from REG_MOTION_BURST, per the PMW3901 datasheet and
-  matching AP_OpticalFlow_Pixart's MotionBurst struct:
-
     0      motion
     1      observation
     2-3    delta_x, little endian
@@ -291,12 +239,8 @@ void AP_OpticalFlow_FlowDeck::read_motion_count(int16_t *delta_x, int16_t *delta
     8      max_raw
     9      min_raw
     10-11  shutter
-
-  Note reads send the bare register address; only writes set the MSB. That is
-  the PixArt convention, and this driver never calls set_read_flag(), so the
-  HAL leaves the address alone.
  */
-bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality)
+bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta_y, uint8_t &quality, uint8_t &motion)
 {
     struct PACKED {
         uint8_t motion;
@@ -311,13 +255,13 @@ bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta
         uint8_t shutter_lower;
     } burst;
 
-    // the read length below is sizeof(burst); if packing ever changed we would
-    // silently clock out the wrong number of bytes
+    // the read length below is sizeof(burst); if packing ever changed we would silently clock out the wrong number of bytes
     static_assert(sizeof(burst) == 12, "PMW3901 motion burst must be 12 bytes");
 
     delta_x = 0;
     delta_y = 0;
     quality = 0;
+    motion = 0;
 
     // Hold CS across both transfers; the burst aborts if it is released early.
     if (!_dev->set_chip_select(true)) {
@@ -338,14 +282,10 @@ bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta
         return false;
     }
 
-    /*
-      Deltas are reported whether or not the motion bit is set: a still frame
-      is a genuine zero-displacement sample, and dropping it would leave the
-      integration in timer() accumulating dt without the matching flow.
-     */
     delta_x = burst.delta_x;
     delta_y = burst.delta_y;
     quality = burst.squal;
+    motion = burst.motion;
 
     return true;
 }
@@ -353,99 +293,153 @@ bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta
 // --- Update Measurement ---
 void AP_OpticalFlow_FlowDeck::timer()
 {
-    // 1. Calculate dt for this specific sample
-    uint32_t now_us = AP_HAL::micros();
-    float dt = (now_us - last_flow_us) * 1.0e-6f;
-
-    // Sanity check dt
-    if (dt > 0.5f) { // Reset if too much time has passed
+    const uint32_t now_us = AP_HAL::micros();
+    if (last_flow_us == 0) {
         last_flow_us = now_us;
         return;
     }
+    const uint32_t elapsed_us = now_us - last_flow_us;
+    last_flow_us = now_us;
 
-    // 2. Perform Burst Read
+    if (elapsed_us == 0 || elapsed_us > 500000U) {
+        WITH_SEMAPHORE(_sem);
+        diagnostics.gap_reject_count++;
+        return;
+    }
+    const float dt = elapsed_us * 1.0e-6f;
+
     int16_t delta_x = 0;
     int16_t delta_y = 0;
     uint8_t quality = 0;
+    uint8_t motion = 0;
+    const bool read_ok = read_motion_burst(delta_x, delta_y, quality, motion);
 
-    if (read_motion_burst(delta_x, delta_y, quality)) {
-        // Successful read
-        last_flow_us = now_us;
-
-        // 3. Accumulate Raw Data
-        // We only accumulate if the data is valid, or we can accumulate everything and filter in update(). Accumulating everything is safer for integration.
-        flow_sum.x += delta_x;
-        flow_sum.y += delta_y;
-        flow_dt += dt;
-        qual_sum += quality;    // Store quality for reporting
-        
-        // Accumulate Gyro Data for compensation
-        const Vector3f &gyro = AP::ahrs().get_gyro();
-        gyro_sum.x += gyro.x;
-        gyro_sum.y += gyro.y;
-        gyro_sum_count++;
-        
-    } else {
-        gcs().send_text(MAV_SEVERITY_DEBUG, "FlowDeck: Burst Read Failed\n"); // DEBUG
+    WITH_SEMAPHORE(_sem);
+    diagnostics.read_count++;
+    if (!read_ok) {
+        diagnostics.spi_fail_count++;
+        return;
     }
+
+    const int16_t delta_max = _flowdeck_delta_max();
+    const int32_t abs_delta_x = delta_x < 0 ? -int32_t(delta_x) : int32_t(delta_x);
+    const int32_t abs_delta_y = delta_y < 0 ? -int32_t(delta_y) : int32_t(delta_y);
+    if (delta_max > 0 && (abs_delta_x >= delta_max || abs_delta_y >= delta_max)) {
+        diagnostics.delta_reject_count++;
+        return;
+    }
+    if (quality < _flowdeck_squal_min()) {
+        diagnostics.squal_reject_count++;
+        return;
+    }
+    if (motion != FLOWDECK_MOTION_VALID) {
+        diagnostics.motion_reject_count++;
+        return;
+    }
+
+    const Vector3f &gyro = AP::ahrs().get_gyro();
+    accumulator.flow_sum.x += delta_x;
+    accumulator.flow_sum.y += delta_y;
+    accumulator.gyro_integral.x += gyro.x * dt;
+    accumulator.gyro_integral.y += gyro.y * dt;
+    accumulator.dt += dt;
+    accumulator.quality_sum += quality;
+    accumulator.sample_count++;
+    diagnostics.accepted_count++;
 }
  
 // --- Update ---
 void AP_OpticalFlow_FlowDeck::update()
 {
-    // Return if no sufficient time has accumulated to avoid singularity or noise
-    if (flow_dt < 1.0e-1f) { // wait for at least 100ms of data
-        return;
+    log_diagnostics();
+
+    Accumulator data {};
+    {
+        WITH_SEMAPHORE(_sem);
+        if (accumulator.dt < 0.1f || accumulator.sample_count == 0) {
+            return;
+        }
+        data = accumulator;
+        accumulator = {};
     }
 
     struct AP_OpticalFlow::OpticalFlow_state state = {};
 
     // 1. Calculate Scaler
     const Vector2f flowScaler = _flowScaler();
-    float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
-    float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
+    const float flowScaleFactorX = 1.0f + 0.001f * flowScaler.x;
+    const float flowScaleFactorY = 1.0f + 0.001f * flowScaler.y;
 
     // 2. Calculate Flow Rate (Velocity)
     // Velocity = (Accumulated Pixels * Scaling) / Accumulated Time
     // Invert X/Y here to match frame
-    float flow_x_rad = (float)(-flow_sum.x) * FLOWDECK_PIXEL_SCALING;
-    float flow_y_rad = (float)(-flow_sum.y) * FLOWDECK_PIXEL_SCALING;
+    const float pixel_scaling = _flowdeck_scale();
+    float flow_x_rad = -data.flow_sum.x * pixel_scaling;
+    float flow_y_rad = -data.flow_sum.y * pixel_scaling;
 
     // 3. Apply the Parameter Scaler
     flow_x_rad *= flowScaleFactorX;
     flow_y_rad *= flowScaleFactorY;    
 
-    state.flowRate.x = flow_x_rad / flow_dt;
-    state.flowRate.y = flow_y_rad / flow_dt;
+    state.flowRate.x = flow_x_rad / data.dt;
+    state.flowRate.y = flow_y_rad / data.dt;
 
-    // 4. Calculate Body Rate (Average Gyro)
-    if (gyro_sum_count > 0) {
-        state.bodyRate.x = gyro_sum.x / gyro_sum_count;
-        state.bodyRate.y = gyro_sum.y / gyro_sum_count;
-    } else {
-        state.bodyRate.zero();
-    }
+    // Calculate body rate over the same integration window as the flow data.
+    state.bodyRate = data.gyro_integral / data.dt;
 
-    // 5. Surface Quality
-    state.surface_quality = constrain_int16((qual_sum / gyro_sum_count), 0, 255);
+    state.surface_quality = constrain_int16(data.quality_sum / data.sample_count, 0, 255);
 
     // 6. Final Processing
     _applyYaw(state.flowRate);
     _update_frontend(state);
 
-    // 7. Reset Accumulators
-    flow_sum.x = 0;
-    flow_sum.y = 0;
-    flow_dt = 0;
-    qual_sum = 0;
-    gyro_sum.zero();
-    gyro_sum_count = 0;
+    WITH_SEMAPHORE(_sem);
+    diagnostics.publish_count++;
 }
 
-// --- Init ---
-void AP_OpticalFlow_FlowDeck::init()
+void AP_OpticalFlow_FlowDeck::log_diagnostics()
 {
-    setup_sensor();
+    const uint32_t now_ms = AP_HAL::millis();
+    if (now_ms - last_diagnostics_ms < 1000U) {
+        return;
+    }
+    last_diagnostics_ms = now_ms;
+
+    Diagnostics data {};
+    {
+        WITH_SEMAPHORE(_sem);
+        data = diagnostics;
+        diagnostics = {};
+    }
+
+#if HAL_LOGGING_ENABLED
+    // @LoggerMessage: OFD
+    // @Description: Crazyflie FlowDeck sample diagnostics accumulated since the previous message
+    // @Field: TimeUS: Time since system startup
+    // @Field: Read: Motion burst read attempts
+    // @Field: Good: Accepted samples
+    // @Field: SPI: Failed SPI burst reads
+    // @Field: Mot: Samples rejected by the motion status gate
+    // @Field: Dlt: Samples rejected by the raw delta gate
+    // @Field: SQ: Samples rejected by the surface quality gate
+    // @Field: Gap: Samples rejected due to an invalid time interval
+    // @Field: Pub: Optical flow windows published to the frontend
+    AP::logger().Write(
+        "OFD",
+        "TimeUS,Read,Good,SPI,Mot,Dlt,SQ,Gap,Pub",
+        "s--------",
+        "F--------",
+        "QIIIIIIII",
+        AP_HAL::micros64(),
+        data.read_count,
+        data.accepted_count,
+        data.spi_fail_count,
+        data.motion_reject_count,
+        data.delta_reject_count,
+        data.squal_reject_count,
+        data.gap_reject_count,
+        data.publish_count);
+#endif
 }
  
 // --- Initialize the sensor registers (for performance) ---
