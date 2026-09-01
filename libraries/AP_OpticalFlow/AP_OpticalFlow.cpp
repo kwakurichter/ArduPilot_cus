@@ -23,6 +23,8 @@ extern const AP_HAL::HAL& hal;
   #define OPTICAL_FLOW_TYPE_DEFAULT Type::NONE
 #endif
 
+#define FLOWDECK_PIXEL_SCALING_DEFAULT (0.1f * 0.71674f / 35.0f)
+
 const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
     // @Param: _TYPE
     // @DisplayName: Optical flow sensor type
@@ -105,6 +107,32 @@ const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
     // @Bitmask: 0:Roll/Pitch stabilised
     // @User: Standard
     AP_GROUPINFO("_OPTIONS", 7,  AP_OpticalFlow, _options,   0),
+
+#if AP_OPTICALFLOW_FLOWDECK_ENABLED
+    // @Param: _FD_DMAX
+    // @DisplayName: FlowDeck maximum raw delta
+    // @Description: Maximum absolute PMW3901 raw delta accepted from the Crazyflie FlowDeck. Samples at or above this value are rejected. A value of zero disables delta rejection.
+    // @Range: 0 32767
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("_FD_DMAX", 8, AP_OpticalFlow, _flowdeck_delta_max, 100),
+
+    // @Param: _FD_SQUAL
+    // @DisplayName: FlowDeck minimum surface quality
+    // @Description: Minimum PMW3901 surface quality required to accept a Crazyflie FlowDeck sample. Default of zero disables.
+    // @Increment: 1
+    // @User: Advanced
+    AP_GROUPINFO("_FD_SQUAL", 9, AP_OpticalFlow, _flowdeck_squal_min, 0),
+
+    // @Param: _FD_SCALE
+    // @DisplayName: FlowDeck radians per count
+    // @Description: Angular optical flow represented by one raw PMW3901 count. The default matches the stock Crazyflie FlowDeck measurement model. FLOW_FXSCALER and FLOW_FYSCALER provide per-axis corrections.
+    // @Units: rad
+    // @Range: 0.0001 0.01
+    // @Increment: 0.00001
+    // @User: Advanced
+    AP_GROUPINFO("_FD_SCALE", 10, AP_OpticalFlow, _flowdeck_scale, FLOWDECK_PIXEL_SCALING_DEFAULT),
+#endif
 
     AP_GROUPEND
 };
