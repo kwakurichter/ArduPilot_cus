@@ -66,15 +66,19 @@ private:
     // one I2C read cycle; called only from timer()
     void sample();
 
-    // sample handed from timer() to update(), guarded by _sem
-    HAL_Semaphore _sem;
-    float    _distance_m;
-    int8_t   _quality_pct;
-    bool     _new_sample;
-    bool     _sensor_lost;          // timer() gave up; update() reports it
+    // sample handed from timer() to update(), guarded by the backend semaphore
+    struct PendingSample {
+        float distance_m;
+        int8_t quality_pct;
+        uint32_t time_ms;
+        bool valid;
+    } _pending_sample {};
+
+    bool _new_sample = false;
+    bool _sensor_lost = false;      // timer() gave up; update() reports it
 
     // inter-measurement period, chosen from the distance mode in init()
-    uint32_t _measurement_period_ms;
+    uint32_t _measurement_period_ms = 0;
 
 };
 
