@@ -23,6 +23,12 @@
 #define AP_SWARMMESH_SITL_ENABLED (AP_SWARMMESH_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_SITL)
 #endif
 
+// Packet loss simulation is not wired into SITL::SIM yet.
+// Keep the transport deterministic unless a board explicitly provides the missing simulation parameter and enables this hook.
+#ifndef AP_SIM_SWARMMESH_LOSS_ENABLED
+#define AP_SIM_SWARMMESH_LOSS_ENABLED 0
+#endif
+
 #ifndef AP_SWARMMESH_POSCONTROL_ENABLED
 #define AP_SWARMMESH_POSCONTROL_ENABLED AP_SWARMMESH_ENABLED
 #endif
