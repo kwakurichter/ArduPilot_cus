@@ -132,10 +132,10 @@ BARO BMP388 I2C:0:0x77
 # One bare for Crazyflie 2.0
 BARO LPS2XH:probe_InvensenseIMU I2C:0:0x5D 0x69
 
-# no built-in compass, but probe the i2c bus for all possible
-# external compass types
+# External MMC5983MA on I2C1 (logical bus 1).
+COMPASS MMC5XX3 I2C:1:0x30 true ROTATION_NONE
 define ALLOW_ARM_NO_COMPASS
-define AP_COMPASS_PROBING_ENABLED 1
+define AP_COMPASS_PROBING_ENABLED 0
 define HAL_I2C_INTERNAL_MASK 0
 define HAL_COMPASS_AUTO_ROT_DEFAULT 2
 
@@ -236,9 +236,10 @@ define AP_RANGEFINDER_FLOWDECK_ENABLED 1
 define AP_OPTICALFLOW_BACKEND_DEFAULT_ENABLED 0
 define AP_OPTICALFLOW_FLOWDECK_ENABLED 1
 
-# Drops probing for every external I2C magnetometer (~17 KB)
-# define AP_COMPASS_QMC5883L_ENABLED 1
+# Probe only the MMC5983MA external I2C magnetometer.
 define AP_COMPASS_I2C_BACKEND_DEFAULT_ENABLED 0
+define AP_COMPASS_MMC5XX3_ENABLED 1
+define AP_COMPASS_MMC5XX3_INIT_DEBUG_ENABLED 1
 
 # No GPS receiver indoors; the AP_GPS front end stays for EKF plumbing (~9.3 KB)
 undef AP_GPS_UBLOX_ENABLED
@@ -256,8 +257,8 @@ define MODE_SMARTRTL_ENABLED 0
 define MODE_SPORT_ENABLED 0
 define MODE_THROW_ENABLED 0
 
-# define HAL_VISUALODOM_ENABLED 1        #OptiTrack Support
-# define EK3_FEATURE_EXTERNAL_NAV 1      #OptiTrack Support
+define HAL_VISUALODOM_ENABLED 1        #OptiTrack Support
+define EK3_FEATURE_EXTERNAL_NAV 1      #OptiTrack Support
 undef MODE_GUIDED_NOGPS_ENABLED        #AI Deck support
 define MODE_GUIDED_NOGPS_ENABLED 1
 
