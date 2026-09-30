@@ -20,6 +20,13 @@
 #include <AP_HAL/AP_HAL.h>
 #include <stdio.h>
 
+#if AP_COMPASS_MMC5XX3_INIT_DEBUG_ENABLED
+#include <GCS_MAVLink/GCS.h>
+#define MMC5XX3_INIT_ALERT(...) GCS_SEND_TEXT(MAV_SEVERITY_ALERT, "MMC5983MA: " __VA_ARGS__)
+#else
+#define MMC5XX3_INIT_ALERT(...)
+#endif
+
 extern const AP_HAL::HAL &hal;
 
 #define REG_PRODUCT_ID      0x2F
@@ -47,10 +54,15 @@ AP_Compass_Backend *AP_Compass_MMC5XX3::probe(AP_HAL::OwnPtr<AP_HAL::Device> dev
                                               enum Rotation rotation)
 {
     if (!dev) {
+        MMC5XX3_INIT_ALERT("device unavailable");
         return nullptr;
     }
     AP_Compass_MMC5XX3 *sensor = NEW_NOTHROW AP_Compass_MMC5XX3(std::move(dev), force_external, rotation);
-    if (!sensor || !sensor->init()) {
+    if (!sensor) {
+        MMC5XX3_INIT_ALERT("allocation failed");
+        return nullptr;
+    }
+    if (!sensor->init()) {
         delete sensor;
         return nullptr;
     }
@@ -90,19 +102,21 @@ bool AP_Compass_MMC5XX3::init()
     }
 
     if (whoami != MMC5983_ID) {
-        // printf("MMC5983 got unexpected product id: %d, expected: %d\n", whoami, MMC5983_ID);
-        // not a MMC5983
+        MMC5XX3_INIT_ALERT("ID read/check failed (0x%02x)", unsigned(whoami));
         return false;
     }
 
     // reset sensor
-    dev->write_register(REG_CONTROL1, REG_CONTROL1_SW_RST);
+    if (!dev->write_register(REG_CONTROL1, REG_CONTROL1_SW_RST)) {
+        MMC5XX3_INIT_ALERT("reset write failed");
+    }
 
     // 10ms minimum startup time
     hal.scheduler->delay(15);
 
     // setup for 100Hz output
     if (!dev->write_register(REG_CONTROL1, 0)) {
+        MMC5XX3_INIT_ALERT("configuration write failed");
         return false;
     }
 
@@ -110,6 +124,7 @@ bool AP_Compass_MMC5XX3::init()
     /* register the compass instance in the frontend */
     dev->set_device_type(DEVTYPE_MMC5983);
     if (!register_compass(dev->get_bus_id())) {
+        MMC5XX3_INIT_ALERT("compass registration failed");
         return false;
     }
 
@@ -124,8 +139,10 @@ bool AP_Compass_MMC5XX3::init()
     dev->set_retries(1);
 
     // call timer() at 100Hz
-    dev->register_periodic_callback(10000U,
-                                    FUNCTOR_BIND_MEMBER(&AP_Compass_MMC5XX3::timer, void));
+    if (!dev->register_periodic_callback(10000U,
+                                        FUNCTOR_BIND_MEMBER(&AP_Compass_MMC5XX3::timer, void))) {
+        MMC5XX3_INIT_ALERT("periodic callback failed");
+    }
 
     return true;
 }
