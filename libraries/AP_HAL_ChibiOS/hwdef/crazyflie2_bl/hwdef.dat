@@ -100,6 +100,9 @@ I2C_ORDER I2C3 I2C1
 # we need I2C clock at 400kHz for IMU
 define HAL_I2C_MAX_CLOCK 400000
 
+# Keep I2C IMU sampling above the normal main thread priority.
+define APM_I2C_PRIORITY 181
+
 # order of UARTs (and USB)
 SERIAL_ORDER OTG1 USART3 USART6 USART2
 # SERIAL_ORDER OTG1 EMPTY USART6 USART2
