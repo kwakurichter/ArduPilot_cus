@@ -99,6 +99,12 @@
 #define AP_SIM_BARO_ENABLED AP_SIM_ENABLED
 #endif
 
+#ifndef AP_BARO_SITL_COOP_ENABLED
+// BMP388 of the cooperative-estimation SITL (SIM_COOP_*): needs the SITL sensor model
+#include <SITL/SIM_config.h>
+#define AP_BARO_SITL_COOP_ENABLED (AP_SIM_BARO_ENABLED && AP_SIM_COOP_SENSORS_ENABLED)
+#endif
+
 #ifndef AP_BARO_SPL06_ENABLED
 #define AP_BARO_SPL06_ENABLED AP_BARO_BACKEND_DEFAULT_ENABLED
 #endif

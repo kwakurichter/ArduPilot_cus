@@ -31,6 +31,7 @@
 #include <AP_HAL/I2CDevice.h>
 
 #include "AP_Baro_SITL.h"
+#include "AP_Baro_SITL_Coop.h"
 #include "AP_Baro_BMP085.h"
 #include "AP_Baro_BMP280.h"
 #include "AP_Baro_BMP388.h"
@@ -627,9 +628,20 @@ void AP_Baro::init(void)
     if (sitl == nullptr) {
         AP_HAL::panic("No SITL pointer");
     }
+#if AP_BARO_SITL_COOP_ENABLED
+    // the cooperative estimator's BMP388 replaces the regular SITL barometers
+    const bool coop_baro = sitl->models.coop_sensors.enabled();
+    if (coop_baro) {
+        _add_backend(NEW_NOTHROW AP_Baro_SITL_Coop(*this));
+        RETURN_IF_NO_SPACE;
+    }
+#else
+    const bool coop_baro = false;
+#endif
+    (void)coop_baro;
 #if !AP_TEST_DRONECAN_DRIVERS
     // use dronecan instances instead of SITL instances
-    for(uint8_t i = 0; i < sitl->baro_count; i++) {
+    for(uint8_t i = 0; !coop_baro && i < sitl->baro_count; i++) {
         _add_backend(NEW_NOTHROW AP_Baro_SITL(*this));
         RETURN_IF_NO_SPACE;
     }
