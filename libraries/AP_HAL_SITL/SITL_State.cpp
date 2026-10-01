@@ -229,6 +229,11 @@ void SITL_State::_fdm_input_local(void)
     // get FDM output from the model
     sitl_model->fill_fdm(_sitl->state);
 
+#if AP_SIM_COOP_SENSORS_ENABLED
+    // per-reading aid sensors of the cooperative estimator, at the step's end time
+    _sitl->models.coop_sensors.update(*sitl_model, _sitl->state.timestamp_us);
+#endif
+
 #if HAL_NUM_CAN_IFACES
     if (CANIface::num_interfaces() > 0) {
         multicast_state_send();
