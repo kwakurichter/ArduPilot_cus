@@ -35,6 +35,77 @@ const AP_Param::GroupInfo AP_CoopBridge::var_info[] = {
     // @RebootRequired: False
     AP_GROUPINFO_FLAGS("_PORT", 1, AP_CoopBridge, _port, -1, AP_PARAM_FLAG_ENABLE),
 
+    // Flow: the PMW3901 reports motion counts; angle = C * counts with the 2x2 calibration C
+    // (sensor axes, rad/count) and covariance C * (COOP_FLOW_SD^2 + 1/12) * C^T, the 1/12
+    // being the count quantisation. Defaults: the thesis simulator's synthetic calibration.
+
+    // @Param: _FLOW_C11
+    // @DisplayName: Flow calibration, row 1 column 1
+    // @Description: Element (1,1) of the matrix that converts PMW3901 motion counts to angle in the sensor axes.
+    // @Units: rad
+    // @User: Advanced
+    AP_GROUPINFO("_FLOW_C11", 2, AP_CoopBridge, _flow_c[0], 0.001f),
+
+    // @Param: _FLOW_C12
+    // @DisplayName: Flow calibration, row 1 column 2
+    // @Description: Element (1,2) of the matrix that converts PMW3901 motion counts to angle in the sensor axes.
+    // @Units: rad
+    // @User: Advanced
+    AP_GROUPINFO("_FLOW_C12", 3, AP_CoopBridge, _flow_c[1], 0.00002f),
+
+    // @Param: _FLOW_C21
+    // @DisplayName: Flow calibration, row 2 column 1
+    // @Description: Element (2,1) of the matrix that converts PMW3901 motion counts to angle in the sensor axes.
+    // @Units: rad
+    // @User: Advanced
+    AP_GROUPINFO("_FLOW_C21", 4, AP_CoopBridge, _flow_c[2], 0.0f),
+
+    // @Param: _FLOW_C22
+    // @DisplayName: Flow calibration, row 2 column 2
+    // @Description: Element (2,2) of the matrix that converts PMW3901 motion counts to angle in the sensor axes.
+    // @Units: rad
+    // @User: Advanced
+    AP_GROUPINFO("_FLOW_C22", 5, AP_CoopBridge, _flow_c[3], 0.0011f),
+
+    // @Param: _FLOW_SD
+    // @DisplayName: Flow count noise
+    // @Description: Standard deviation of the PMW3901 motion counts per axis, without the quantisation (added by the bridge).
+    // @Range: 0 10
+    // @User: Advanced
+    AP_GROUPINFO("_FLOW_SD", 6, AP_CoopBridge, _flow_sd, 0.5f),
+
+    // @Param: _TOF_SD
+    // @DisplayName: ToF range noise
+    // @Description: Standard deviation of one VL53L1X range.
+    // @Units: m
+    // @Range: 0.001 0.5
+    // @User: Advanced
+    AP_GROUPINFO("_TOF_SD", 7, AP_CoopBridge, _tof_sd, 0.015f),
+
+    // @Param: _BARO_SD
+    // @DisplayName: Baro pressure noise
+    // @Description: Standard deviation of one baro reading (all its conversions together).
+    // @Units: Pa
+    // @Range: 0.01 20
+    // @User: Advanced
+    AP_GROUPINFO("_BARO_SD", 8, AP_CoopBridge, _baro_sd, 1.0607f),
+
+    // @Param: _MAG_SD
+    // @DisplayName: Magnetometer direction noise
+    // @Description: Standard deviation of the field direction per tangent axis.
+    // @Units: rad
+    // @Range: 0.001 0.5
+    // @User: Advanced
+    AP_GROUPINFO("_MAG_SD", 9, AP_CoopBridge, _mag_sd, 0.008f),
+
+    // @Param: _MAG_NORM
+    // @DisplayName: Surveyed field strength
+    // @Description: Strength of the undisturbed magnetic field at the site, in the compass driver's units (milligauss). The companion gates readings whose norm departs from it. 0 sends a norm ratio of 1 (gate disabled).
+    // @Units: mGauss
+    // @Range: 0 1000
+    // @User: Advanced
+    AP_GROUPINFO("_MAG_NORM", 10, AP_CoopBridge, _mag_norm, 0.0f),
+
     AP_GROUPEND
 };
 
@@ -77,6 +148,9 @@ void AP_CoopBridge::update_fast()
         _last_tick_us = 0;   // restart cleanly when the port comes back
         return;
     }
+    // readings first: each must reach the companion before the IMU data that moves its
+    // clock past the reading's end
+    send_aids();
     const AP_InertialSensor &ins = AP::ins();
     if (!_imu_locked) {
         // one instance for both gyro and accel, kept for the whole flight: a different IMU
@@ -171,6 +245,160 @@ void AP_CoopBridge::send_imu(const AP_CoopBridge_ImuStage::Sub &sub)
     _stats.imu_sent++;
 }
 
+bool AP_CoopBridge::push_flow(const AP_CoopReading::Flow &r)
+{
+    if (_port.get() < 0 || !_flow_q.push(r)) {
+        _stats.aids_dropped++;
+        return false;
+    }
+    return true;
+}
+
+bool AP_CoopBridge::push_tof(const AP_CoopReading::Tof &r)
+{
+    if (_port.get() < 0 || !_tof_q.push(r)) {
+        _stats.aids_dropped++;
+        return false;
+    }
+    return true;
+}
+
+bool AP_CoopBridge::push_baro(const AP_CoopReading::Baro &r)
+{
+    if (_port.get() < 0 || !_baro_q.push(r)) {
+        _stats.aids_dropped++;
+        return false;
+    }
+    return true;
+}
+
+bool AP_CoopBridge::push_mag(const AP_CoopReading::Mag &r)
+{
+    if (_port.get() < 0 || !_mag_q.push(r)) {
+        _stats.aids_dropped++;
+        return false;
+    }
+    return true;
+}
+
+void AP_CoopBridge::send_aids()
+{
+    AP_CoopReading::Flow flow;
+    while (_flow_q.pop(flow)) {
+        send_flow(flow);
+    }
+    AP_CoopReading::Tof tof;
+    while (_tof_q.pop(tof)) {
+        send_tof(tof);
+    }
+    AP_CoopReading::Baro baro;
+    while (_baro_q.pop(baro)) {
+        send_baro(baro);
+    }
+    AP_CoopReading::Mag mag;
+    while (_mag_q.pop(mag)) {
+        send_mag(mag);
+    }
+}
+
+void AP_CoopBridge::send_flow(const AP_CoopReading::Flow &r)
+{
+    const mavlink_channel_t chan = mavlink_channel_t(_chan);
+    if (!HAVE_PAYLOAD_SPACE(chan, COOP_FLOW)) {
+        _stats.aids_dropped++;
+        return;
+    }
+    mavlink_coop_flow_t pkt {};
+    pkt.time_end_usec = r.t_end_us;
+    pkt.mid_before_end_us = r.mid_before_end_us;
+    pkt.duration = r.duration_s;
+    pkt.quality = r.quality;
+    pkt.flags = r.valid ? COOP_SAMPLE_VALID : 0;
+    if (r.valid) {
+        // angle = C * counts, covariance = s2 * C * C^T
+        const float c11 = _flow_c[0], c12 = _flow_c[1], c21 = _flow_c[2], c22 = _flow_c[3];
+        const float x = r.delta_counts[0], y = r.delta_counts[1];
+        pkt.angle[0] = c11 * x + c12 * y;
+        pkt.angle[1] = c21 * x + c22 * y;
+        const float s2 = sq(_flow_sd.get()) + 1.0f / 12.0f;
+        pkt.covariance[0] = s2 * (c11 * c11 + c12 * c12);
+        pkt.covariance[1] = s2 * (c11 * c21 + c12 * c22);
+        pkt.covariance[2] = s2 * (c21 * c21 + c22 * c22);
+    } else {
+        pkt.covariance[0] = pkt.covariance[2] = 1.0f;
+    }
+    mavlink_msg_coop_flow_send_struct(chan, &pkt);
+    _stats.aids_sent++;
+}
+
+void AP_CoopBridge::send_tof(const AP_CoopReading::Tof &r)
+{
+    const mavlink_channel_t chan = mavlink_channel_t(_chan);
+    if (!HAVE_PAYLOAD_SPACE(chan, COOP_TOF)) {
+        _stats.aids_dropped++;
+        return;
+    }
+    mavlink_coop_tof_t pkt {};
+    pkt.time_end_usec = r.t_end_us;
+    pkt.mid_before_end_us = r.mid_before_end_us;
+    pkt.range = r.range_m;
+    pkt.variance = sq(_tof_sd.get());
+    pkt.range_status = r.range_status;
+    pkt.flags = r.valid ? COOP_SAMPLE_VALID : 0;
+    mavlink_msg_coop_tof_send_struct(chan, &pkt);
+    _stats.aids_sent++;
+}
+
+void AP_CoopBridge::send_baro(const AP_CoopReading::Baro &r)
+{
+    const mavlink_channel_t chan = mavlink_channel_t(_chan);
+    if (!HAVE_PAYLOAD_SPACE(chan, COOP_BARO)) {
+        _stats.aids_dropped++;
+        return;
+    }
+    mavlink_coop_baro_t pkt {};
+    pkt.time_end_usec = r.t_end_us;
+    pkt.mid_before_end_us = r.mid_before_end_us;
+    pkt.pressure = r.pressure_pa;
+    pkt.variance = sq(_baro_sd.get());
+    pkt.temperature = r.temperature_c;
+    pkt.flags = r.valid ? COOP_SAMPLE_VALID : 0;
+    mavlink_msg_coop_baro_send_struct(chan, &pkt);
+    _stats.aids_sent++;
+}
+
+void AP_CoopBridge::send_mag(const AP_CoopReading::Mag &r)
+{
+    const mavlink_channel_t chan = mavlink_channel_t(_chan);
+    if (!HAVE_PAYLOAD_SPACE(chan, COOP_MAG)) {
+        _stats.aids_dropped++;
+        return;
+    }
+    mavlink_coop_mag_t pkt {};
+    pkt.time_usec = r.capture_us;
+    pkt.end_after_capture_us = r.end_after_capture_us;
+    const float norm = r.field_frd.length();
+    const bool valid = r.valid && is_positive(norm);
+    if (valid) {
+        // unit direction, body FRD to body FLU
+        const Vector3f d = r.field_frd / norm;
+        pkt.direction[0] = d.x;
+        pkt.direction[1] = -d.y;
+        pkt.direction[2] = -d.z;
+        pkt.norm_ratio = is_positive(_mag_norm.get()) ? norm / _mag_norm.get() : 1.0f;
+    } else {
+        pkt.direction[0] = 1.0f;
+        pkt.norm_ratio = 1.0f;
+    }
+    // isotropic tangent covariance: the same in any basis of the tangent plane
+    const float s2 = sq(_mag_sd.get());
+    pkt.covariance[0] = s2;
+    pkt.covariance[2] = s2;
+    pkt.flags = valid ? COOP_SAMPLE_VALID : 0;
+    mavlink_msg_coop_mag_send_struct(chan, &pkt);
+    _stats.aids_sent++;
+}
+
 void AP_CoopBridge::update()
 {
     if (!resolve_channel()) {
@@ -213,9 +441,11 @@ void AP_CoopBridge::log_stats(uint64_t now_us)
     // @Field: Drop: completed IMU sub-intervals not sent (port full or stall)
     // @Field: Gap: ticks with missing or late INS data
     // @Field: Clip: ticks with accelerometer clipping
-    AP::logger().WriteStreaming("COOP", "TimeUS,Sent,Drop,Gap,Clip", "s----", "F----", "QIIII",
-                                now_us, _stats.imu_sent, _stats.imu_dropped, _stats.imu_gaps,
-                                _stats.imu_clipped);
+    // @Field: ASent: aid messages (flow, ToF, baro, mag) sent
+    // @Field: ADrop: aid readings lost (queue full or port full)
+    AP::logger().WriteStreaming("COOP", "TimeUS,Sent,Drop,Gap,Clip,ASent,ADrop", "s------", "F------",
+                                "QIIIIII", now_us, _stats.imu_sent, _stats.imu_dropped, _stats.imu_gaps,
+                                _stats.imu_clipped, _stats.aids_sent, _stats.aids_dropped);
 }
 #endif
 

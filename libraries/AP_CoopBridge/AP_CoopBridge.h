@@ -20,11 +20,13 @@
   (modules/mavlink/message_definitions/v1.0/arduswarm_coop.xml):
 
     COOP_IMU_DELTA    100 Hz  first stage of the IMU preintegration (AP_CoopBridge_ImuStage)
+    COOP_FLOW,        per     one message per sensor reading, handed over by the drivers
+    COOP_TOF,         reading (push_flow() etc., AP_CoopBridge_Readings.h)
+    COOP_BARO, COOP_MAG
     COOP_LINK_STATUS    1 Hz  health of the cooperative path
 
-  Still to come (thesis repo, embedded/ardupilot/required_changes.md): the per-reading aid
-  messages (COOP_FLOW/TOF/BARO/MAG, COOP_UWB), and COOP_PEER, which is handed to
-  AP_SwarmMesh's critical class. The companion's replies (ODOMETRY for ExternalNav, DEBUG_VECT
+  Still to come (thesis repo, embedded/ardupilot/required_changes.md): COOP_UWB, and
+  COOP_PEER, which is handed to AP_SwarmMesh's critical class. The companion's replies (ODOMETRY for ExternalNav, DEBUG_VECT
   rows for the Lua avoidance) use the existing GCS handlers.
 
   The port is an ordinary MAVLink2 port (SERIALn_PROTOCOL = 2) selected by COOP_PORT; the
@@ -42,7 +44,9 @@
 
 #include <AP_Param/AP_Param.h>
 #include <GCS_MAVLink/GCS_MAVLink.h>
+#include <AP_HAL/utility/RingBuffer.h>
 #include "AP_CoopBridge_ImuStage.h"
+#include "AP_CoopBridge_Readings.h"
 
 class AP_CoopBridge
 {
@@ -65,12 +69,23 @@ public:
     // Called at a low rate (scheduler, 10 Hz): link status and logging once a second.
     void update();
 
+    // Hand over one sensor reading (any thread; one producer per sensor type). Queued and
+    // sent from update_fast(), before the IMU sub-intervals of the same tick, so a reading
+    // reaches the companion ahead of the IMU data that moves its clock past the reading.
+    // Returns false if the queue is full or the bridge is disabled (the reading is lost).
+    bool push_flow(const AP_CoopReading::Flow &r);
+    bool push_tof(const AP_CoopReading::Tof &r);
+    bool push_baro(const AP_CoopReading::Baro &r);
+    bool push_mag(const AP_CoopReading::Mag &r);
+
     // Counters for COOP_LINK_STATUS, the COOP log message and tests.
     struct Stats {
         uint32_t imu_sent;      // COOP_IMU_DELTA sent
         uint32_t imu_dropped;   // completed sub-intervals not sent (no space on the port)
         uint32_t imu_gaps;      // ticks flagged COOP_SAMPLE_GAP (missing or late INS data)
         uint32_t imu_clipped;   // ticks flagged COOP_SAMPLE_CLIPPED
+        uint32_t aids_sent;     // COOP_FLOW/TOF/BARO/MAG sent
+        uint32_t aids_dropped;  // readings lost (queue full or no space on the port)
         // (all zero at startup: the object is a static member of the vehicle's parameters)
     };
     const Stats &stats() const { return _stats; }
@@ -83,6 +98,12 @@ private:
     bool resolve_channel();
     // Send one completed sub-interval as COOP_IMU_DELTA.
     void send_imu(const AP_CoopBridge_ImuStage::Sub &sub);
+    // Send every queued reading (flow, ToF, baro, mag).
+    void send_aids();
+    void send_flow(const AP_CoopReading::Flow &r);
+    void send_tof(const AP_CoopReading::Tof &r);
+    void send_baro(const AP_CoopReading::Baro &r);
+    void send_mag(const AP_CoopReading::Mag &r);
     // Send COOP_LINK_STATUS.
     void send_link_status(uint64_t now_us);
 #if HAL_LOGGING_ENABLED
@@ -92,6 +113,18 @@ private:
 
     // Parameters
     AP_Int8 _port;              // serial port number of the companion, -1 = disabled
+    AP_Float _flow_c[4];        // flow counts to angle (rad/count), row-major 2x2
+    AP_Float _flow_sd;          // flow count noise (counts), quantisation added
+    AP_Float _tof_sd;           // ToF range noise (m)
+    AP_Float _baro_sd;          // baro pressure noise per reading (Pa)
+    AP_Float _mag_sd;           // magnetometer direction noise per axis (rad)
+    AP_Float _mag_norm;         // surveyed field strength (driver units), 0 = no norm check
+
+    // Readings waiting for update_fast(), one queue per sensor (single producer each)
+    ObjectBuffer<AP_CoopReading::Flow> _flow_q{8};
+    ObjectBuffer<AP_CoopReading::Tof> _tof_q{4};
+    ObjectBuffer<AP_CoopReading::Baro> _baro_q{4};
+    ObjectBuffer<AP_CoopReading::Mag> _mag_q{8};
 
     // Port resolution
     int8_t _port_resolved = -2; // value of _port the channel was resolved for
