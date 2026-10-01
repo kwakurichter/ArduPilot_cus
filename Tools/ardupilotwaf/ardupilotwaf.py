@@ -129,6 +129,7 @@ COMMON_VEHICLE_DEPENDENT_LIBRARIES = [
     'AP_Beacon',
     'AP_Ranging',
     'AP_SwarmMesh',
+    'AP_CoopBridge',
     'AP_Arming',
     'AP_RCMapper',
     'AP_MultiHeap',
