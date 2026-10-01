@@ -462,11 +462,11 @@ void JSON::recv_fdm(const struct sitl_input &input)
     update_position();
 
     // update range finder distances
-    for (uint8_t i=7; i<13; i++) {
-        if ((received_bitmask &  1ULL << i) == 0) {
-            continue;
+    uint64_t range_key = RNG_1;
+    for (uint8_t i=0; i<ARRAY_SIZE(state.rng); i++, range_key <<= 1) {
+        if ((received_bitmask & range_key) != 0) {
+            rangefinder_m[i] = state.rng[i];
         }
-        rangefinder_m[i-7] = state.rng[i-7];
     }
 
     // update wind vane
