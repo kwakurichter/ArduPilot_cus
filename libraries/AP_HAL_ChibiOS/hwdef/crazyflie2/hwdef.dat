@@ -171,6 +171,7 @@ define AP_SWARMMESH_ENABLED 1
 define AP_SWARMMESH_SYSLINK_ENABLED 1
 define AP_SWARMMESH_SERIAL_ENABLED 0
 define AP_SWARMMESH_MAX_PEERS 8
+define AP_COOPBRIDGE_ENABLED 1      # Teensy 4.0 cooperative-estimation companion on SERIAL3
 
 # Identify this build as the Crazyflie port rather than stock ArduCopter.
 # Upstream's vendor hook: this becomes the GCS-visible string, while
