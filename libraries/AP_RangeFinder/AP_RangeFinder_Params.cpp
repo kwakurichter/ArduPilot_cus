@@ -65,6 +65,7 @@ const AP_Param::GroupInfo AP_RangeFinder_Params::var_info[] = {
     // @Values: 48:LightWare-GRF-I2C
     // @Values: 50:CrazyflieFlowDeck
     // @Values: 100:SITL
+    // @Values: 101:SITL cooperative VL53L1X
     // @User: Standard
     AP_GROUPINFO_FLAGS("TYPE", 1, AP_RangeFinder_Params, type, 0, AP_PARAM_FLAG_ENABLE),
 

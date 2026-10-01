@@ -52,6 +52,7 @@
 #include "AP_RangeFinder_Lanbao.h"
 #include "AP_RangeFinder_LeddarVu8.h"
 #include "AP_RangeFinder_SITL.h"
+#include "AP_RangeFinder_SITL_Coop.h"
 #include "AP_RangeFinder_MSP.h"
 #include "AP_RangeFinder_USD1_CAN.h"
 #include "AP_RangeFinder_Benewake_CAN.h"
@@ -542,6 +543,12 @@ __INITFUNC__ void RangeFinder::detect_instance(uint8_t instance, uint8_t& serial
 #if AP_RANGEFINDER_SIM_ENABLED
     case Type::SIM:
         _add_backend(NEW_NOTHROW AP_RangeFinder_SITL(state[instance], params[instance], instance), instance);
+        break;
+#endif
+
+#if AP_RANGEFINDER_SIM_COOP_ENABLED
+    case Type::SIM_COOP:
+        _add_backend(NEW_NOTHROW AP_RangeFinder_SITL_Coop(state[instance], params[instance]), instance);
         break;
 #endif
 
