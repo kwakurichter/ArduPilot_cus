@@ -1,0 +1,46 @@
+# Crazyflie brushless Gazebo model with ArduCopter SITL.
+# Vehicle-specific SYSID and CEN_* values are set by the Python orchestrator.
+
+FRAME_CLASS 1
+FRAME_TYPE 1
+SCHED_LOOP_RATE 250
+
+# Crazyflie attitude-rate tuning from the custom hardware target.
+ATC_ACC_P_MAX 1800
+ATC_ACC_R_MAX 1800
+ATC_ACC_Y_MAX 540
+ATC_ANG_PIT_P 6
+ATC_ANG_RLL_P 6
+ATC_ANG_YAW_P 6
+ATC_RAT_PIT_D 0.004
+ATC_RAT_PIT_FLTD 81
+ATC_RAT_PIT_FLTT 81
+ATC_RAT_PIT_I 0.3
+ATC_RAT_PIT_P 0.3
+ATC_RAT_RLL_D 0.004
+ATC_RAT_RLL_FLTD 81
+ATC_RAT_RLL_FLTT 81
+ATC_RAT_RLL_I 0.3
+ATC_RAT_RLL_P 0.3
+ATC_RAT_YAW_FLTE 2
+ATC_RAT_YAW_FLTT 81
+ATC_RAT_YAW_I 0.04
+ATC_RAT_YAW_P 0.4
+
+INS_GYRO_FILTER 162
+MOT_THST_EXPO 0.45
+MOT_THST_HOVER 0.30
+
+# Run EKF3 on the sensor simulation produced from Gazebo truth. In particular,
+# do not use AHRS_EKF_TYPE=10 (the perfect SITL state estimator).
+AHRS_EKF_TYPE 3
+EK2_ENABLE 0
+EK3_ENABLE 1
+
+SCR_ENABLE 1
+SCR_HEAP_SIZE 100000
+LOG_DISARMED 1
+LOG_FILE_DSRMROT 0
+
+# The experiment supervisor supplies heartbeats and handles failure cleanup.
+FS_GCS_ENABLE 0
