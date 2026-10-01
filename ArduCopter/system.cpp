@@ -191,6 +191,11 @@ void Copter::init_ardupilot()
     g2.swarmmesh.init();
 #endif
 
+#if AP_COOPBRIDGE_ENABLED
+    // companion link for the cooperative estimator (after the INS is up)
+    g2.coopbridge.init();
+#endif
+
     // set landed flags
     set_land_complete(true);
     set_land_complete_maybe(true);

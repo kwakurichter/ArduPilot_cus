@@ -718,6 +718,11 @@ public:
     AP_SwarmMesh swarmmesh;
 #endif
 
+#if AP_COOPBRIDGE_ENABLED
+    // link to the cooperative-estimation companion computer
+    AP_CoopBridge coopbridge;
+#endif
+
 };
 
 extern const AP_Param::Info        var_info[];

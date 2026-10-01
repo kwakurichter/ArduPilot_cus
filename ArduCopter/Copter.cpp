@@ -147,6 +147,10 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 #if HAL_LOGGING_ENABLED
     FAST_TASK(Log_Video_Stabilisation),
 #endif
+#if AP_COOPBRIDGE_ENABLED
+    // IMU first stage for the cooperative companion: every tick, after the INS update
+    FAST_TASK_CLASS(AP_CoopBridge, &copter.g2.coopbridge, update_fast),
+#endif
 
     SCHED_TASK(rc_loop,              250,    130,  3),
     SCHED_TASK(throttle_loop,         50,     75,  6),
@@ -267,6 +271,9 @@ const AP_Scheduler::Task Copter::scheduler_tasks[] = {
 #endif
 #if AP_SWARMMESH_ENABLED
     SCHED_TASK_CLASS(AP_SwarmMesh,            &copter.g2.swarmmesh,           update,         100,  50,  216),
+#endif
+#if AP_COOPBRIDGE_ENABLED
+    SCHED_TASK_CLASS(AP_CoopBridge,           &copter.g2.coopbridge,          update,          10,  50,  217),
 #endif
 };
 

@@ -1188,6 +1188,12 @@ const AP_Param::GroupInfo ParametersG2::var_info2[] = {
     AP_SUBGROUPINFO(swarmmesh, "P2P", 23, ParametersG2, AP_SwarmMesh),
 #endif
 
+#if AP_COOPBRIDGE_ENABLED
+    // @Group: COOP
+    // @Path: ../libraries/AP_CoopBridge/AP_CoopBridge.cpp
+    AP_SUBGROUPINFO(coopbridge, "COOP", 40, ParametersG2, AP_CoopBridge),
+#endif
+
     // ID 62 is reserved for the AP_SUBGROUPEXTENSION
 
     AP_GROUPEND

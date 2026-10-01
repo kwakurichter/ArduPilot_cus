@@ -181,6 +181,10 @@
 #if AP_SWARMMESH_ENABLED
 #include <AP_SwarmMesh/AP_SwarmMesh.h>
 #endif
+#include <AP_CoopBridge/AP_CoopBridge_config.h>
+#if AP_COOPBRIDGE_ENABLED
+#include <AP_CoopBridge/AP_CoopBridge.h>
+#endif
 // Local modules
 #include "Parameters.h"
 #if USER_PARAMS_ENABLED
