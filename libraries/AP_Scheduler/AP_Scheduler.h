@@ -94,7 +94,8 @@ public:
     };
 
     enum class Options : uint8_t {
-        RECORD_TASK_INFO = 1 << 0
+        RECORD_TASK_INFO = 1 << 0,
+        LOG_TASK_INFO = 1 << 1,
     };
 
     enum FastTaskPriorities {
@@ -257,6 +258,7 @@ private:
 
     // start of current loop
     uint64_t _loop_sample_time_us;
+    uint32_t _profile_loop_end_us = 0;
 
     // bitmask bit which indicates if we should log PERF message
     uint32_t _log_performance_bit;

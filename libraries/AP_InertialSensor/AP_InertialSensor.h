@@ -203,8 +203,17 @@ public:
     // update gyro and accel values from accumulated samples
     void update(void) __RAMFUNC__;
 
+    // Optional wall-time diagnostics; durations are microseconds.
+    struct SampleTiming {
+        uint32_t sleep_requested_us;
+        uint32_t sleep_actual_us;
+        uint32_t sample_wait_us;
+        uint32_t entry_late_us;
+        uint32_t poll_count;
+        bool rephased;
+    };
     // wait for a sample to be available
-    void wait_for_sample(void) __RAMFUNC__;
+    void wait_for_sample(SampleTiming *timing = nullptr) __RAMFUNC__;
 
     // class level parameters
     static const struct AP_Param::GroupInfo var_info[];

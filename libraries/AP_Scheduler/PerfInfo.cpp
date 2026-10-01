@@ -25,6 +25,10 @@ extern const AP_HAL::HAL& hal;
 // reset - reset all records of loop time to zero
 void AP::PerfInfo::reset()
 {
+    memset(_loop_timing, 0, sizeof(_loop_timing));
+    _sample_wait_count = 0;
+    _sample_poll_count = 0;
+    _sample_rephase_count = 0;
     loop_count = 0;
     max_time = 0;
     min_time = 0;
@@ -36,6 +40,14 @@ void AP::PerfInfo::reset()
     }
 }
 
+void AP::PerfInfo::record_loop_stage(LoopStage stage, uint32_t time_us)
+{
+    auto &timing = _loop_timing[uint8_t(stage)];
+    timing.total_us += time_us;
+    timing.count++;
+    timing.max_us = MAX(timing.max_us, time_us);
+}
+
 // ignore_loop - ignore this loop from performance measurements (used to reduce false positive when arming)
 void AP::PerfInfo::ignore_this_loop()
 {
@@ -45,7 +57,7 @@ void AP::PerfInfo::ignore_this_loop()
 // allocate the array of task statistics for use by @SYS/tasks.txt
 void AP::PerfInfo::allocate_task_info(uint8_t num_tasks)
 {
-    _task_info = NEW_NOTHROW TaskInfo[num_tasks];
+    _task_info = NEW_NOTHROW TaskInfo[num_tasks] {};
     if (_task_info == nullptr) {
         DEV_PRINTF("Unable to allocate scheduler TaskInfo\n");
         _num_tasks = 0;
@@ -62,7 +74,7 @@ void AP::PerfInfo::free_task_info()
 }
 
 // called after each run of a task to update its statistics based on measurements taken by the scheduler
-void AP::PerfInfo::update_task_info(uint8_t task_index, uint16_t task_time_us, bool overrun)
+void AP::PerfInfo::update_task_info(uint8_t task_index, uint16_t task_time_us, bool overrun, const char *name)
 {
     if (_task_info == nullptr) {
         return;
@@ -73,6 +85,7 @@ void AP::PerfInfo::update_task_info(uint8_t task_index, uint16_t task_time_us, b
         return;
     }
     TaskInfo& ti = _task_info[task_index];
+    ti.name = name;
     ti.update(task_time_us, overrun);
 }
 
