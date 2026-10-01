@@ -2010,8 +2010,11 @@ void AP_InertialSensor::update(void)
   delays occur we need to cope with them. The long term sum of
   _delta_time should be exactly equal to the wall clock elapsed time
  */
-void AP_InertialSensor::wait_for_sample(void)
+void AP_InertialSensor::wait_for_sample(SampleTiming *timing)
 {
+    if (timing != nullptr) {
+        *timing = {};
+    }
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
     auto *sitl = AP::sitl();
     if (sitl == nullptr) {
@@ -2040,6 +2043,10 @@ void AP_InertialSensor::wait_for_sample(void)
         uint32_t wait_usec = _next_sample_usec - now;
         hal.scheduler->delay_microseconds_boost(wait_usec);
         uint32_t now2 = AP_HAL::micros();
+        if (timing != nullptr) {
+            timing->sleep_requested_us = wait_usec;
+            timing->sleep_actual_us = now2 - now;
+        }
         if (now2+100 < _next_sample_usec) {
             timing_printf("shortsleep %u\n", (unsigned)(_next_sample_usec-now2));
         }
@@ -2053,15 +2060,23 @@ void AP_InertialSensor::wait_for_sample(void)
         // we've overshot, but only by a small amount, keep on
         // schedule with no delay
         timing_printf("overshoot1 %u\n", (unsigned)(now-_next_sample_usec));
+        if (timing != nullptr) {
+            timing->entry_late_us = now - _next_sample_usec;
+        }
         _next_sample_usec += _sample_period_usec;
     } else {
         // we've overshot by a larger amount, re-zero scheduling with
         // no delay
         timing_printf("overshoot2 %u\n", (unsigned)(now-_next_sample_usec));
+        if (timing != nullptr) {
+            timing->entry_late_us = now - _next_sample_usec;
+            timing->rephased = true;
+        }
         _next_sample_usec = now + _sample_period_usec;
     }
 
 check_sample:
+        const uint32_t sample_wait_start_us = timing != nullptr ? AP_HAL::micros() : 0;
         // now we wait until we have the gyro and accel samples we need
         uint8_t gyro_available_mask = 0;
         uint8_t accel_available_mask = 0;
@@ -2127,6 +2142,10 @@ check_sample:
         }
 
     now = AP_HAL::micros();
+    if (timing != nullptr) {
+        timing->sample_wait_us = now - sample_wait_start_us;
+        timing->poll_count = wait_counter;
+    }
     _delta_time = (now - _last_sample_usec) * 1.0e-6f;
     _last_sample_usec = now;
 

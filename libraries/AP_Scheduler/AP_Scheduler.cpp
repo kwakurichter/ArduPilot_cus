@@ -69,8 +69,8 @@ const AP_Param::GroupInfo AP_Scheduler::var_info[] = {
 
     // @Param: OPTIONS
     // @DisplayName: Scheduling options
-    // @Description: This controls optional aspects of the scheduler.
-    // @Bitmask: 0:Enable per-task perf info
+    // @Description: This controls optional aspects of the scheduler. Per-task logging also enables collection and writes PTIM, LTIM and IWCT records with the performance log. Profiling adds overhead; disable after diagnosis.
+    // @Bitmask: 0:Enable per-task perf info,1:Log per-task perf info
     // @User: Advanced
     AP_GROUPINFO("OPTIONS",  2, AP_Scheduler, _options, 0),
 
@@ -139,7 +139,7 @@ void AP_Scheduler::init(const AP_Scheduler::Task *tasks, uint8_t num_tasks, uint
     perf_info.set_loop_rate(get_loop_rate_hz());
     perf_info.reset();
 
-    if (_options & uint8_t(Options::RECORD_TASK_INFO)) {
+    if (_options & (uint8_t(Options::RECORD_TASK_INFO) | uint8_t(Options::LOG_TASK_INFO))) {
         perf_info.allocate_task_info(_num_tasks);
     }
 
@@ -288,7 +288,7 @@ void AP_Scheduler::run(uint32_t time_available)
                   (unsigned)_task_time_allowed);
         }
 
-        perf_info.update_task_info(i, time_taken, overrun);
+        perf_info.update_task_info(i, time_taken, overrun, task.name);
 
         if (time_taken >= time_available) {
             /*
@@ -347,11 +347,32 @@ float AP_Scheduler::load_average()
 
 void AP_Scheduler::loop()
 {
+    using LoopStage = AP::PerfInfo::LoopStage;
+    const bool profile_loop = _options & uint8_t(Options::LOG_TASK_INFO);
+    const uint32_t profile_start_us = profile_loop ? AP_HAL::micros() : 0;
+    if (profile_loop && _profile_loop_end_us != 0) {
+        perf_info.record_loop_stage(LoopStage::LOOP_GAP, profile_start_us - _profile_loop_end_us);
+    }
+    AP_InertialSensor::SampleTiming sample_timing;
     // wait for an INS sample
     hal.util->persistent_data.scheduler_task = -3;
     _rsem.give();
-    AP::ins().wait_for_sample();
+    AP::ins().wait_for_sample(profile_loop ? &sample_timing : nullptr);
+    const uint32_t profile_lock_start_us = profile_loop ? AP_HAL::micros() : 0;
     _rsem.take_blocking();
+    if (profile_loop) {
+        const uint32_t lock_us = AP_HAL::micros() - profile_lock_start_us;
+        perf_info.record_loop_stage(LoopStage::IMU_WAIT, profile_lock_start_us - profile_start_us);
+        perf_info.record_loop_stage(LoopStage::SLEEP_REQUEST, sample_timing.sleep_requested_us);
+        perf_info.record_loop_stage(LoopStage::SLEEP_ACTUAL, sample_timing.sleep_actual_us);
+        const uint32_t wake_late_us = sample_timing.sleep_actual_us > sample_timing.sleep_requested_us ?
+            sample_timing.sleep_actual_us - sample_timing.sleep_requested_us : 0;
+        perf_info.record_loop_stage(LoopStage::WAKE_LATE, wake_late_us);
+        perf_info.record_loop_stage(LoopStage::SAMPLE_WAIT, sample_timing.sample_wait_us);
+        perf_info.record_loop_stage(LoopStage::ENTRY_LATE, sample_timing.entry_late_us);
+        perf_info.record_loop_stage(LoopStage::SCHED_LOCK, lock_us);
+        perf_info.record_sample_wait(sample_timing.poll_count, sample_timing.rephased);
+    }
     hal.util->persistent_data.scheduler_task = -1;
 
     _loop_sample_time_us = AP_HAL::micros64();
@@ -396,7 +417,11 @@ void AP_Scheduler::loop()
     time_available += extra_loop_us;
 
     // run the tasks
+    const uint32_t profile_run_start_us = profile_loop ? AP_HAL::micros() : 0;
     run(time_available);
+    if (profile_loop) {
+        perf_info.record_loop_stage(LoopStage::SCHED_RUN, AP_HAL::micros() - profile_run_start_us);
+    }
 
 #if CONFIG_HAL_BOARD == HAL_BOARD_SITL
     // move result of AP_HAL::micros() forward:
@@ -428,6 +453,7 @@ void AP_Scheduler::loop()
 #if AP_SIM_ENABLED && CONFIG_HAL_BOARD != HAL_BOARD_SITL
     hal.simstate->update();
 #endif
+    _profile_loop_end_us = profile_loop ? AP_HAL::micros() : 0;
 }
 
 #if HAL_LOGGING_ENABLED
@@ -439,13 +465,68 @@ void AP_Scheduler::update_logging()
     if (_log_performance_bit != (uint32_t)-1 &&
         AP::logger().should_log(_log_performance_bit)) {
         Log_Write_Performance();
+        if (_options & uint8_t(Options::LOG_TASK_INFO)) {
+            const uint64_t now_us = AP_HAL::micros64();
+            static const char *const stage_names[] = {
+                "imu_wait", "sleep_request", "sleep_actual", "wake_late", "sample_wait",
+                "entry_late", "sched_lock", "sched_run", "loop_gap"
+            };
+            static_assert(ARRAY_SIZE(stage_names) == uint8_t(AP::PerfInfo::LoopStage::COUNT),
+                          "Loop timing names must match stages");
+            for (uint8_t i = 0; i < ARRAY_SIZE(stage_names); i++) {
+                const auto &timing = perf_info.get_loop_timing(AP::PerfInfo::LoopStage(i));
+                if (timing.count == 0) {
+                    continue;
+                }
+                // @LoggerMessage: LTIM
+                // @Description: Opt-in main-loop wall-time statistics. Stages overlap: imu_wait includes sleep_actual and sample_wait; wake_late is the positive sleep excess, entry_late is lateness before pacing. sched_lock measures scheduler mutex acquisition, sched_run the whole task dispatch, loop_gap the time between scheduler calls. Use Total/Count for means; do not sum all stages. Reset occurs inside sched_run, so its interval is offset by one loop from the wait stages. Profiling overhead and preemption are included.
+                // @Field: TimeUS: Snapshot timestamp, microseconds since boot
+                // @Field: Stage: Measured stage name
+                // @Field: Count: Number of observations, including zero durations
+                // @Field: Total: Accumulated duration in microseconds
+                // @Field: Max: Maximum duration in microseconds
+                AP::logger().Write("LTIM", "TimeUS,Stage,Count,Total,Max", "QNIQI",
+                                   now_us, stage_names[i], timing.count, timing.total_us, timing.max_us);
+            }
+            // @LoggerMessage: IWCT
+            // @Description: IMU wait counters over the same interval as LTIM wait stages, enabled by scheduler profiling.
+            // @Field: TimeUS: Snapshot timestamp, microseconds since boot
+            // @Field: Count: Number of profiled wait calls
+            // @Field: Poll: Additional 100-microsecond sleeps waiting for sensor availability
+            // @Field: Reset: Sample pacing reschedules caused by entering at least one eighth of a sample period late
+            AP::logger().Write("IWCT", "TimeUS,Count,Poll,Reset", "QIII", now_us,
+                               perf_info.get_sample_wait_count(), perf_info.get_sample_poll_count(),
+                               perf_info.get_sample_rephase_count());
+            for (uint8_t i = 0; i < _num_tasks; i++) {
+                const auto *ti = perf_info.get_task_info(i);
+                if (ti == nullptr || (ti->tick_count == 0 && ti->slip_count == 0)) {
+                    continue;
+                }
+                // @LoggerMessage: PTIM
+                // @Description: Scheduler task wall-time statistics since the previous performance-log reset. Profiling and interrupt/preemption time are included; this is not exclusive CPU time. Names may be truncated to 16 characters; Id identifies the task in this firmware's merged scheduler table.
+                // @Field: TimeUS: Snapshot timestamp, microseconds since boot
+                // @Field: Id: Scheduler task index
+                // @Field: Name: Task name, or not-run if the task did not execute in this interval
+                // @Field: Min: Minimum execution time in microseconds
+                // @Field: Max: Maximum execution time in microseconds
+                // @Field: Total: Accumulated execution time in microseconds
+                // @Field: Count: Number of executions
+                // @Field: Ovr: Executions exceeding the task time allowance
+                // @Field: Slp: Scheduling opportunities delayed by at least one task interval
+                AP::logger().Write("PTIM", "TimeUS,Id,Name,Min,Max,Total,Count,Ovr,Slp",
+                                   "QBNHHIIHH", now_us, i, ti->name == nullptr ? "not-run" : ti->name,
+                                   ti->min_time_us, ti->max_time_us, ti->elapsed_time_us,
+                                   ti->tick_count, ti->overrun_count, ti->slip_count);
+            }
+        }
     }
     perf_info.set_loop_rate(get_loop_rate_hz());
     perf_info.reset();
     // dynamically update the per-task perf counter
-    if (!(_options & uint8_t(Options::RECORD_TASK_INFO)) && perf_info.has_task_info()) {
+    const bool collect_task_info = _options & (uint8_t(Options::RECORD_TASK_INFO) | uint8_t(Options::LOG_TASK_INFO));
+    if (!collect_task_info && perf_info.has_task_info()) {
         perf_info.free_task_info();
-    } else if ((_options & uint8_t(Options::RECORD_TASK_INFO)) && !perf_info.has_task_info()) {
+    } else if (collect_task_info && !perf_info.has_task_info()) {
         perf_info.allocate_task_info(_num_tasks);
     }
 }
