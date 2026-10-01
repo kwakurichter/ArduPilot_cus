@@ -19,6 +19,7 @@
 #include "AP_Compass_config.h"
 
 #include "AP_Compass_SITL.h"
+#include "AP_Compass_SITL_Coop.h"
 #include "AP_Compass_AK8963.h"
 #include "AP_Compass_Backend.h"
 #include "AP_Compass_BMM150.h"
@@ -1401,9 +1402,22 @@ void Compass::_detect_backends(void)
     }
 #endif
 
+#if AP_COMPASS_SITL_COOP_ENABLED
+    // the cooperative estimator's MMC5983MA replaces the regular SITL compasses
+    const bool coop_compass = AP::sitl()->models.coop_sensors.enabled();
+    if (coop_compass) {
+        add_backend(DRIVER_SITL, NEW_NOTHROW AP_Compass_SITL_Coop());
+        RETURN_IF_NO_SPACE;
+    }
+#elif AP_COMPASS_SITL_ENABLED
+    const bool coop_compass = false;
+#endif
+#if AP_COMPASS_SITL_ENABLED
+    (void)coop_compass;
+#endif
 #if AP_COMPASS_SITL_ENABLED && !AP_TEST_DRONECAN_DRIVERS
     // create several SITL compass backends:
-    for (uint8_t i=0; i<MAX_CONNECTED_MAGS; i++) {
+    for (uint8_t i=0; !coop_compass && i<MAX_CONNECTED_MAGS; i++) {
         add_backend(DRIVER_SITL, NEW_NOTHROW AP_Compass_SITL(i));
         RETURN_IF_NO_SPACE;
     }
