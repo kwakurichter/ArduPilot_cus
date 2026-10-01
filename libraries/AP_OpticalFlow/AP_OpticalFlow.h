@@ -75,6 +75,9 @@ public:
 #if AP_OPTICALFLOW_SITL_ENABLED
         SITL = 10,
 #endif  // AP_OPTICALFLOW_SITL_ENABLED
+#if AP_OPTICALFLOW_SITL_COOP_ENABLED
+        SITL_COOP = 101,
+#endif  // AP_OPTICALFLOW_SITL_COOP_ENABLED
     };
 
     // init - initialise sensor

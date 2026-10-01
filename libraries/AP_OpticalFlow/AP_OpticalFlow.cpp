@@ -5,6 +5,7 @@
 
 #include "AP_OpticalFlow_Onboard.h"
 #include "AP_OpticalFlow_SITL.h"
+#include "AP_OpticalFlow_SITL_Coop.h"
 #include "AP_OpticalFlow_Pixart.h"
 #include "AP_OpticalFlow_PX4Flow.h"
 #include "AP_OpticalFlow_CXOF.h"
@@ -28,7 +29,7 @@ const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
     // @DisplayName: Optical flow sensor type
     // @Description: Optical flow sensor type
     // @SortValues: AlphabeticalZeroAtTop
-    // @Values: 0:None, 1:PX4Flow, 2:Pixart, 3:Bebop, 4:CXOF, 5:MAVLink, 6:DroneCAN, 7:MSP, 8:UPFLOW, 9:CrazyflieFlowDeck, 10:SITL
+    // @Values: 0:None, 1:PX4Flow, 2:Pixart, 3:Bebop, 4:CXOF, 5:MAVLink, 6:DroneCAN, 7:MSP, 8:UPFLOW, 9:CrazyflieFlowDeck, 10:SITL, 101:SITL cooperative PMW3901
     // @User: Standard
     // @RebootRequired: True
     AP_GROUPINFO_FLAGS("_TYPE", 0,  AP_OpticalFlow,    _type,   (float)OPTICAL_FLOW_TYPE_DEFAULT, AP_PARAM_FLAG_ENABLE),
@@ -182,6 +183,11 @@ void AP_OpticalFlow::init(uint32_t log_bit)
         backend = NEW_NOTHROW AP_OpticalFlow_SITL(*this);
         break;
 #endif  // AP_OPTICALFLOW_SITL_ENABLED
+#if AP_OPTICALFLOW_SITL_COOP_ENABLED
+    case Type::SITL_COOP:
+        backend = NEW_NOTHROW AP_OpticalFlow_SITL_Coop(*this);
+        break;
+#endif  // AP_OPTICALFLOW_SITL_COOP_ENABLED
     }
 
     if (backend != nullptr) {
