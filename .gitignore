@@ -176,5 +176,8 @@ autotest_result_*_junit.xml
 
 # Ignore ArduSwarm stuff
 /libraries/AP_Ranging/dev_notes.md
-/libraries/AP_Ranging/locodeck.c.reference
 COMPANION_INTEGRATION.md
+CRAZYFLIE_PORT_GUIDE.md
+dev_notes.md
+/crazyflie_scripts/run_centralized_sitl.py
+/crazyflie_scripts/centralized_formation.lua
