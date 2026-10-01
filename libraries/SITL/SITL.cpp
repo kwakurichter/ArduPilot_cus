@@ -1562,6 +1562,12 @@ const AP_Param::GroupInfo SIM::ModelParm::var_info[] = {
     AP_SUBGROUPPTR(ais_ptr, "AIS_", 7, SIM::ModelParm, AIS),
 #endif  // AP_SIM_AIS_ENABLED
 
+#if AP_SIM_COOP_SENSORS_ENABLED
+    // @Group: COOP_
+    // @Path: ./SIM_CoopSensors.cpp
+    AP_SUBGROUPINFO(coop_sensors, "COOP_", 20, SIM::ModelParm, CoopSensors),
+#endif
+
     AP_GROUPEND
 };
 

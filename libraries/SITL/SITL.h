@@ -13,6 +13,7 @@
 #include <AP_InertialSensor/AP_InertialSensor.h>
 
 #include "SIM_Buzzer.h"
+#include "SIM_CoopSensors.h"
 #include "SIM_Gripper_EPM.h"
 #include "SIM_Gripper_Servo.h"
 #include "SIM_I2C.h"
@@ -390,6 +391,9 @@ public:
 #if AP_SIM_AIS_ENABLED
         class AIS *ais_ptr;
 #endif  // AP_SIM_AIS_ENABLED
+#if AP_SIM_COOP_SENSORS_ENABLED
+        CoopSensors coop_sensors;
+#endif
     };
     ModelParm models;
     

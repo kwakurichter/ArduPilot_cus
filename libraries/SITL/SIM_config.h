@@ -114,6 +114,11 @@
 #define AP_SIM_SLUNGPAYLOAD_ENABLED (CONFIG_HAL_BOARD == HAL_BOARD_SITL)
 #endif
 
+#ifndef AP_SIM_COOP_SENSORS_ENABLED
+// Crazyflie aid sensors for the cooperative estimator (SIM_COOP_*, SIM_CoopSensors.h)
+#define AP_SIM_COOP_SENSORS_ENABLED (CONFIG_HAL_BOARD == HAL_BOARD_SITL)
+#endif
+
 #ifndef AP_SIM_TETHER_ENABLED
 #define AP_SIM_TETHER_ENABLED (CONFIG_HAL_BOARD == HAL_BOARD_SITL)
 #endif
