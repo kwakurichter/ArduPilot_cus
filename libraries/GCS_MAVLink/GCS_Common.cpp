@@ -109,6 +109,10 @@
 #endif
 
 #include <AP_SwarmMesh/AP_SwarmMesh_config.h>
+#include <AP_CoopBridge/AP_CoopBridge_config.h>
+#if AP_COOPBRIDGE_ENABLED
+#include <AP_CoopBridge/AP_CoopBridge.h>
+#endif
 #if AP_SWARMMESH_COORD_ENABLED
 #include <AP_SwarmMesh/AP_SwarmMesh.h>
 #endif
@@ -4759,6 +4763,17 @@ void GCS_MAVLINK::handle_message(const mavlink_message_t &msg)
         AP_SwarmMesh *swarmmesh = AP::swarmmesh();
         if (swarmmesh != nullptr) {
             swarmmesh->handle_tunnel(msg);
+        }
+        break;
+    }
+#endif
+
+#if AP_COOPBRIDGE_ENABLED
+    case MAVLINK_MSG_ID_COOP_PEER: {
+        // a cooperative estimator message from the companion, for the mesh
+        AP_CoopBridge *bridge = AP::coopbridge();
+        if (bridge != nullptr) {
+            bridge->handle_coop_peer(chan, msg);
         }
         break;
     }
