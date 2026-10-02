@@ -66,6 +66,21 @@ struct Baro {
     bool valid;
 };
 
+// One fix of the marker frontend: the body pose in the map at the exposure, already converted
+// from the camera frame (body FLU to map ENU, the estimator's frames), with its 6x6 covariance
+// in the right tangent [rotation, translation] as the upper triangle, row by row. A source
+// that only knows the position (the SITL stand-in) sends a very large rotation variance.
+struct Camera {
+    uint64_t capture_us;
+    uint32_t receipt_after_capture_us;  // when the fix became available on the FC
+    uint32_t end_after_capture_us;      // end of the exposure
+    float q[4];                 // w, x, y, z
+    Vector3f position_m;
+    float covariance[21];
+    uint8_t marker_id;
+    bool valid;
+};
+
 // One MMC5983MA sample: the calibrated field in the body frame (FRD, as AP_Compass), any
 // unit as long as COOP_MAG_NORM uses the same (AP_Compass uses milligauss).
 struct Mag {

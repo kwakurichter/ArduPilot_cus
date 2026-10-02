@@ -21,6 +21,9 @@
 #include <AP_Logger/AP_Logger.h>
 #include <AP_Scheduler/AP_Scheduler.h>
 #include <GCS_MAVLink/GCS.h>
+#if AP_SIM_COOP_SENSORS_ENABLED
+#include <SITL/SITL.h>
+#endif
 
 extern const AP_HAL::HAL& hal;
 
@@ -272,6 +275,15 @@ bool AP_CoopBridge::push_baro(const AP_CoopReading::Baro &r)
     return true;
 }
 
+bool AP_CoopBridge::push_camera(const AP_CoopReading::Camera &r)
+{
+    if (_port.get() < 0 || !_camera_q.push(r)) {
+        _stats.aids_dropped++;
+        return false;
+    }
+    return true;
+}
+
 bool AP_CoopBridge::push_mag(const AP_CoopReading::Mag &r)
 {
     if (_port.get() < 0 || !_mag_q.push(r)) {
@@ -299,6 +311,73 @@ void AP_CoopBridge::send_aids()
     while (_mag_q.pop(mag)) {
         send_mag(mag);
     }
+#if AP_SIM_COOP_SENSORS_ENABLED
+    sitl_camera();
+#endif
+    AP_CoopReading::Camera camera;
+    while (_camera_q.pop(camera)) {
+        send_camera(camera);
+    }
+}
+
+#if AP_SIM_COOP_SENSORS_ENABLED
+void AP_CoopBridge::sitl_camera()
+{
+    // The HM01B0 marker frontend does not exist yet; in SITL the sensor model's sparse
+    // position fixes (SIM_COOP_CAM_*) take its place on the same path. Called from the main
+    // thread, the queue's only consumer.
+    SITL::SIM *sitl = AP::sitl();
+    if (sitl == nullptr) {
+        return;
+    }
+    SITL::CoopSensors::Camera c;
+    while (sitl->models.coop_sensors.pop_camera(c)) {
+        AP_CoopReading::Camera r {};
+        r.capture_us = c.capture_us;
+        r.receipt_after_capture_us = uint32_t(c.receipt_us - c.capture_us);
+        r.end_after_capture_us = 0;
+        for (uint8_t i = 0; i < 4; i++) {
+            r.q[i] = c.q[i];
+        }
+        r.position_m = c.position_m;
+        // position only: the rotation carries (almost) no information
+        const float rot_var = sq(SITL::CoopSensors::CAMERA_ROTATION_SD);
+        const float pos_var = sq(c.sigma_m);
+        const float diag[6] {rot_var, rot_var, rot_var, pos_var, pos_var, pos_var};
+        uint8_t k = 0;
+        for (uint8_t row = 0; row < 6; row++) {
+            for (uint8_t col = row; col < 6; col++) {
+                r.covariance[k++] = row == col ? diag[row] : 0.0f;
+            }
+        }
+        r.valid = true;
+        push_camera(r);
+    }
+}
+#endif  // AP_SIM_COOP_SENSORS_ENABLED
+
+void AP_CoopBridge::send_camera(const AP_CoopReading::Camera &r)
+{
+    const mavlink_channel_t chan = mavlink_channel_t(_chan);
+    if (!HAVE_PAYLOAD_SPACE(chan, COOP_CAMERA)) {
+        _stats.aids_dropped++;
+        return;
+    }
+    mavlink_coop_camera_t pkt {};
+    pkt.time_usec = r.capture_us;
+    pkt.receipt_after_capture_us = r.receipt_after_capture_us;
+    pkt.end_after_capture_us = r.end_after_capture_us;
+    for (uint8_t i = 0; i < 4; i++) {
+        pkt.q[i] = r.q[i];
+    }
+    pkt.position[0] = r.position_m.x;
+    pkt.position[1] = r.position_m.y;
+    pkt.position[2] = r.position_m.z;
+    memcpy(pkt.covariance, r.covariance, sizeof(pkt.covariance));
+    pkt.marker_id = r.marker_id;
+    pkt.flags = r.valid ? COOP_SAMPLE_VALID : 0;
+    mavlink_msg_coop_camera_send_struct(chan, &pkt);
+    _stats.aids_sent++;
 }
 
 void AP_CoopBridge::send_flow(const AP_CoopReading::Flow &r)

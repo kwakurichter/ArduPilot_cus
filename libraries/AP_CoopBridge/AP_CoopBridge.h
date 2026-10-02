@@ -22,7 +22,7 @@
     COOP_IMU_DELTA    100 Hz  first stage of the IMU preintegration (AP_CoopBridge_ImuStage)
     COOP_FLOW,        per     one message per sensor reading, handed over by the drivers
     COOP_TOF,         reading (push_flow() etc., AP_CoopBridge_Readings.h)
-    COOP_BARO, COOP_MAG
+    COOP_BARO, COOP_MAG, COOP_CAMERA (SITL: sparse position fixes, see sitl_camera())
     COOP_LINK_STATUS    1 Hz  health of the cooperative path
 
   Still to come (thesis repo, embedded/ardupilot/required_changes.md): COOP_UWB, and
@@ -77,6 +77,7 @@ public:
     bool push_tof(const AP_CoopReading::Tof &r);
     bool push_baro(const AP_CoopReading::Baro &r);
     bool push_mag(const AP_CoopReading::Mag &r);
+    bool push_camera(const AP_CoopReading::Camera &r);
 
     // Counters for COOP_LINK_STATUS, the COOP log message and tests.
     struct Stats {
@@ -104,6 +105,11 @@ private:
     void send_tof(const AP_CoopReading::Tof &r);
     void send_baro(const AP_CoopReading::Baro &r);
     void send_mag(const AP_CoopReading::Mag &r);
+    void send_camera(const AP_CoopReading::Camera &r);
+#if AP_SIM_COOP_SENSORS_ENABLED
+    // SITL stand-in for the FC-side marker frontend: pops the SIM_COOP position fixes
+    void sitl_camera();
+#endif
     // Send COOP_LINK_STATUS.
     void send_link_status(uint64_t now_us);
 #if HAL_LOGGING_ENABLED
@@ -125,6 +131,7 @@ private:
     ObjectBuffer<AP_CoopReading::Tof> _tof_q{4};
     ObjectBuffer<AP_CoopReading::Baro> _baro_q{4};
     ObjectBuffer<AP_CoopReading::Mag> _mag_q{8};
+    ObjectBuffer<AP_CoopReading::Camera> _camera_q{4};
 
     // Port resolution
     int8_t _port_resolved = -2; // value of _port the channel was resolved for
