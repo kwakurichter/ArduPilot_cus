@@ -29,7 +29,7 @@ extern const AP_HAL::HAL& hal;
   rate while the radio delivers on the syslink thread, so this only has to
   cover the gap between drains, not a whole stream.
  */
-#define AP_SWARMMESH_SYSLINK_RX_BUF (4 * 256)
+#define AP_SWARMMESH_SYSLINK_RX_BUF (8 * 256)   // eight: a burst of STATE broadcasts from 8 vehicles
 
 AP_SwarmMesh_Syslink::AP_SwarmMesh_Syslink(AP_SwarmMesh &frontend) :
     AP_SwarmMesh_Backend(frontend)
@@ -125,10 +125,10 @@ uint32_t AP_SwarmMesh_Syslink::transport_txspace()
     return AP_Syslink::broadcast_max_len();
 }
 
-void AP_SwarmMesh_Syslink::transport_write(const uint8_t *buf, uint16_t len)
+bool AP_SwarmMesh_Syslink::transport_write(const uint8_t *buf, uint16_t len)
 {
     if (!transport_ready() || len == 0) {
-        return;
+        return false;
     }
 
     /*
@@ -140,14 +140,15 @@ void AP_SwarmMesh_Syslink::transport_write(const uint8_t *buf, uint16_t len)
      */
     if (len > AP_Syslink::broadcast_max_len()) {
         _tx_oversize++;
-        return;
+        return false;
     }
 
     if (!_syslink->send_broadcast(buf, (uint8_t)len)) {
         _tx_refused++;
-        return;
+        return false;
     }
     _tx_packets++;
+    return true;
 }
 
 void AP_SwarmMesh_Syslink::log_stats()

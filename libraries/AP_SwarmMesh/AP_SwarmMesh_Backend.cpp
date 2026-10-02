@@ -140,6 +140,16 @@ int8_t AP_SwarmMesh_Backend::frontend_fwd_port() const
     return _frontend.fwd_port;
 }
 
+uint8_t AP_SwarmMesh_Backend::frontend_fwd_mask() const
+{
+    return (uint8_t)_frontend.fwd_mask;
+}
+
+uint8_t AP_SwarmMesh_Backend::frontend_critical_depth() const
+{
+    return (uint8_t)constrain_int16(_frontend.critical_depth, 1, AP_SWARMMESH_CRITICAL_DEPTH_MAX);
+}
+
 // ---- healthy / update ----
 
 bool AP_SwarmMesh_Backend::healthy()
@@ -153,14 +163,22 @@ void AP_SwarmMesh_Backend::update()
         return;
     }
 
-    // drain available RX bytes through the parser. The budget caps max CPU per scheduler slot
+    // drain available RX bytes through the parser. The budget caps max CPU per scheduler slot;
+    // critical packets are not charged to it, so telemetry can never hold them back
     uint32_t nbytes = MIN(transport_available(), (uint32_t)AP_SWARMMESH_RX_BUDGET_BYTES);
-    while (nbytes-- > 0) {
+    while (nbytes > 0) {
+        nbytes--;
         const int16_t b = transport_read();
         if (b >= 0 && parse_byte((uint8_t)b)) {
             process_packet();
+            if (_type == SWARMMESH_TYPE_CRITICAL) {
+                nbytes = MIN(nbytes + SWARMMESH_HEADER_SIZE + _payload_len, transport_available());
+            }
         }
     }
+
+    // critical frames first, up to two per tick (a copy each into the transport)
+    critical_drain(2);
 
     // type freshness on every tick
     const uint32_t now_ms = AP_HAL::millis();
@@ -177,7 +195,10 @@ void AP_SwarmMesh_Backend::update()
         }
     }
 
-    // TX send path
+    // TX send path: telemetry skips its turn while critical frames are waiting
+    if (_crit_count > 0) {
+        return;
+    }
 
     static constexpr uint32_t HEARTBEAT_INTERVAL_MS = 1000U;
     if (now_ms - _last_heartbeat_ms >= HEARTBEAT_INTERVAL_MS) {
@@ -276,6 +297,11 @@ void AP_SwarmMesh_Backend::process_packet()
         return;
     }
 
+    if (hdr->type == SWARMMESH_TYPE_CRITICAL && hdr->origin_id == frontend_sysid()) {
+        // our own frame heard back (a shared medium such as the SITL multicast group)
+        return;
+    }
+
     AP_SwarmMesh::PeerState *ps = frontend_peerstate(hdr->origin_id);
     if (ps == nullptr) {
         _dropped++;
@@ -330,6 +356,11 @@ void AP_SwarmMesh_Backend::process_packet()
         return;
     }
 
+    if (hdr->type == SWARMMESH_TYPE_CRITICAL) {
+        process_critical(*hdr);
+        return;
+    }
+
     const bool is_broadcast = (hdr->dest_id == SWARMMESH_BROADCAST);    // dest_id=0 is broadcast: deliver locally to every peer without forwarding
     if (!is_broadcast && hdr->dest_id != frontend_sysid()) {
         forward_mavlink(hdr->origin_id, hdr->dest_id,
@@ -347,7 +378,9 @@ void AP_SwarmMesh_Backend::process_packet()
 #if HAL_GCS_ENABLED
         // hand the untouched frame to the companion computer port. This runs after the
         // CRC, duplicate, staleness and TTL checks above, so only packets we accept locally are forwarded.
-        forward_to_port(payload, hdr->payload_len);
+        if (frontend_fwd_mask() & AP_SwarmMesh::FWD_TELEMETRY) {
+            forward_to_port(payload, hdr->payload_len);
+        }
 #endif
         mavlink_message_t msg;
         for (uint8_t i = 0; i < hdr->payload_len; i++) {
@@ -414,11 +447,11 @@ void AP_SwarmMesh_Backend::mark_fresh(AP_SwarmMesh::PeerState &ps, uint32_t msgi
 // The frame is written exactly as the origin peer sent it, preserving its sysid, compid,
 // sequence number and CRC. Nothing is re-serialised or rewritten, so the companion's
 // parser sees each peer as a distinct MAVLink system.
-void AP_SwarmMesh_Backend::forward_to_port(const uint8_t *frame, uint16_t len)
+bool AP_SwarmMesh_Backend::forward_to_port(const uint8_t *frame, uint16_t len)
 {
     const int8_t port = frontend_fwd_port();
     if (port < 0 || len == 0) {
-        return;
+        return false;
     }
 
     // resolve the port to a MAVLink channel once, and again whenever the parameter
@@ -428,25 +461,26 @@ void AP_SwarmMesh_Backend::forward_to_port(const uint8_t *frame, uint16_t len)
         _fwd_chan = gcs().get_channel_from_port_number((uint8_t)port);
     }
     if (_fwd_chan == UINT8_MAX) {
-        return;  // the selected port is not configured as a MAVLink port
+        return false;  // the selected port is not configured as a MAVLink port
     }
 
     GCS_MAVLINK *link = gcs().chan(_fwd_chan);
     if (link == nullptr) {
-        return;
+        return false;
     }
     AP_HAL::UARTDriver *uart = link->get_uart();
     if (uart == nullptr) {
-        return;
+        return false;
     }
 
     // write the whole frame or none of it: a partial write would desynchronise the
     // companion's parser and corrupt every frame after it
     if (uart->txspace() < len) {
         _fwd_dropped++;
-        return;
+        return false;
     }
     uart->write(frame, len);
+    return true;
 }
 #endif  // HAL_GCS_ENABLED
 
@@ -790,18 +824,15 @@ void AP_SwarmMesh_Backend::send_mavlink(uint8_t dest_id, const mavlink_message_t
     }
     hdr.origin_time_us = utc_usec;
 
-    uint8_t crc = 0;
-    const uint8_t *hdr_bytes = (const uint8_t *)&hdr;
-    for (uint8_t i = 0; i < SWARMMESH_HEADER_SIZE - 1; i++) {
-        crc += hdr_bytes[i];
-    }
-    hdr.crc = crc;
+    set_header_crc(hdr);
 
     // write header + payload as a single buffer so datagram transports see one packet
     uint8_t pkt[SWARMMESH_HEADER_SIZE + MAVLINK_MAX_PACKET_LEN];
     memcpy(pkt, &hdr, SWARMMESH_HEADER_SIZE);
     memcpy(pkt + SWARMMESH_HEADER_SIZE, payload, payload_len);
-    transport_write(pkt, SWARMMESH_HEADER_SIZE + payload_len);
+    if (!transport_write(pkt, SWARMMESH_HEADER_SIZE + payload_len)) {
+        _tx_dropped++;
+    }
 }
 
 void AP_SwarmMesh_Backend::forward_mavlink(uint8_t id, uint8_t dest_id, const uint8_t *payload, uint16_t deadline_ms, uint8_t ttl, uint8_t payload_len, uint8_t flags, uint64_t origin_time, uint16_t seq)
@@ -826,20 +857,151 @@ void AP_SwarmMesh_Backend::forward_mavlink(uint8_t id, uint8_t dest_id, const ui
     hdr.payload_len    = payload_len;
     hdr.origin_time_us = origin_time;
 
+    set_header_crc(hdr);
+
+    // write header + payload as a single buffer so datagram transports see one packet
+    uint8_t pkt[SWARMMESH_HEADER_SIZE + SWARMMESH_MAX_PAYLOAD];
+    memcpy(pkt, &hdr, SWARMMESH_HEADER_SIZE);
+    memcpy(pkt + SWARMMESH_HEADER_SIZE, payload, payload_len);
+    if (!transport_write(pkt, SWARMMESH_HEADER_SIZE + payload_len)) {
+        _dropped++;
+        return;
+    }
+
+    _tx_fwd++;
+}
+
+void AP_SwarmMesh_Backend::set_header_crc(p2p_header_t &hdr)
+{
     uint8_t crc = 0;
     const uint8_t *hdr_bytes = (const uint8_t *)&hdr;
     for (uint8_t i = 0; i < SWARMMESH_HEADER_SIZE - 1; i++) {
         crc += hdr_bytes[i];
     }
     hdr.crc = crc;
+}
 
-    // write header + payload as a single buffer so datagram transports see one packet
-    uint8_t pkt[SWARMMESH_HEADER_SIZE + SWARMMESH_MAX_PAYLOAD];
+// ---- critical class ----
+
+bool AP_SwarmMesh_Backend::send_critical(const uint8_t *frame, uint16_t len, uint8_t dest_id, uint16_t deadline_ms)
+{
+    if (!transport_ready() || len == 0 || len > SWARMMESH_MAX_PAYLOAD) {
+        _crit_stats.tx_dropped++;
+        return false;
+    }
+    p2p_header_t hdr {};
+    hdr.stx1        = SWARMMESH_SYNC1;
+    hdr.stx2        = SWARMMESH_SYNC2;
+    hdr.version     = SWARMMESH_VERSION_01;
+    hdr.type        = SWARMMESH_TYPE_CRITICAL;
+    hdr.origin_id   = frontend_sysid();
+    hdr.dest_id     = dest_id;
+    hdr.prev_id     = frontend_sysid();
+    hdr.ttl         = frontend_ttl();
+    hdr.seq         = _tx_seq++;
+    hdr.deadline_ms = deadline_ms;
+    hdr.payload_len = (uint8_t)len;
+    uint64_t utc_usec = 0;
+    if (have_synced_utc(utc_usec)) {
+        hdr.flags = SWARMMESH_NORMAL;
+        hdr.origin_time_us = utc_usec;
+    } else {
+        hdr.flags = SWARMMESH_NO_RTC;
+    }
+    set_header_crc(hdr);
+
+    uint8_t pkt[SWARMMESH_MSG_BUF_MAX];
     memcpy(pkt, &hdr, SWARMMESH_HEADER_SIZE);
-    memcpy(pkt + SWARMMESH_HEADER_SIZE, payload, payload_len);
-    transport_write(pkt, SWARMMESH_HEADER_SIZE + payload_len);
+    memcpy(pkt + SWARMMESH_HEADER_SIZE, frame, len);
+    const uint16_t total = SWARMMESH_HEADER_SIZE + len;
 
-    _tx_fwd++;
+    // lowest latency: straight out if nothing critical is ahead of it
+    if (_crit_count == 0 && transport_write(pkt, total)) {
+        _crit_stats.tx++;
+        return true;
+    }
+    critical_push(pkt, total, deadline_ms);
+    return true;
+}
+
+void AP_SwarmMesh_Backend::critical_push(const uint8_t *pkt, uint16_t len, uint16_t deadline_ms)
+{
+    if (_crit == nullptr) {
+        _crit_depth = frontend_critical_depth();
+        _crit = NEW_NOTHROW CriticalSlot[_crit_depth];
+        if (_crit == nullptr) {
+            _crit_stats.tx_dropped++;
+            return;
+        }
+    }
+    if (_crit_count == _crit_depth) {
+        // full: the oldest goes. The estimator's STATE and ACK supersede older ones, and
+        // its M1/M2 exchanges recover from a loss (deferral)
+        _crit_head = (_crit_head + 1) % _crit_depth;
+        _crit_count--;
+        _crit_stats.tx_dropped++;
+    }
+    CriticalSlot &slot = _crit[(_crit_head + _crit_count) % _crit_depth];
+    slot.queued_ms = AP_HAL::millis();
+    slot.deadline_ms = deadline_ms;
+    slot.len = len;
+    memcpy(slot.pkt, pkt, len);
+    _crit_count++;
+    _crit_stats.queued_max = MAX(_crit_stats.queued_max, _crit_count);
+}
+
+void AP_SwarmMesh_Backend::critical_drain(uint8_t max_frames)
+{
+    const uint32_t now_ms = AP_HAL::millis();
+    while (_crit_count > 0 && max_frames > 0) {
+        CriticalSlot &slot = _crit[_crit_head];
+        const bool expired = slot.deadline_ms != 0 && now_ms - slot.queued_ms > slot.deadline_ms;
+        if (!expired) {
+            if (!transport_write(slot.pkt, slot.len)) {
+                return;     // refused: stays queued, retried next tick
+            }
+            _crit_stats.tx++;
+            max_frames--;
+        } else {
+            _crit_stats.tx_dropped++;
+        }
+        _crit_head = (_crit_head + 1) % _crit_depth;
+        _crit_count--;
+    }
+}
+
+void AP_SwarmMesh_Backend::process_critical(const p2p_header_t &hdr)
+{
+    const uint8_t *payload = (const uint8_t *)&hdr + SWARMMESH_HEADER_SIZE;
+    if (hdr.dest_id != SWARMMESH_BROADCAST && hdr.dest_id != frontend_sysid()) {
+        // relay for another vehicle, in the critical class
+        p2p_header_t fwd = hdr;
+        fwd.prev_id = frontend_sysid();
+        fwd.ttl = hdr.ttl - 1;
+        set_header_crc(fwd);
+        uint8_t pkt[SWARMMESH_MSG_BUF_MAX];
+        memcpy(pkt, &fwd, SWARMMESH_HEADER_SIZE);
+        memcpy(pkt + SWARMMESH_HEADER_SIZE, payload, hdr.payload_len);
+        critical_push(pkt, SWARMMESH_HEADER_SIZE + hdr.payload_len, hdr.deadline_ms);
+        _tx_fwd++;
+        return;
+    }
+    // for this vehicle: straight to the companion; ArduPilot itself does not handle it
+    _crit_stats.rx++;
+#if HAL_GCS_ENABLED
+    if ((frontend_fwd_mask() & AP_SwarmMesh::FWD_CRITICAL) && !forward_to_port(payload, hdr.payload_len)) {
+        _crit_stats.fwd_dropped++;
+    }
+#endif
+}
+
+void AP_SwarmMesh_Backend::get_critical_stats(CriticalStats &stats, bool restart_max)
+{
+    stats = _crit_stats;
+    stats.queued = _crit_count;
+    if (restart_max) {
+        _crit_stats.queued_max = _crit_count;
+    }
 }
 
 void AP_SwarmMesh_Backend::send_stream(Bucket bucket)
@@ -1276,6 +1438,19 @@ void AP_SwarmMesh_Backend::log_stats()
        txdrop          : _tx_dropped
     };
     AP::logger().WriteBlock(&pkt, sizeof(pkt));
+
+    // @LoggerMessage: SWCR
+    // @Description: SwarmMesh critical class counters (cumulative)
+    // @Field: TimeUS: Time since system startup
+    // @Field: Tx: critical frames put on the mesh (own and relayed)
+    // @Field: Rx: critical frames for this vehicle received
+    // @Field: TxD: dropped here (queue full or deadline expired)
+    // @Field: FwdD: received but not written to the companion port
+    // @Field: QMax: most frames waiting at once
+    AP::logger().WriteStreaming("SWCR", "TimeUS,Tx,Rx,TxD,FwdD,QMax", "QIIIIB",
+                                AP_HAL::micros64(), _crit_stats.tx, _crit_stats.rx,
+                                _crit_stats.tx_dropped, _crit_stats.fwd_dropped,
+                                _crit_stats.queued_max);
 }
 #endif  // HAL_LOGGING_ENABLED
 

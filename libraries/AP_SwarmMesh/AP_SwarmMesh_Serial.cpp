@@ -50,9 +50,13 @@ uint32_t AP_SwarmMesh_Serial::transport_txspace()
     return uart->txspace();
 }
 
-void AP_SwarmMesh_Serial::transport_write(const uint8_t *buf, uint16_t len)
+bool AP_SwarmMesh_Serial::transport_write(const uint8_t *buf, uint16_t len)
 {
-    uart->write(buf, len);
+    // all or nothing: a partial packet would desynchronise the receiver's parser
+    if (uart->txspace() < len) {
+        return false;
+    }
+    return uart->write(buf, len) == len;
 }
 
 #endif  // AP_SWARMMESH_SERIAL_ENABLED

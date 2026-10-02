@@ -81,6 +81,11 @@
 #define AP_SWARMMESH_FULL_HZ 200
 #endif
 
+// Most critical frames (COOP_PEER) that can wait for the radio (P2P_CRIT_DEPTH caps it).
+#ifndef AP_SWARMMESH_CRITICAL_DEPTH_MAX
+#define AP_SWARMMESH_CRITICAL_DEPTH_MAX 8
+#endif
+
 #ifndef AP_SWARMMESH_LITE_HZ
 #define AP_SWARMMESH_LITE_HZ 10
 #endif

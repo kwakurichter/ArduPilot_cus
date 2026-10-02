@@ -108,9 +108,9 @@ int16_t AP_SwarmMesh_SITL::transport_read()
     return _rx_buf[_rx_buf_pos++];
 }
 
-void AP_SwarmMesh_SITL::transport_write(const uint8_t *buf, uint16_t len)
+bool AP_SwarmMesh_SITL::transport_write(const uint8_t *buf, uint16_t len)
 {
-    _sock.send(buf, len);
+    return _sock.send(buf, len) == (ssize_t)len;
 }
 
 #endif  // AP_SWARMMESH_SITL_ENABLED

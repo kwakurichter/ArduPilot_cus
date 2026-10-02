@@ -38,6 +38,17 @@ public:
     // write backend performance counters to the onboard log
     virtual void log_stats();
 
+    // Send one MAVLink2 frame in the critical class (see SWARMMESH_TYPE_CRITICAL): at once
+    // if nothing critical is waiting and the transport takes it, else queued (the oldest
+    // frame is dropped when the queue is full). ``deadline_ms`` (0 = none) bounds how long it
+    // may wait here and is carried in the header for the relays. False if it was dropped.
+    bool send_critical(const uint8_t *frame, uint16_t len, uint8_t dest_id, uint16_t deadline_ms);
+
+    // Counters of the critical class (SwarmCriticalStats; the queue maximum restarts when
+    // ``restart_max`` is set).
+    using CriticalStats = SwarmCriticalStats;
+    void get_critical_stats(CriticalStats &stats, bool restart_max);
+
 protected:
 
     // returns true if the transport is ready to send/receive
@@ -52,8 +63,9 @@ protected:
     // number of bytes that can be written without blocking
     virtual uint32_t transport_txspace() = 0;
 
-    // write len bytes (for SITL this must be a single complete packet)
-    virtual void transport_write(const uint8_t *buf, uint16_t len) = 0;
+    // write len bytes (for SITL this must be a single complete packet); false if the
+    // transport refused them (nothing was written)
+    virtual bool transport_write(const uint8_t *buf, uint16_t len) = 0;
 
     // ---- frontend accessors ----
     uint8_t frontend_sysid() const;
@@ -67,6 +79,8 @@ protected:
     uint16_t frontend_log_rate_hz() const;
     uint32_t frontend_log_mask() const;
     int8_t   frontend_fwd_port() const;
+    uint8_t  frontend_fwd_mask() const;
+    uint8_t  frontend_critical_depth() const;
 
     AP_SwarmMesh &_frontend;
 
@@ -148,9 +162,32 @@ private:
     // true only if we have GPS UTC. Used to gate the deadline/staleness check.
     bool have_synced_utc(uint64_t &usec) const;
 
+    // critical class: a ring of complete mesh packets (header + frame) waiting to be sent
+    struct CriticalSlot {
+        uint32_t queued_ms;     // when it was queued (deadline reference)
+        uint16_t deadline_ms;   // 0 = none
+        uint16_t len;           // header + payload
+        uint8_t  pkt[SWARMMESH_MSG_BUF_MAX];
+    };
+    CriticalSlot *_crit;        // allocated on first use, COOP depth slots
+    uint8_t  _crit_depth;
+    uint8_t  _crit_head;        // oldest
+    uint8_t  _crit_count;
+    CriticalStats _crit_stats;
+    // queue a complete packet (dropping the oldest when full)
+    void critical_push(const uint8_t *pkt, uint16_t len, uint16_t deadline_ms);
+    // send up to ``max_frames`` queued packets, oldest first; expired ones are dropped
+    void critical_drain(uint8_t max_frames);
+    // handle a received critical packet (after the duplicate and TTL checks)
+    void process_critical(const p2p_header_t &hdr);
+
+    // fill the header's checksum (sum of every header byte before it)
+    static void set_header_crc(p2p_header_t &hdr);
+
 #if HAL_GCS_ENABLED
-    // forward a received peer MAVLink frame, unmodified, to the companion serial port
-    void forward_to_port(const uint8_t *frame, uint16_t len);
+    // forward a received peer MAVLink frame, unmodified, to the companion serial port;
+    // false if the port is not configured or had no room
+    bool forward_to_port(const uint8_t *frame, uint16_t len);
 
     // cached resolution of the _FWD_PORT parameter to a MAVLink channel
     int8_t   _fwd_port_resolved = -2;  // last port value resolved (-2 == never resolved)

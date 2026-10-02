@@ -26,6 +26,16 @@
 
 class AP_SwarmMesh_Backend;
 
+// Counters of the critical class (COOP_PEER), cumulative except queued / queued_max.
+struct SwarmCriticalStats {
+    uint32_t tx;            // frames put on the mesh (own and relayed)
+    uint32_t rx;            // frames for this vehicle received from the mesh
+    uint32_t tx_dropped;    // dropped here: queue full or deadline expired
+    uint32_t fwd_dropped;   // received but not written to the companion port (full)
+    uint8_t  queued;        // waiting now
+    uint8_t  queued_max;    // most waiting at once since the maximum was restarted
+};
+
 #if AP_SWARMMESH_COORD_ENABLED
 /*
   Coordination state published by a Lua script or a companion computer, and read back for each peer.
@@ -173,6 +183,18 @@ public:
     bool handle_tunnel(const mavlink_message_t &msg);
 #endif
 
+    // Send one MAVLink2 frame (COOP_PEER from the companion) in the critical class: ahead
+    // of all telemetry, never rate limited, retried until ``deadline_ms`` (0 = none), to
+    // ``dest_id`` (0 = broadcast). False if the mesh is not running or it was dropped.
+    bool send_critical(const uint8_t *frame, uint16_t len, uint8_t dest_id, uint16_t deadline_ms);
+
+    // Critical class counters (COOP_LINK_STATUS); false if the mesh is not running.
+    bool get_critical_stats(SwarmCriticalStats &stats, bool restart_max);
+
+    // _FWD_MASK bits: which received frames go to _FWD_PORT
+    static constexpr uint8_t FWD_TELEMETRY = 1U << 0;
+    static constexpr uint8_t FWD_CRITICAL  = 1U << 1;
+
     static const struct AP_Param::GroupInfo var_info[];
 
     // a method for vehicles to call to make onboard log messages:
@@ -229,6 +251,8 @@ private:
     AP_Int8  prune_timeout;
     AP_Int8  peer_filter[AP_SWARMMESH_MAX_PEER_FILTERS]; // neighbourhood allowlist. 0 = slot unused
     AP_Int8  fwd_port;     // serial port number received peer MAVLink is forwarded to. -1 disables
+    AP_Int8  fwd_mask;     // FWD_TELEMETRY | FWD_CRITICAL: which received frames are forwarded
+    AP_Int8  critical_depth; // critical queue slots (1..AP_SWARMMESH_CRITICAL_DEPTH_MAX)
 
     // external references
     AP_SwarmMesh_Backend *_driver;

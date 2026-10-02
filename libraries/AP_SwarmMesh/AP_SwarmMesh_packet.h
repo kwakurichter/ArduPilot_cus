@@ -23,7 +23,7 @@ typedef struct {
     uint8_t  stx1;           // SYNC1 = 0xAD
     uint8_t  stx2;           // SYNC2 = 0xBC
     uint8_t  version;        // Protocol version, currently 1
-    uint8_t  type;           // 0 = MAVLink payload, others reserved
+    uint8_t  type;           // SWARMMESH_TYPE_*: 0 = MAVLink telemetry, 1 = critical (one MAVLink frame)
     uint8_t  flags;          // Special behaviour (ex. no GPS lock so no synchronization so no freshness detection)
     uint8_t  origin_id;      // Origin node which created packet
     uint8_t  dest_id;        // Destination ID (targeted delivery)
@@ -44,6 +44,11 @@ static_assert(sizeof(p2p_header_t) == 23, "p2p header must be exactly 23 bytes")
 #define SWARMMESH_SYNC2          0xBC
 #define SWARMMESH_VERSION_01     0x01
 #define SWARMMESH_TYPE_MAVLINK   0x00
+// One MAVLink2 frame (today always COOP_PEER, the cooperative estimator's messages) sent
+// ahead of all telemetry: its own transmit queue, never rate limited, retried until its
+// deadline, and delivered to the companion port before any telemetry. The type sits in the
+// header, so every hop can prioritise it without parsing the payload.
+#define SWARMMESH_TYPE_CRITICAL  0x01
 #define SWARMMESH_NORMAL         0x00
 #define SWARMMESH_NO_RTC         0x01
 #define SWARMMESH_HEADER_SIZE    (sizeof(p2p_header_t))

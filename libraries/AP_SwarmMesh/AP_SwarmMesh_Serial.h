@@ -29,7 +29,7 @@ protected:
     uint32_t transport_available() override;
     int16_t  transport_read() override;
     uint32_t transport_txspace() override;
-    void     transport_write(const uint8_t *buf, uint16_t len) override;
+    bool     transport_write(const uint8_t *buf, uint16_t len) override;
 
 private:
     AP_HAL::UARTDriver *uart;

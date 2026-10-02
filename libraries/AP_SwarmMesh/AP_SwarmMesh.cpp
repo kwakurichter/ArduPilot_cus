@@ -181,6 +181,21 @@ const AP_Param::GroupInfo AP_SwarmMesh::var_info[] = {
     AP_GROUPINFO("_SR_COORD", 30, AP_SwarmMesh, stream_rate[3], 0),
 #endif
 
+    // @Param: _FWD_MASK
+    // @DisplayName: Peer forward selection
+    // @Description: Which received frames are forwarded to _FWD_PORT: telemetry (the peers' MAVLink streams) and/or critical frames (COOP_PEER, the cooperative estimator's messages). A cooperative companion needs only the critical frames.
+    // @Bitmask: 0:Telemetry,1:Critical
+    // @User: Advanced
+    AP_GROUPINFO("_FWD_MASK", 31, AP_SwarmMesh, fwd_mask, 3),
+
+    // @Param: _CRIT_DEPTH
+    // @DisplayName: Critical queue depth
+    // @Description: Critical frames (COOP_PEER) that can wait for the radio; when it is full the oldest is dropped. Each slot costs about 290 bytes of RAM, allocated on first use.
+    // @Range: 1 8
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("_CRIT_DEPTH", 32, AP_SwarmMesh, critical_depth, 4),
+
     AP_GROUPEND
 };
 
@@ -237,6 +252,23 @@ bool AP_SwarmMesh::enabled(void) const
 }
 
 // return true if radio is basically healthy (we are receiving data)
+bool AP_SwarmMesh::send_critical(const uint8_t *frame, uint16_t len, uint8_t dest_id, uint16_t deadline_ms)
+{
+    if (!device_ready()) {
+        return false;
+    }
+    return _driver->send_critical(frame, len, dest_id, deadline_ms);
+}
+
+bool AP_SwarmMesh::get_critical_stats(SwarmCriticalStats &stats, bool restart_max)
+{
+    if (!device_ready()) {
+        return false;
+    }
+    _driver->get_critical_stats(stats, restart_max);
+    return true;
+}
+
 bool AP_SwarmMesh::healthy(void) const
 {
     if (!device_ready()) {
