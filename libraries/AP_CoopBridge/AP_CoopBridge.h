@@ -25,8 +25,10 @@
     COOP_BARO, COOP_MAG, COOP_CAMERA (SITL: sparse position fixes, see sitl_camera())
     COOP_LINK_STATUS    1 Hz  health of the cooperative path
 
-  Still to come (thesis repo, embedded/ardupilot/required_changes.md): COOP_UWB, and
-  COOP_PEER, which is handed to AP_SwarmMesh's critical class. The companion's replies (ODOMETRY for ExternalNav, DEBUG_VECT
+  COOP_PEER, the companion's cooperative messages, goes both ways: from the companion it is
+  handed to AP_SwarmMesh's critical class (handle_coop_peer()), and AP_SwarmMesh writes the
+  peers' frames for this vehicle straight to the companion port (P2P_FWD_PORT = COOP_PORT,
+  P2P_FWD_MASK bit 1). Still to come: COOP_UWB (AP_Ranging). The companion's replies (ODOMETRY for ExternalNav, DEBUG_VECT
   rows for the Lua avoidance) use the existing GCS handlers.
 
   The port is an ordinary MAVLink2 port (SERIALn_PROTOCOL = 2) selected by COOP_PORT; the
@@ -79,6 +81,10 @@ public:
     bool push_mag(const AP_CoopReading::Mag &r);
     bool push_camera(const AP_CoopReading::Camera &r);
 
+    // COOP_PEER received on MAVLink channel ``chan`` (GCS_MAVLINK::handle_message): if it
+    // came from the companion port, hand the frame to AP_SwarmMesh's critical class.
+    void handle_coop_peer(mavlink_channel_t chan, const mavlink_message_t &msg);
+
     // Counters for COOP_LINK_STATUS, the COOP log message and tests.
     struct Stats {
         uint32_t imu_sent;      // COOP_IMU_DELTA sent
@@ -87,6 +93,8 @@ public:
         uint32_t imu_clipped;   // ticks flagged COOP_SAMPLE_CLIPPED
         uint32_t aids_sent;     // COOP_FLOW/TOF/BARO/MAG sent
         uint32_t aids_dropped;  // readings lost (queue full or no space on the port)
+        uint32_t peer_in;       // COOP_PEER frames from the companion
+        uint32_t peer_rejected; // of them, not taken by the mesh (not running or dropped)
         // (all zero at startup: the object is a static member of the vehicle's parameters)
     };
     const Stats &stats() const { return _stats; }

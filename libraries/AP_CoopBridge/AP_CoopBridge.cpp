@@ -21,6 +21,10 @@
 #include <AP_Logger/AP_Logger.h>
 #include <AP_Scheduler/AP_Scheduler.h>
 #include <GCS_MAVLink/GCS.h>
+#include <AP_SwarmMesh/AP_SwarmMesh_config.h>
+#if AP_SWARMMESH_ENABLED
+#include <AP_SwarmMesh/AP_SwarmMesh.h>
+#endif
 #if AP_SIM_COOP_SENSORS_ENABLED
 #include <SITL/SITL.h>
 #endif
@@ -478,6 +482,29 @@ void AP_CoopBridge::send_mag(const AP_CoopReading::Mag &r)
     _stats.aids_sent++;
 }
 
+void AP_CoopBridge::handle_coop_peer(mavlink_channel_t chan, const mavlink_message_t &msg)
+{
+    if (!resolve_channel() || chan != mavlink_channel_t(_chan)) {
+        return;     // only the companion's own frames go to the mesh
+    }
+    _stats.peer_in++;
+#if AP_SWARMMESH_ENABLED
+    AP_SwarmMesh *mesh = AP::swarmmesh();
+    if (mesh != nullptr) {
+        // the frame exactly as the companion sent it (header, payload, CRC), so peers'
+        // companions see the sender's own system ID and sequence
+        uint8_t frame[MAVLINK_MAX_PACKET_LEN];
+        const uint16_t len = mavlink_msg_to_send_buffer(frame, &msg);
+        const uint8_t destination = mavlink_msg_coop_peer_get_destination(&msg);
+        const uint16_t deadline_ms = mavlink_msg_coop_peer_get_deadline_ms(&msg);
+        if (mesh->send_critical(frame, len, destination, deadline_ms)) {
+            return;
+        }
+    }
+#endif
+    _stats.peer_rejected++;
+}
+
 void AP_CoopBridge::update()
 {
     if (!resolve_channel()) {
@@ -502,7 +529,21 @@ void AP_CoopBridge::send_link_status(uint64_t now_us)
     }
     mavlink_coop_link_status_t pkt {};
     pkt.time_usec = now_us;
-    // The COOP_PEER counters and the critical queue come with AP_SwarmMesh's critical class.
+#if AP_SWARMMESH_ENABLED
+    // the mesh side of COOP_PEER: AP_SwarmMesh's critical class
+    AP_SwarmMesh *mesh = AP::swarmmesh();
+    SwarmCriticalStats crit {};
+    if (mesh != nullptr && mesh->get_critical_stats(crit, true)) {
+        pkt.peer_tx = crit.tx;
+        pkt.peer_rx = crit.rx;
+        pkt.peer_tx_dropped = uint16_t(MIN(crit.tx_dropped + _stats.peer_rejected, uint32_t(UINT16_MAX)));
+        pkt.peer_fwd_dropped = uint16_t(MIN(crit.fwd_dropped, uint32_t(UINT16_MAX)));
+        pkt.critical_queue = crit.queued;
+        pkt.critical_queue_max = crit.queued_max;
+    } else {
+        pkt.peer_tx_dropped = uint16_t(MIN(_stats.peer_rejected, uint32_t(UINT16_MAX)));
+    }
+#endif
     const mavlink_status_t *status = mavlink_get_channel_status(chan);
     if (status != nullptr) {
         pkt.uart_rx_errors = uint16_t(MIN(status->packet_rx_drop_count, uint32_t(UINT16_MAX)));
