@@ -28,6 +28,9 @@
                    p = p_ref(t) exp(-z / H) + bias(agent, t) + N(0, 1.5 / sqrt(2) Pa)
     MMC5983MA mag  every 10 ms, the truth field direction with N(0, 0.008 rad) per tangent axis;
                    optionally bent inside an east band (scenario S5, SIM_COOP_MD_*)
+    camera         stand-in for the HM01B0 marker frontend, off by default: sparse fixes of the
+                   body position in the map (SIM_COOP_CAM_HZ, _SD, _LAT), released after the
+                   detection latency; AP_CoopBridge sends them as COOP_CAMERA (position only)
 
   Readings are produced on the absolute FC-time grid (multiples of the period), so they line
   up with the IMU sub-intervals and knots. The SITL driver backends (AP_OpticalFlow_SITL_Coop,
@@ -35,8 +38,9 @@
   below, feed their frontends (and so the EKF) and hand them to AP_CoopBridge exactly as the
   hardware drivers do.
 
-  Frames: the vehicle's local NED frame relative to home is the map (the companion's map ENU is
-  its east-north-up equivalent); the floor is the plane through home (z = 0). The flow and ToF
+  Frames: the companion's map is east-north-up with the floor at z = 0; this vehicle's home is at
+  (SIM_COOP_MAP_E, SIM_COOP_MAP_N, 0) in it, so vehicles started at different homes share one
+  map. Readings in the body frame (flow, ToF, mag) do not depend on the offset. The flow and ToF
   sensors look down from 25 mm ahead of and 15 mm below the body origin (the thesis "DOWN"
   mount), with their x/y axes along the body's FRD x/y axes.
  */
@@ -87,6 +91,17 @@ public:
         float pressure_pa;
         float temperature_c;
     };
+    // One camera stand-in fix: body pose in the map (FLU to ENU) at the capture.
+    struct Camera {
+        uint64_t capture_us, receipt_us;
+        float q[4];              // w, x, y, z
+        Vector3f position_m;     // map ENU, with noise
+        float sigma_m;           // position noise per axis
+    };
+    // Rotation standard deviation the bridge sends with a position-only fix (rad): large
+    // enough that the rotation carries no information.
+    static constexpr float CAMERA_ROTATION_SD = 3.0f;
+
     // One MMC5983MA sample.
     struct Mag {
         uint64_t capture_us;
@@ -98,6 +113,7 @@ public:
     bool pop_tof(Tof &r) { return _tof_q.pop(r); }
     bool pop_baro(Baro &r) { return _baro_q.pop(r); }
     bool pop_mag(Mag &r) { return _mag_q.pop(r); }
+    bool pop_camera(Camera &r) { return _camera_q.pop(r); }
 
 private:
     // Truth at one instant, in the frames the models use.
@@ -120,6 +136,7 @@ private:
     void update_tof(const Truth &x, uint64_t a_us, uint64_t b_us);
     void update_baro(const Truth &x, uint64_t a_us, uint64_t b_us);
     void update_mag(const Truth &x, uint64_t a_us, uint64_t b_us);
+    void update_camera(const Truth &x, uint64_t a_us, uint64_t b_us);
 
     // Deterministic Gaussian noise (seeded by SIM_COOP_SEED and the agent).
     double gauss();
@@ -132,6 +149,10 @@ private:
     AP_Float _tof_max_m;
     AP_Float _magd_x0, _magd_x1; // east band of the magnetic disturbance (m from home)
     AP_Float _magd_deg;          // peak rotation at the band centre, 0 = off
+    AP_Float _map_e, _map_n;     // this vehicle's home in the shared map (m)
+    AP_Float _cam_hz;            // camera stand-in fix rate, 0 = off
+    AP_Float _cam_sd;            // its position noise per axis (m)
+    AP_Float _cam_lat_ms;        // its detection latency (ms)
 
     // State
     bool _started;
@@ -159,6 +180,12 @@ private:
     ObjectBuffer<Tof> _tof_q{4};
     ObjectBuffer<Baro> _baro_q{4};
     ObjectBuffer<Mag> _mag_q{16};
+    ObjectBuffer<Camera> _camera_q{4};
+
+    // camera fixes captured but not yet released (detection latency)
+    static constexpr uint8_t MAX_PENDING_CAMERA = 4;
+    Camera _camera_pending[MAX_PENDING_CAMERA];
+    uint8_t _n_camera_pending;
 };
 
 }  // namespace SITL

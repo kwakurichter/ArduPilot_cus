@@ -123,6 +123,44 @@ const AP_Param::GroupInfo CoopSensors::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("MD_DEG", 7, CoopSensors, _magd_deg, 0.0f),
 
+    // @Param: MAP_E
+    // @DisplayName: Home east in the map
+    // @Description: East coordinate of this vehicle's home in the map the companions share (map origin: the first vehicle's home). Used by the camera stand-in and the disturbance band.
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("MAP_E", 8, CoopSensors, _map_e, 0.0f),
+
+    // @Param: MAP_N
+    // @DisplayName: Home north in the map
+    // @Description: North coordinate of this vehicle's home in the shared map.
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("MAP_N", 9, CoopSensors, _map_n, 0.0f),
+
+    // @Param: CAM_HZ
+    // @DisplayName: Camera stand-in rate
+    // @Description: Rate of the sparse position fixes that stand in for the HM01B0 marker frontend (sent as position-only COOP_CAMERA). 0 disables them.
+    // @Units: Hz
+    // @Range: 0 10
+    // @User: Advanced
+    AP_GROUPINFO("CAM_HZ", 10, CoopSensors, _cam_hz, 0.0f),
+
+    // @Param: CAM_SD
+    // @DisplayName: Camera stand-in position noise
+    // @Description: Standard deviation of each position coordinate of a camera stand-in fix.
+    // @Units: m
+    // @Range: 0.001 1
+    // @User: Advanced
+    AP_GROUPINFO("CAM_SD", 11, CoopSensors, _cam_sd, 0.025f),
+
+    // @Param: CAM_LAT
+    // @DisplayName: Camera stand-in latency
+    // @Description: Time from the capture to the fix being available on the FC (detection latency).
+    // @Units: ms
+    // @Range: 0 200
+    // @User: Advanced
+    AP_GROUPINFO("CAM_LAT", 12, CoopSensors, _cam_lat_ms, 40.0f),
+
     AP_GROUPEND
 };
 
@@ -219,6 +257,7 @@ void CoopSensors::update(const Aircraft &aircraft, uint64_t now_us)
     update_tof(x, a, now_us);
     update_baro(x, a, now_us);
     update_mag(x, a, now_us);
+    update_camera(x, a, now_us);
 }
 
 void CoopSensors::update_flow(const Truth &x, uint64_t a, uint64_t b)
@@ -385,7 +424,7 @@ void CoopSensors::update_mag(const Truth &x, uint64_t a, uint64_t b)
         dir += e1 * (MAG_SD_RAD * gauss()) + e2 * (MAG_SD_RAD * gauss());
         dir.normalize();
         double ratio = 1.0;
-        const float east = x.p_ned.y;
+        const float east = x.p_ned.y + _map_e;   // map east
         if (is_positive(_magd_deg.get()) && _magd_x1 > _magd_x0 && east >= _magd_x0 && east <= _magd_x1) {
             // smooth bump: zero at the band edges, the peak rotation about body x at the centre
             const double weight = sin(M_PI * (east - _magd_x0) / (_magd_x1 - _magd_x0));
@@ -405,4 +444,50 @@ void CoopSensors::update_mag(const Truth &x, uint64_t a, uint64_t b)
     }
 }
 
+
+void CoopSensors::update_camera(const Truth &x, uint64_t a, uint64_t b)
+{
+    // release the fixes whose detection latency has passed
+    uint8_t kept = 0;
+    for (uint8_t i = 0; i < _n_camera_pending; i++) {
+        if (_camera_pending[i].receipt_us <= b) {
+            if (!_camera_q.push(_camera_pending[i])) {
+                Camera old;
+                UNUSED_RESULT(_camera_q.pop(old));
+                _camera_q.push(_camera_pending[i]);
+            }
+        } else {
+            _camera_pending[kept++] = _camera_pending[i];
+        }
+    }
+    _n_camera_pending = kept;
+
+    if (!is_positive(_cam_hz.get())) {
+        return;
+    }
+    // captures on the absolute grid of the fix period, with the truth at the step's end
+    const uint64_t period = MAX(uint64_t(1e6f / _cam_hz.get()), uint64_t(10000));
+    for (uint64_t t = (a / period + 1) * period; t <= b; t += period) {
+        if (_n_camera_pending == MAX_PENDING_CAMERA) {
+            break;
+        }
+        Camera &c = _camera_pending[_n_camera_pending++];
+        c.capture_us = t;
+        c.receipt_us = t + uint64_t(MAX(0.0f, _cam_lat_ms.get()) * 1000.0f);
+        // body FLU to map ENU: R = A * dcm * F with A = NED to ENU and F = FLU to FRD
+        const Matrix3f A(Vector3f(0, 1, 0), Vector3f(1, 0, 0), Vector3f(0, 0, -1));
+        const Matrix3f F(Vector3f(1, 0, 0), Vector3f(0, -1, 0), Vector3f(0, 0, -1));
+        Quaternion q;
+        q.from_rotation_matrix(A * x.dcm * F);
+        q.normalize();
+        c.q[0] = q.q1;
+        c.q[1] = q.q2;
+        c.q[2] = q.q3;
+        c.q[3] = q.q4;
+        c.sigma_m = _cam_sd.get();
+        c.position_m = Vector3f(x.p_ned.y + _map_e + c.sigma_m * gauss(),
+                                x.p_ned.x + _map_n + c.sigma_m * gauss(),
+                                -x.p_ned.z + c.sigma_m * gauss());
+    }
+}
 #endif  // AP_SIM_COOP_SENSORS_ENABLED
