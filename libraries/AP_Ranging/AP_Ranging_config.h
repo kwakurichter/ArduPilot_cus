@@ -6,9 +6,10 @@
 #define AP_RANGING_ENABLED 1
 #endif
 
-// maximum number of peer nodes we can hold a range to at once
+// maximum number of peer nodes we can hold a range to at once (RNG_PEER_1..8): the
+// 8-vehicle swarm of the cooperative estimator
 #ifndef AP_RANGING_MAX_NODES
-#define AP_RANGING_MAX_NODES 4
+#define AP_RANGING_MAX_NODES 8
 #endif
 
 // a node is considered unhealthy if we have not received a range update
@@ -23,6 +24,17 @@
 
 #ifndef AP_RANGING_DW1000_ENABLED
 #define AP_RANGING_DW1000_ENABLED AP_RANGING_BACKEND_DEFAULT_ENABLED
+#endif
+
+// Knot period of the cooperative estimator (us). The knot-aligned schedule (RNG_SCHED = 1)
+// runs one round of exchanges per knot period, on the absolute FC-time grid.
+#ifndef AP_RANGING_KNOT_US
+#define AP_RANGING_KNOT_US 100000
+#endif
+
+// Completed exchanges waiting for a consumer (AP_CoopBridge sends them as COOP_UWB)
+#ifndef AP_RANGING_EXCHANGE_RING
+#define AP_RANGING_EXCHANGE_RING 8
 #endif
 
 /*

@@ -21,6 +21,7 @@
 #include <AP_Common/AP_Common.h>
 #include <AP_Param/AP_Param.h>
 #include <AP_Math/AP_Math.h>
+#include <AP_HAL/utility/RingBuffer.h>
 
 class AP_Ranging_Backend;
 
@@ -40,7 +41,24 @@ public:
     enum class Type : uint8_t {
         None   = 0,
         DW1000 = 1,
-        // TODO: add SITL
+    };
+
+    /*
+      One completed DS-TWR exchange this vehicle took part in, recorded at both ends: by the
+      responder when the FINAL arrives (it computes the range) and, in the knot-aligned
+      schedule, by the initiator when the responder's REPORT arrives. Times are FC time.
+      AP_CoopBridge sends each one to the companion as COOP_UWB.
+     */
+    struct Exchange {
+        uint64_t start_us;           // exchange start: the POLL on air (initiator) or received (responder)
+        uint32_t duration_us;        // start to the end of this vehicle's part (FINAL or REPORT received)
+        float    range_m;            // antenna-delay-corrected range
+        float    variance_m2;        // RNG_SIGMA^2
+        float    rx_power_dbm;       // total receive power of the FINAL frame (at the responder)
+        float    fp_power_dbm;       // first-path power of the FINAL frame
+        uint8_t  initiator;          // MAV_SYSID of the initiator
+        uint8_t  responder;          // MAV_SYSID of the responder
+        bool     power_valid;        // the two powers are measured
     };
 
     struct NodeState {
@@ -80,6 +98,12 @@ public:
     // return last range update time from a node in milliseconds
     uint32_t node_last_update_ms(uint8_t node_instance) const;
 
+    // Take the oldest completed exchange (single consumer: AP_CoopBridge, main thread).
+    bool pop_exchange(Exchange &e) { return _exchanges.pop(e); }
+
+    // exchanges lost because nobody took them from the ring
+    uint32_t exchanges_lost() const { return _exchanges_lost; }
+
     static const struct AP_Param::GroupInfo var_info[];
 
     // a method for vehicles to call to make onboard log messages
@@ -110,6 +134,14 @@ private:
     AP_Int16      _reply_us;  // TWR reply delay, us (RNG_REPLY_US)
     AP_Int16      _xchg_ms;   // exchange timeout, ms (RNG_XCHG_MS)
     AP_Int8       _fwd_port;  // serial port to forward the peer table to (RNG_FWD_PORT), -1 off
+    AP_Int8       _sched;     // 1 = knot-aligned pair schedule (RNG_SCHED), 0 = jittered polling
+    AP_Int32      _slot0_us;  // first slot's start after the knot, us (RNG_SLOT0_US)
+    AP_Int32      _slot_us;   // slot length, us (RNG_SLOT_US)
+    AP_Float      _sigma;     // range standard deviation reported with each exchange, m (RNG_SIGMA)
+
+    // completed exchanges (producer: the backend's thread, consumer: AP_CoopBridge)
+    ObjectBuffer<Exchange> _exchanges{AP_RANGING_EXCHANGE_RING};
+    uint32_t _exchanges_lost;
 
     // resolved once per RNG_FWD_PORT change rather than per send
     int8_t   _fwd_port_resolved = -2;   // -2 == never resolved

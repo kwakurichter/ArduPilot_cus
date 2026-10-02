@@ -74,6 +74,65 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("_PEER_4", 13, AP_Ranging, _peer_id[3], 0),
 
+    // @Param: _PEER_5
+    // @DisplayName: Ranging peer 5 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_5", 14, AP_Ranging, _peer_id[4], 0),
+
+    // @Param: _PEER_6
+    // @DisplayName: Ranging peer 6 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_6", 15, AP_Ranging, _peer_id[5], 0),
+
+    // @Param: _PEER_7
+    // @DisplayName: Ranging peer 7 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_7", 16, AP_Ranging, _peer_id[6], 0),
+
+    // @Param: _PEER_8
+    // @DisplayName: Ranging peer 8 system id
+    // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
+    // @Range: 0 255
+    // @User: Standard
+    AP_GROUPINFO("_PEER_8", 17, AP_Ranging, _peer_id[7], 0),
+
+    // @Param: _SCHED
+    // @DisplayName: Ranging schedule
+    // @Description: 0: every node polls its peers in turn on a jittered cadence (RNG_POLL_MS). 1: knot-aligned pair schedule for the cooperative estimator: in each 100 ms period the roster (this node and RNG_PEER_n, sorted) is split into disjoint pairs by one round of the circle method, pair s ranges in slot s (RNG_SLOT0_US, RNG_SLOT_US), the lower id initiates in even periods and the higher in odd ones, and the responder reports the range back so both ends record the exchange. Every node must have the same roster, and the nodes' clocks must agree to well within a slot.
+    // @Values: 0:Jittered polling,1:Knot-aligned pairs
+    // @User: Advanced
+    AP_GROUPINFO("_SCHED", 18, AP_Ranging, _sched, 0),
+
+    // @Param: _SLOT0_US
+    // @DisplayName: Ranging first slot offset
+    // @Description: Start of the first pair's slot after each 100 ms knot (knot-aligned schedule).
+    // @Range: 0 50000
+    // @Units: us
+    // @User: Advanced
+    AP_GROUPINFO("_SLOT0_US", 19, AP_Ranging, _slot0_us, 1000),
+
+    // @Param: _SLOT_US
+    // @DisplayName: Ranging slot length
+    // @Description: Length of one pair's slot (knot-aligned schedule): four frames (POLL, RESPONSE, FINAL, REPORT) with three reply delays, plus the radio servicing latency and a guard. All pairs (half the roster) must fit before the next knot.
+    // @Range: 1000 25000
+    // @Units: us
+    // @User: Advanced
+    AP_GROUPINFO("_SLOT_US", 20, AP_Ranging, _slot_us, 10000),
+
+    // @Param: _SIGMA
+    // @DisplayName: Range standard deviation
+    // @Description: Standard deviation of a line-of-sight range, sent with every exchange as its variance.
+    // @Range: 0.005 1
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("_SIGMA", 21, AP_Ranging, _sigma, 0.03f),
+
     // @Param: _ANT_DLY
     // @DisplayName: UWB antenna delay
     // @Description: DW1000 antenna delay in device time units (~15.65ps each), applied to both TX and RX. Calibrate at a known distance: increasing this REDUCES the reported range. 0 gives a large positive offset; ~16384 is the typical DWM1000 value.
@@ -151,6 +210,7 @@ void AP_Ranging::init(void)
         break;
 #endif
     case Type::None:
+    default:
         break;
     }
 }

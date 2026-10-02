@@ -42,10 +42,16 @@ extern "C" {
 // This form tolerates arbitrary/asymmetric reply delays, so we can use generous
 // reply delays that comfortably exceed the ~1ms software polling latency.
 //
-// Every node both initiates (round-robin polls to all neighbours) and responds.
-// In a 3-message exchange the RESPONDER receives last and holds all six
-// timestamps, so it computes and stores the range - therefore a node's ranges
-// come from responding to its neighbours' polls (no report needed).
+// Every node both initiates and responds. In the 3-message exchange the RESPONDER
+// receives last and holds all six timestamps, so it computes the range.
+//
+// Two schedules (RNG_SCHED):
+//  0  every node polls its peers in turn on a jittered cadence; a node's ranges come
+//     from responding to its neighbours' polls.
+//  1  knot-aligned pairs (AP_Ranging_Backend::scheduled_slot): the initiator starts its
+//     pair's exchange at the slot start, and the responder sends the range back in a
+//     REPORT frame after the FINAL, so both ends record the exchange (the cooperative
+//     estimator needs it at both). One frame and one reply delay longer.
 //
 // Only ONE exchange runs at a time (single half-duplex radio): the node is
 // listening when IDLE, and is either initiating or responding otherwise.
@@ -71,7 +77,8 @@ private:
     void start_poll(uint8_t dst);   // initiator: POLL (delayed tx)
     void send_response(uint8_t dst);// responder: RESPONSE (delayed tx)
     void send_final(uint8_t dst);   // initiator: FINAL carrying our 3 timestamps
-    void compute_range();           // responder: eq(17) -> distance -> publish
+    void send_report(uint8_t dst);  // responder: REPORT with the range and the FINAL's powers
+    bool compute_range(float &dist);// responder: eq(17) -> distance, false if implausible
     void abort_exchange();          // count a failure, return to IDLE + listen
     uint8_t next_poll_target();     // round-robin neighbour id (skips self)
 
@@ -87,10 +94,13 @@ private:
     static constexpr uint64_t TS_MASK = 0xFFFFFFFFFFULL;   // 40-bit
 
     // frame layout: [type, src, dst, seq, <payload>]
-    enum : uint8_t { FRAME_POLL = 0xC1, FRAME_RESPONSE = 0xC2, FRAME_FINAL = 0xC3 };
+    enum : uint8_t { FRAME_POLL = 0xC1, FRAME_RESPONSE = 0xC2, FRAME_FINAL = 0xC3, FRAME_REPORT = 0xC4 };
     static constexpr uint8_t FRAME_HDR_LEN = 4;
     static constexpr uint8_t TS_LEN        = 5;
     static constexpr uint8_t FINAL_LEN     = FRAME_HDR_LEN + 3 * TS_LEN;  // 19
+    // REPORT payload: range (float, m), then the FINAL's receive and first-path powers
+    // (int16, 0.01 dBm), little-endian
+    static constexpr uint8_t REPORT_LEN    = FRAME_HDR_LEN + 4 + 2 + 2;   // 12
     static constexpr uint8_t RX_BUF_LEN    = 32;
 
     // exchange state (single exchange at a time)
@@ -99,6 +109,8 @@ private:
         I_WAIT_RESP,      // initiator: POLL sent, awaiting RESPONSE
         I_SENDING_FINAL,  // initiator: FINAL queued, awaiting sent event
         R_WAIT_FINAL,     // responder: RESPONSE sent, awaiting FINAL
+        I_WAIT_REPORT,    // initiator (RNG_SCHED 1): FINAL sent, awaiting REPORT
+        R_SENDING_REPORT, // responder (RNG_SCHED 1): REPORT queued, awaiting sent event
     };
     State    _state = State::IDLE;
     uint8_t  _peer = 0;               // node id of the in progress exchange
@@ -110,6 +122,18 @@ private:
     // responder captures: poll_rx, resp_tx, final_rx (+ the 3 above from FINAL)
     uint64_t _poll_tx = 0, _resp_rx = 0, _final_tx = 0;
     uint64_t _poll_rx = 0, _resp_tx = 0, _final_rx = 0;
+
+    // the in-progress exchange in FC time, for its record (AP_Ranging::Exchange). Stamped
+    // with micros64() when the event is serviced (up to one callback period late) or, for
+    // the initiator's POLL, from the delayed transmit time.
+    uint64_t _start_us = 0;
+    float    _range = 0.0f;           // responder: range of the exchange (for the REPORT)
+    float    _rx_power = 0.0f;        // responder: powers of the FINAL frame (dBm)
+    float    _fp_power = 0.0f;
+
+    // knot-aligned schedule
+    uint32_t _sched_period = UINT32_MAX;  // last period whose slot was taken (or missed)
+    uint32_t _slots_missed = 0;           // initiator slots skipped (busy or too late)
 
     // round-robin initiator scheduler
     uint8_t  _next_peer = 0;

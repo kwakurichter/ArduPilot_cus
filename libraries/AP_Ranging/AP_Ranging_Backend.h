@@ -42,6 +42,29 @@ public:
     // record a measured range (meters) to the peer identified by node_id.
     void set_node_distance(uint8_t node_id, float distance);
 
+    /*
+      Record one completed exchange: queue it for AP_CoopBridge (COOP_UWB), log it (TWRX)
+      and update the peer table. ``e.variance_m2`` is filled in here (RNG_SIGMA^2). Any
+      thread; one producer.
+     */
+    void record_exchange(AP_Ranging::Exchange &e);
+
+    /*
+      Knot-aligned pair schedule (RNG_SCHED = 1). In period k = floor(t / knot) the roster
+      (this node and RNG_PEER_n: nonzero, distinct, sorted) is split into disjoint pairs by
+      round k of the circle method, as the thesis simulator's round_robin_pairs (for an odd
+      roster the pair with the bye is dropped, and the slots of the remaining pairs follow
+      on without a gap). Fills ``slot`` with this node's exchange of the period of
+      ``now_us``; false if it sits out (odd roster) or the roster is too short.
+     */
+    struct Slot {
+        uint32_t period;             // k
+        uint64_t start_us;           // knot + RNG_SLOT0_US + s * RNG_SLOT_US
+        uint8_t  peer;               // MAV_SYSID of the other end
+        bool     initiator;          // this node sends the POLL
+    };
+    bool scheduled_slot(uint64_t now_us, Slot &slot) const;
+
 protected:
 
     // this node's configured UWB address (RNG_NODE_ID)
@@ -62,6 +85,8 @@ protected:
     uint8_t  get_channel() const;   // RNG_CHAN     - UWB RF channel
     uint16_t get_reply_us() const;  // RNG_REPLY_US - TWR reply delay
     uint16_t get_xchg_ms() const;   // RNG_XCHG_MS  - exchange timeout
+    bool     knot_schedule() const; // RNG_SCHED == 1
+    uint32_t get_slot_us() const;   // RNG_SLOT_US  - slot length
 
     // reference to the owning frontend
     AP_Ranging &_frontend;

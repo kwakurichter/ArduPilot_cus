@@ -130,12 +130,27 @@ void AP_Ranging_DW1000::timer()
         abort_exchange();
     }
 
-    // when idle, start a new poll to the next neighbour on a JITTERED cadence.
-    // The jitter is essential: two nodes on the same fixed period boot in phase
-    // and livelock (each polls while the other is mid-poll (not IDLE)), so both
-    // drop the incoming POLL and time out, forever. Random jitter drifts them
-    // apart so one is usually IDLE when the other polls.
-    if (_state == State::IDLE && (now - _last_poll_ms) >= _poll_interval) {
+    if (knot_schedule()) {
+        // Knot-aligned pairs: the initiator polls once per period, at its pair's slot
+        // start. A slot that cannot start within its length (radio still busy, or the
+        // callback ran too late) is skipped rather than run into the next pair's slot.
+        Slot slot;
+        const uint64_t now_us = AP_HAL::micros64();
+        if (scheduled_slot(now_us, slot) && slot.initiator && slot.period != _sched_period &&
+            now_us >= slot.start_us) {
+            _sched_period = slot.period;
+            if (_state == State::IDLE && now_us < slot.start_us + get_slot_us()) {
+                start_poll(slot.peer);
+            } else {
+                _slots_missed++;
+            }
+        }
+    } else if (_state == State::IDLE && (now - _last_poll_ms) >= _poll_interval) {
+        // Jittered polling: a new poll to the next neighbour. The jitter is essential:
+        // two nodes on the same fixed period boot in phase and livelock (each polls while
+        // the other is mid-poll (not IDLE)), so both drop the incoming POLL and time out,
+        // forever. Random jitter drifts them apart so one is usually IDLE when the other
+        // polls.
         _last_poll_ms = now;
         _poll_interval = get_poll_ms() + (get_random16() % POLL_JITTER_MS);
         const uint8_t target = next_poll_target();
@@ -150,8 +165,8 @@ void AP_Ranging_DW1000::timer()
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: rng=%lu rx=%lu tx=%lu irq=%lu",
                       (unsigned long)_range_count, (unsigned long)_rx_count,
                       (unsigned long)_tx_count, (unsigned long)_irq_count);
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: xfail=%u rxfail=%u | %u=%.2fm",
-                      (unsigned)_exchange_fail, (unsigned)_rx_failed,
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: xfail=%u rxfail=%u miss=%lu | %u=%.2fm",
+                      (unsigned)_exchange_fail, (unsigned)_rx_failed, (unsigned long)_slots_missed,
                       (unsigned)_last_range_peer, (double)_last_range);
     }
 }
@@ -255,6 +270,8 @@ void AP_Ranging_DW1000::start_poll(uint8_t dst)
     dwStartTransmit(&_dw);
     _tx_count++;
 
+    // the POLL leaves after the reply delay: that is the exchange start
+    _start_us = AP_HAL::micros64() + get_reply_us();
     _state = State::I_WAIT_RESP;
     _exchange_start_ms = AP_HAL::millis();
 }
@@ -292,15 +309,39 @@ void AP_Ranging_DW1000::send_final(uint8_t dst)
     ts_pack(&f[FRAME_HDR_LEN + 1 * TS_LEN], _resp_rx);
     ts_pack(&f[FRAME_HDR_LEN + 2 * TS_LEN], _final_tx);
     dwSetData(&_dw, f, FINAL_LEN);
-    dwWaitForResponse(&_dw, false);   // initiator is done after the FINAL
+    // in the knot-aligned schedule the responder's REPORT follows; otherwise the
+    // initiator is done after the FINAL
+    dwWaitForResponse(&_dw, knot_schedule());
     dwStartTransmit(&_dw);
     _tx_count++;
 
     _state = State::I_SENDING_FINAL;
 }
 
-// responder: apply Alternative DS-TWR (eq. 17) and publish the range.
-void AP_Ranging_DW1000::compute_range()
+// responder: REPORT the range and the FINAL's powers back to the initiator (delayed tx,
+// like every other frame, so the initiator has re-armed its receiver).
+void AP_Ranging_DW1000::send_report(uint8_t dst)
+{
+    dwNewTransmit(&_dw);
+    dwTime_t delay = {}; delay.full = reply_delay_ticks();
+    dwSetDelay(&_dw, &delay);
+
+    uint8_t f[REPORT_LEN] = { FRAME_REPORT, _node_id, dst, _seq };
+    memcpy(&f[FRAME_HDR_LEN], &_range, sizeof(float));   // little-endian target
+    const int16_t rx = (int16_t)constrain_float(_rx_power * 100.0f, -32768.0f, 32767.0f);
+    const int16_t fp = (int16_t)constrain_float(_fp_power * 100.0f, -32768.0f, 32767.0f);
+    memcpy(&f[FRAME_HDR_LEN + 4], &rx, sizeof(rx));
+    memcpy(&f[FRAME_HDR_LEN + 6], &fp, sizeof(fp));
+    dwSetData(&_dw, f, REPORT_LEN);
+    dwWaitForResponse(&_dw, false);
+    dwStartTransmit(&_dw);
+    _tx_count++;
+
+    _state = State::R_SENDING_REPORT;
+}
+
+// responder: apply Alternative DS-TWR (eq. 17).
+bool AP_Ranging_DW1000::compute_range(float &dist)
 {
     const uint64_t Ra = (_resp_rx  - _poll_tx) & TS_MASK;  // A round-trip
     const uint64_t Da = (_final_tx - _resp_rx) & TS_MASK;  // A reply delay
@@ -309,21 +350,20 @@ void AP_Ranging_DW1000::compute_range()
 
     const uint64_t den = Ra + Da + Rb + Db;
     if (den == 0) {
-        return;
+        return false;
     }
     const int64_t num = (int64_t)(Ra * Rb) - (int64_t)(Da * Db);
     const double tof_ticks = (double)num / (double)den;
-    const float dist = (float)(tof_ticks * DISTANCE_OF_RADIO);
+    dist = (float)(tof_ticks * DISTANCE_OF_RADIO);
 
     if (dist <= RANGE_MIN_M || dist >= RANGE_MAX_M) {
-        return;   // reject nonsense (bad exchange / clock glitch)
-    } // TODO: pre-filter?
-
-    set_node_distance(_peer, dist);
+        return false;   // reject nonsense (bad exchange / clock glitch)
+    }
     _range_count++;
     _last_range = dist;
     _last_range_peer = _peer;
     _last_update_ms = AP_HAL::millis();
+    return true;
 }
 
 // give up on the in progress exchange and go back to listening
@@ -359,9 +399,17 @@ void AP_Ranging_DW1000::handle_sent(dwDevice_t *dev)
     if (b == nullptr) {
         return;
     }
-    // POLL/RESPONSE sends auto-armed RX via wait4resp; only the FINAL (which
-    // ends the initiator's job) needs us to resume plain listening.
+    // POLL/RESPONSE sends auto-armed RX via wait4resp, and so did the FINAL in the
+    // knot-aligned schedule (the REPORT follows). A FINAL that ends the initiator's job,
+    // and the REPORT that ends the responder's, return to plain listening.
     if (b->_state == State::I_SENDING_FINAL) {
+        if (b->knot_schedule()) {
+            b->_state = State::I_WAIT_REPORT;
+        } else {
+            b->_state = State::IDLE;
+            b->arm_receiver();
+        }
+    } else if (b->_state == State::R_SENDING_REPORT) {
         b->_state = State::IDLE;
         b->arm_receiver();
     }
@@ -403,6 +451,7 @@ void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
             b->_peer = src;
             b->_seq  = seq;
             b->_poll_rx = rx.full & TS_MASK;
+            b->_start_us = AP_HAL::micros64();
             b->send_response(src);   // wait4resp arms RX for the FINAL
         } else {
             b->arm_receiver();       // busy: drop, keep listening
@@ -425,10 +474,54 @@ void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
             b->_poll_tx  = ts_unpack(&buf[FRAME_HDR_LEN + 0 * TS_LEN]);
             b->_resp_rx  = ts_unpack(&buf[FRAME_HDR_LEN + 1 * TS_LEN]);
             b->_final_tx = ts_unpack(&buf[FRAME_HDR_LEN + 2 * TS_LEN]);
-            b->compute_range();
+            // receive diagnostics of the FINAL (total minus first-path power grows
+            // under NLOS), read before the receiver is re-armed
+            b->_rx_power = dwGetReceivePower(dev);
+            b->_fp_power = dwGetFirstPathPower(dev);
+            float dist;
+            if (b->compute_range(dist)) {
+                AP_Ranging::Exchange e {};
+                e.start_us = b->_start_us;
+                e.duration_us = uint32_t(AP_HAL::micros64() - b->_start_us);
+                e.range_m = dist;
+                e.rx_power_dbm = b->_rx_power;
+                e.fp_power_dbm = b->_fp_power;
+                e.initiator = src;
+                e.responder = b->_node_id;
+                e.power_valid = true;
+                b->record_exchange(e);
+                if (b->knot_schedule()) {
+                    b->_range = dist;
+                    b->send_report(src);  // -> R_SENDING_REPORT, completes in handle_sent
+                    break;
+                }
+            }
             b->_state = State::IDLE;
         }
         b->arm_receiver();           // exchange done (or bad) -> listen again
+        break;
+
+    case FRAME_REPORT:
+        if (b->_state == State::I_WAIT_REPORT && src == b->_peer && seq == b->_seq &&
+            len >= REPORT_LEN) {
+            float range;
+            int16_t rx_cdbm, fp_cdbm;
+            memcpy(&range, &buf[FRAME_HDR_LEN], sizeof(range));
+            memcpy(&rx_cdbm, &buf[FRAME_HDR_LEN + 4], sizeof(rx_cdbm));
+            memcpy(&fp_cdbm, &buf[FRAME_HDR_LEN + 6], sizeof(fp_cdbm));
+            AP_Ranging::Exchange e {};
+            e.start_us = b->_start_us;
+            e.duration_us = uint32_t(AP_HAL::micros64() - b->_start_us);
+            e.range_m = range;
+            e.rx_power_dbm = rx_cdbm * 0.01f;
+            e.fp_power_dbm = fp_cdbm * 0.01f;
+            e.initiator = b->_node_id;
+            e.responder = src;
+            e.power_valid = true;
+            b->record_exchange(e);
+            b->_state = State::IDLE;
+        }
+        b->arm_receiver();
         break;
 
     default:
