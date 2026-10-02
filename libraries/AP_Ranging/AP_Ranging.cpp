@@ -19,6 +19,7 @@
 
 #include "AP_Ranging_Backend.h"
 #include "AP_Ranging_DW1000.h"
+#include "AP_Ranging_SITL.h"
 
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
@@ -31,7 +32,7 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @Param: _TYPE
     // @DisplayName: UWB ranging device type
     // @Description: What type of UWB ranging device is connected
-    // @Values: 0:None,1:DW1000
+    // @Values: 0:None,1:DW1000,100:SITL
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE", 0, AP_Ranging, _type, 0, AP_PARAM_FLAG_ENABLE),
 
@@ -207,6 +208,11 @@ void AP_Ranging::init(void)
 #if AP_RANGING_DW1000_ENABLED
     case Type::DW1000:
         _driver = NEW_NOTHROW AP_Ranging_DW1000(*this);
+        break;
+#endif
+#if AP_RANGING_SITL_ENABLED
+    case Type::SITL:
+        _driver = NEW_NOTHROW AP_Ranging_SITL(*this);
         break;
 #endif
     case Type::None:

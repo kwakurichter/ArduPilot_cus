@@ -41,6 +41,7 @@ public:
     enum class Type : uint8_t {
         None   = 0,
         DW1000 = 1,
+        SITL   = 100,  // SITL instances ranging each other (AP_Ranging_SITL)
     };
 
     /*

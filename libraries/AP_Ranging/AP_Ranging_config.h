@@ -26,6 +26,13 @@
 #define AP_RANGING_DW1000_ENABLED AP_RANGING_BACKEND_DEFAULT_ENABLED
 #endif
 
+// SITL backend: exchanges between SITL instances over UDP multicast, with the range model of
+// the thesis simulator (SIM_COOP_UWB_*, SITL/SIM_CoopSensors.h)
+#include <SITL/SIM_config.h>
+#ifndef AP_RANGING_SITL_ENABLED
+#define AP_RANGING_SITL_ENABLED (AP_RANGING_BACKEND_DEFAULT_ENABLED && AP_SIM_COOP_SENSORS_ENABLED)
+#endif
+
 // Knot period of the cooperative estimator (us). The knot-aligned schedule (RNG_SCHED = 1)
 // runs one round of exchanges per knot period, on the absolute FC-time grid.
 #ifndef AP_RANGING_KNOT_US
