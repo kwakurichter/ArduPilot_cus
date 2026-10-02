@@ -135,7 +135,7 @@ void AP_Ranging_DW1000::timer()
         // start. A slot that cannot start within its length (radio still busy, or the
         // callback ran too late) is skipped rather than run into the next pair's slot.
         Slot slot;
-        const uint64_t now_us = AP_HAL::micros64();
+        const uint64_t now_us = mesh_now_us();
         if (scheduled_slot(now_us, slot) && slot.initiator && slot.period != _sched_period &&
             now_us >= slot.start_us) {
             _sched_period = slot.period;

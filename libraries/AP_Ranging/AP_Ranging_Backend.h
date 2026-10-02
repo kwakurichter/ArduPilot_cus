@@ -65,6 +65,11 @@ public:
     };
     bool scheduled_slot(uint64_t now_us, Slot &slot) const;
 
+    // The schedule runs on mesh time (AP_SwarmMesh::mesh_micros64(), the swarm's common clock;
+    // micros64() without a mesh), so the pairs agree on the periods and slots. Exchange
+    // records stay in micros64(); AP_CoopBridge converts them.
+    static uint64_t mesh_now_us();
+
 protected:
 
     // this node's configured UWB address (RNG_NODE_ID)

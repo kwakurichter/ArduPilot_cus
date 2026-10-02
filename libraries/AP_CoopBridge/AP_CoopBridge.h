@@ -38,7 +38,9 @@
   port should be turned off (SRn_* = 0) to leave the bandwidth to the bridge.
 
   Frames: the INS works in body FRD, the estimator in body FLU (x forward, y left, z up), so
-  vectors are sent as (x, -y, -z). Times are FC microseconds (AP_HAL::micros64).
+  vectors are sent as (x, -y, -z). Times are mesh time (AP_SwarmMesh::mesh_micros64(): the
+  FC's micros64() plus the offset to the swarm's reference clock), so they agree across
+  vehicles; driver stamps are converted when sent.
  */
 #pragma once
 

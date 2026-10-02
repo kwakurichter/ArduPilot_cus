@@ -31,6 +31,28 @@
 
 extern const AP_HAL::HAL& hal;
 
+namespace {
+// Every time the companion sees is in mesh time (AP_SwarmMesh::mesh_micros64), the clock the
+// whole swarm shares; without a mesh it is micros64().
+uint64_t mesh_now_us()
+{
+#if AP_SWARMMESH_ENABLED
+    return AP_SwarmMesh::mesh_micros64();
+#else
+    return AP_HAL::micros64();
+#endif
+}
+// a time stamped with micros64() by a driver, in mesh time
+uint64_t to_mesh(uint64_t local_us)
+{
+#if AP_SWARMMESH_ENABLED
+    return AP_SwarmMesh::to_mesh_us(local_us);
+#else
+    return local_us;
+#endif
+}
+}
+
 AP_CoopBridge *AP_CoopBridge::_singleton;
 
 const AP_Param::GroupInfo AP_CoopBridge::var_info[] = {
@@ -169,10 +191,18 @@ void AP_CoopBridge::update_fast()
 
     // The tick ends now, right after the INS update; it starts where the previous one ended.
     // The constant delay between the INS samples and this call does not matter: every message
-    // is stamped with the same clock.
-    const uint64_t now_us = AP_HAL::micros64();
+    // is stamped with the same clock, mesh time.
+    const uint64_t now_us = mesh_now_us();
     if (_last_tick_us == 0) {
         _last_tick_us = now_us;
+        return;
+    }
+    if (now_us <= _last_tick_us) {
+        // the mesh clock stepped back (a follower syncing on the ground): restart the first
+        // stage at the new time; the companion sees a gap
+        _imu.reset();
+        _last_tick_us = now_us;
+        _stats.imu_gaps++;
         return;
     }
     const uint64_t start_us = _last_tick_us;
@@ -343,7 +373,7 @@ void AP_CoopBridge::send_uwb(const AP_Ranging::Exchange &e)
         return;
     }
     mavlink_coop_uwb_t pkt {};
-    pkt.time_usec = e.start_us;
+    pkt.time_usec = to_mesh(e.start_us);
     pkt.end_after_capture_us = uint16_t(MIN(e.duration_us, uint32_t(UINT16_MAX)));
     pkt.range = e.range_m;
     pkt.variance = e.variance_m2;
@@ -401,7 +431,7 @@ void AP_CoopBridge::send_camera(const AP_CoopReading::Camera &r)
         return;
     }
     mavlink_coop_camera_t pkt {};
-    pkt.time_usec = r.capture_us;
+    pkt.time_usec = to_mesh(r.capture_us);
     pkt.receipt_after_capture_us = r.receipt_after_capture_us;
     pkt.end_after_capture_us = r.end_after_capture_us;
     for (uint8_t i = 0; i < 4; i++) {
@@ -425,7 +455,7 @@ void AP_CoopBridge::send_flow(const AP_CoopReading::Flow &r)
         return;
     }
     mavlink_coop_flow_t pkt {};
-    pkt.time_end_usec = r.t_end_us;
+    pkt.time_end_usec = to_mesh(r.t_end_us);
     pkt.mid_before_end_us = r.mid_before_end_us;
     pkt.duration = r.duration_s;
     pkt.quality = r.quality;
@@ -455,7 +485,7 @@ void AP_CoopBridge::send_tof(const AP_CoopReading::Tof &r)
         return;
     }
     mavlink_coop_tof_t pkt {};
-    pkt.time_end_usec = r.t_end_us;
+    pkt.time_end_usec = to_mesh(r.t_end_us);
     pkt.mid_before_end_us = r.mid_before_end_us;
     pkt.range = r.range_m;
     pkt.variance = sq(_tof_sd.get());
@@ -473,7 +503,7 @@ void AP_CoopBridge::send_baro(const AP_CoopReading::Baro &r)
         return;
     }
     mavlink_coop_baro_t pkt {};
-    pkt.time_end_usec = r.t_end_us;
+    pkt.time_end_usec = to_mesh(r.t_end_us);
     pkt.mid_before_end_us = r.mid_before_end_us;
     pkt.pressure = r.pressure_pa;
     pkt.variance = sq(_baro_sd.get());
@@ -491,7 +521,7 @@ void AP_CoopBridge::send_mag(const AP_CoopReading::Mag &r)
         return;
     }
     mavlink_coop_mag_t pkt {};
-    pkt.time_usec = r.capture_us;
+    pkt.time_usec = to_mesh(r.capture_us);
     pkt.end_after_capture_us = r.end_after_capture_us;
     const float norm = r.field_frd.length();
     const bool valid = r.valid && is_positive(norm);
@@ -561,7 +591,7 @@ void AP_CoopBridge::send_link_status(uint64_t now_us)
         return;
     }
     mavlink_coop_link_status_t pkt {};
-    pkt.time_usec = now_us;
+    pkt.time_usec = to_mesh(now_us);
 #if AP_SWARMMESH_ENABLED
     // the mesh side of COOP_PEER: AP_SwarmMesh's critical class
     AP_SwarmMesh *mesh = AP::swarmmesh();

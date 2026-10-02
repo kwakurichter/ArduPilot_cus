@@ -16,6 +16,10 @@
 #include "AP_Ranging_Backend.h"
 #include <GCS_MAVLink/GCS.h>
 #include <AP_Logger/AP_Logger.h>
+#include <AP_SwarmMesh/AP_SwarmMesh_config.h>
+#if AP_SWARMMESH_ENABLED
+#include <AP_SwarmMesh/AP_SwarmMesh.h>
+#endif
 
 #if AP_RANGING_ENABLED
 
@@ -42,6 +46,15 @@ uint16_t AP_Ranging_Backend::get_reply_us() const  { return (uint16_t)_frontend.
 uint16_t AP_Ranging_Backend::get_xchg_ms() const   { return (uint16_t)_frontend._xchg_ms.get(); }
 bool     AP_Ranging_Backend::knot_schedule() const { return _frontend._sched.get() == 1; }
 uint32_t AP_Ranging_Backend::get_slot_us() const   { return (uint32_t)MAX(_frontend._slot_us.get(), 0); }
+
+uint64_t AP_Ranging_Backend::mesh_now_us()
+{
+#if AP_SWARMMESH_ENABLED
+    return AP_SwarmMesh::mesh_micros64();
+#else
+    return AP_HAL::micros64();
+#endif
+}
 
 bool AP_Ranging_Backend::scheduled_slot(uint64_t now_us, Slot &slot) const
 {

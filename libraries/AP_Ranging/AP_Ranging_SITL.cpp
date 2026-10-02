@@ -117,12 +117,13 @@ void AP_Ranging_SITL::timer()
     }
 
     if (knot_schedule()) {
-        // knot-aligned pairs, as AP_Ranging_DW1000::timer()
+        // knot-aligned pairs on mesh time, as AP_Ranging_DW1000::timer()
         Slot slot;
-        if (scheduled_slot(now_us, slot) && slot.initiator && slot.period != _sched_period &&
-            now_us >= slot.start_us) {
+        const uint64_t mesh_us = mesh_now_us();
+        if (scheduled_slot(mesh_us, slot) && slot.initiator && slot.period != _sched_period &&
+            mesh_us >= slot.start_us) {
             _sched_period = slot.period;
-            if (_state == State::IDLE && now_us < slot.start_us + get_slot_us()) {
+            if (_state == State::IDLE && mesh_us < slot.start_us + get_slot_us()) {
                 start_poll(slot.peer, now_us);
             } else {
                 _missed++;
