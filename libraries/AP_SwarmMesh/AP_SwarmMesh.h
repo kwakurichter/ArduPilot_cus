@@ -23,6 +23,8 @@
 #include <AP_Math/AP_Math.h>
 #include <AP_Filesystem/AP_Filesystem_config.h>
 #include <GCS_MAVLink/GCS_MAVLink.h>
+#include <AP_HAL/Semaphores.h>
+#include "AP_SwarmMesh_TimeSync.h"
 
 class AP_SwarmMesh_Backend;
 
@@ -191,6 +193,33 @@ public:
     // Critical class counters (COOP_LINK_STATUS); false if the mesh is not running.
     bool get_critical_stats(SwarmCriticalStats &stats, bool restart_max);
 
+    /*
+      Mesh clock. A disarmed vehicle with _SR_SYNC > 0 is a reference: it broadcasts its
+      mesh time in SWARMMESH_TYPE_SYNC packets. Every other vehicle follows the lowest system
+      ID it hears and keeps an offset to it (AP_SwarmMesh_TimeSync), so that mesh time is the
+      same on every vehicle. Mesh time is micros64() plus that offset; before any reference
+      has been heard, and without a mesh, it is micros64(). Any thread.
+
+      The cooperative estimator's time stamps (AP_CoopBridge) and the UWB schedule
+      (AP_Ranging) use it. Followers should be synced before they arm: in flight the offset
+      only slews (_SYNC_SLEW), on the ground it may step.
+     */
+    static uint64_t mesh_micros64();
+    // a local micros64() time in mesh time (with the current offset)
+    static uint64_t to_mesh_us(uint64_t local_us);
+    // offset from micros64() to mesh time (us)
+    int64_t mesh_offset_us() const;
+
+    struct SyncStatus {
+        bool     is_reference;  // broadcasting (disarmed and _SR_SYNC > 0)
+        bool     locked;        // following a reference heard within the timeout
+        uint8_t  reference;     // system ID followed, 0 = none
+        int64_t  offset_us;     // applied offset
+        int64_t  target_us;     // the estimator's current target
+        uint32_t samples;       // SYNC packets used
+    };
+    bool get_sync_status(SyncStatus &status) const;
+
     // _FWD_MASK bits: which received frames go to _FWD_PORT
     static constexpr uint8_t FWD_TELEMETRY = 1U << 0;
     static constexpr uint8_t FWD_CRITICAL  = 1U << 1;
@@ -200,12 +229,14 @@ public:
     // a method for vehicles to call to make onboard log messages:
     void log();
 
-    // number of SR stream buckets (must match the SR_* param entries in var_info)
+    // number of SR stream buckets (must match the SR_* param entries in var_info); the
+    // clock sync bucket (_SR_SYNC) is always the last
 #if AP_SWARMMESH_COORD_ENABLED
-    static constexpr uint8_t NUM_BUCKETS = 4;
+    static constexpr uint8_t NUM_BUCKETS = 5;
 #else
-    static constexpr uint8_t NUM_BUCKETS = 3;
+    static constexpr uint8_t NUM_BUCKETS = 4;
 #endif
+    static constexpr uint8_t SYNC_BUCKET = NUM_BUCKETS - 1;
 
 private:
 
@@ -234,6 +265,14 @@ private:
     // periodically deletes stale peer table entries
     void prune_peer_table();
 
+    // mesh clock (backend side): true while this vehicle broadcasts SYNC
+    bool sync_is_reference() const;
+    // a SYNC from ``ref_id`` with its mesh time ``ref_us``, received at local ``local_us``
+    void sync_sample(uint8_t ref_id, uint64_t ref_us, uint64_t local_us);
+    // advance the applied offset (main loop)
+    void sync_update();
+    AP_SwarmMesh_TimeSync::Config sync_config() const;
+
     static AP_SwarmMesh *_singleton;
 
     // parameters
@@ -253,6 +292,14 @@ private:
     AP_Int8  fwd_port;     // serial port number received peer MAVLink is forwarded to. -1 disables
     AP_Int8  fwd_mask;     // FWD_TELEMETRY | FWD_CRITICAL: which received frames are forwarded
     AP_Int8  critical_depth; // critical queue slots (1..AP_SWARMMESH_CRITICAL_DEPTH_MAX)
+    AP_Int32 sync_latency_us; // fixed SYNC delay the minimum filter cannot see (us)
+    AP_Int16 sync_slew_ppm;   // largest rate of change of the mesh offset in flight (ppm)
+
+    // mesh clock: the estimator (main thread) and its applied offset for any thread
+    AP_SwarmMesh_TimeSync _sync;
+    mutable HAL_Semaphore _sync_sem;
+    int64_t _sync_offset_us;
+    bool    _sync_was_locked;
 
     // external references
     AP_SwarmMesh_Backend *_driver;

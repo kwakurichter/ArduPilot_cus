@@ -33,6 +33,11 @@
 // A few MB absorbs the scheduling jitter. Bounded by kern.ipc.maxsockbuf.
 #define SWARMMESH_SITL_RCVBUF (4 * 1024 * 1024)
 
+// Datagrams moved out of the socket by the timer, waiting for the 100 Hz parser
+#define SWARMMESH_SITL_RX_BUF (64 * 1024)
+
+extern const AP_HAL::HAL& hal;
+
 AP_SwarmMesh_SITL::AP_SwarmMesh_SITL(AP_SwarmMesh &frontend) :
     AP_SwarmMesh_Backend(frontend),
     _sock(true)
@@ -44,6 +49,35 @@ AP_SwarmMesh_SITL::AP_SwarmMesh_SITL(AP_SwarmMesh &frontend) :
             int rcvbuf = SWARMMESH_SITL_RCVBUF;
             setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
         }
+        _rx = NEW_NOTHROW ByteBuffer(SWARMMESH_SITL_RX_BUF);
+        _sock_ok = _rx != nullptr;
+    }
+    if (_sock_ok) {
+        hal.scheduler->register_timer_process(FUNCTOR_BIND_MEMBER(&AP_SwarmMesh_SITL::timer, void));
+    }
+}
+
+void AP_SwarmMesh_SITL::timer()
+{
+    uint8_t buf[SWARMMESH_MSG_BUF_MAX];
+    // bounded, so a flood cannot stall the timer; the kernel buffer holds the rest
+    for (uint16_t i = 0; i < 256; i++) {
+        const ssize_t n = _sock.recv(buf, sizeof(buf), 0);
+        if (n <= 0) {
+            return;
+        }
+#if AP_SIM_SWARMMESH_LOSS_ENABLED
+        if (packet_lost()) {
+            continue;
+        }
+#endif
+        note_datagram(buf, (uint16_t)n, AP_HAL::micros64());
+        WITH_SEMAPHORE(_rx_sem);
+        if (_rx->space() < (uint32_t)n) {
+            _rx_overflow++;     // whole datagrams only, as the syslink transport
+            continue;
+        }
+        _rx->write(buf, n);
     }
 }
 
@@ -76,36 +110,20 @@ bool AP_SwarmMesh_SITL::packet_lost() const
 }
 #endif  // AP_SIM_SWARMMESH_LOSS_ENABLED
 
-// bridge UDP datagram recv into a byte-stream buffer that parse_byte() drains one byte at a time
 uint32_t AP_SwarmMesh_SITL::transport_available()
 {
-    if (_rx_buf_pos < _rx_buf_len) {
-        return _rx_buf_len - _rx_buf_pos;
-    }
-    // buffer exhausted, try to pull the next datagram (non-blocking). bounded loop so a high simulated loss rate cannot stall this call
-    for (uint8_t tries = 0; tries < 32; tries++) {
-        const ssize_t n = _sock.recv(_rx_buf, sizeof(_rx_buf), 0);
-        if (n <= 0) {
-            return 0;
-        }
-#if AP_SIM_SWARMMESH_LOSS_ENABLED
-        if (packet_lost()) {
-            continue;
-        }
-#endif
-        _rx_buf_len = (uint16_t)n;
-        _rx_buf_pos = 0;
-        return _rx_buf_len;
-    }
-    return 0;
+    WITH_SEMAPHORE(_rx_sem);
+    return _rx->available();
 }
 
 int16_t AP_SwarmMesh_SITL::transport_read()
 {
-    if (_rx_buf_pos >= _rx_buf_len) {
+    WITH_SEMAPHORE(_rx_sem);
+    uint8_t b;
+    if (!_rx->read_byte(&b)) {
         return -1;
     }
-    return _rx_buf[_rx_buf_pos++];
+    return b;
 }
 
 bool AP_SwarmMesh_SITL::transport_write(const uint8_t *buf, uint16_t len)

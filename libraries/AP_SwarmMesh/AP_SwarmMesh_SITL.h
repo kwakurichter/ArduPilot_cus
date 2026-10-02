@@ -20,6 +20,7 @@
 #if AP_SWARMMESH_SITL_ENABLED
 
 #include <AP_HAL/utility/Socket_native.h>
+#include <AP_HAL/utility/RingBuffer.h>
 #include <SITL/SIM_config.h>
 
 class AP_SwarmMesh_SITL : public AP_SwarmMesh_Backend
@@ -40,13 +41,17 @@ private:
     bool packet_lost() const;
 #endif
 
+    // 1 kHz timer: move arrived datagrams into _rx (stamping SYNC packets on arrival, as a
+    // radio driver thread would, rather than at the 100 Hz update)
+    void timer();
+
     SocketAPM_native _sock{true};   // true = datagram (UDP)
     bool     _sock_ok = false;
 
-    // datagram receive buffer: holds one complete SwarmMesh packet at a time
-    uint8_t  _rx_buf[SWARMMESH_MSG_BUF_MAX];
-    uint16_t _rx_buf_len = 0;
-    uint16_t _rx_buf_pos = 0;
+    // received bytes, whole datagrams, waiting for the parser
+    ByteBuffer *_rx;
+    HAL_Semaphore _rx_sem;
+    uint32_t _rx_overflow;
 };
 
 #endif  // AP_SWARMMESH_SITL_ENABLED

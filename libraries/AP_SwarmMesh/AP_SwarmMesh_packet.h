@@ -23,7 +23,7 @@ typedef struct {
     uint8_t  stx1;           // SYNC1 = 0xAD
     uint8_t  stx2;           // SYNC2 = 0xBC
     uint8_t  version;        // Protocol version, currently 1
-    uint8_t  type;           // SWARMMESH_TYPE_*: 0 = MAVLink telemetry, 1 = critical (one MAVLink frame)
+    uint8_t  type;           // SWARMMESH_TYPE_*: 0 = MAVLink telemetry, 1 = critical (one MAVLink frame), 2 = clock sync
     uint8_t  flags;          // Special behaviour (ex. no GPS lock so no synchronization so no freshness detection)
     uint8_t  origin_id;      // Origin node which created packet
     uint8_t  dest_id;        // Destination ID (targeted delivery)
@@ -40,6 +40,19 @@ typedef struct {
 
 static_assert(sizeof(p2p_header_t) == 23, "p2p header must be exactly 23 bytes");
 
+// Payload of SWARMMESH_TYPE_SYNC
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t  version;        // SWARMMESH_SYNC_VERSION
+    uint8_t  flags;          // reserved, 0
+    uint64_t mesh_time_us;   // the sender's mesh time when the packet was handed to the transport
+} swarmmesh_sync_t;
+#pragma pack(pop)
+
+static_assert(sizeof(swarmmesh_sync_t) == 10, "sync payload must be exactly 10 bytes");
+
+#define SWARMMESH_SYNC_VERSION   1
+
 #define SWARMMESH_SYNC1          0xAD
 #define SWARMMESH_SYNC2          0xBC
 #define SWARMMESH_VERSION_01     0x01
@@ -49,6 +62,10 @@ static_assert(sizeof(p2p_header_t) == 23, "p2p header must be exactly 23 bytes")
 // deadline, and delivered to the companion port before any telemetry. The type sits in the
 // header, so every hop can prioritise it without parsing the payload.
 #define SWARMMESH_TYPE_CRITICAL  0x01
+// Mesh clock: the reference vehicle's time (swarmmesh_sync_t), broadcast at _SR_SYNC Hz while
+// it is disarmed. One hop only, never relayed: a relay would add a delay nobody can measure.
+// Every other vehicle follows the lowest system ID it hears (AP_SwarmMesh_TimeSync).
+#define SWARMMESH_TYPE_SYNC      0x02
 #define SWARMMESH_NORMAL         0x00
 #define SWARMMESH_NO_RTC         0x01
 #define SWARMMESH_HEADER_SIZE    (sizeof(p2p_header_t))

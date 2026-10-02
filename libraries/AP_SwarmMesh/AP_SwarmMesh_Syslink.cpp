@@ -82,6 +82,8 @@ void AP_SwarmMesh_Syslink::handle_broadcast(const uint8_t *data, uint8_t len)
 
     _rx_buf->write(data, len);
     _rx_packets++;
+    // SYNC receive time: as close to the radio as this thread gets
+    note_datagram(data, len, AP_HAL::micros64());
 }
 
 bool AP_SwarmMesh_Syslink::transport_ready() const

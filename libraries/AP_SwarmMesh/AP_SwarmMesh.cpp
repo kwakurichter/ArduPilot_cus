@@ -33,6 +33,7 @@
 #endif
 
 #include <AP_Logger/AP_Logger.h>
+#include <GCS_MAVLink/GCS.h>
 
 #if AP_FILESYSTEM_FILE_WRITING_ENABLED
 #include "AP_SwarmMesh_PeerStorage.h"
@@ -196,6 +197,30 @@ const AP_Param::GroupInfo AP_SwarmMesh::var_info[] = {
     // @RebootRequired: True
     AP_GROUPINFO("_CRIT_DEPTH", 32, AP_SwarmMesh, critical_depth, 4),
 
+    // @Param: _SR_SYNC
+    // @DisplayName: Clock sync broadcast rate
+    // @Description: Rate at which this vehicle broadcasts its mesh clock while it is disarmed, making it the swarm's time reference (Hz). Every vehicle that is not broadcasting follows the lowest system ID it hears. Set it on a vehicle that stays on the ground; 0 disables. Sync packets are not relayed, so the reference must be in radio range of every vehicle.
+    // @Units: Hz
+    // @Range: 0 50
+    // @User: Advanced
+    AP_GROUPINFO("_SR_SYNC", 33, AP_SwarmMesh, stream_rate[SYNC_BUCKET], 0),
+
+    // @Param: _SYNC_LAT
+    // @DisplayName: Clock sync fixed latency
+    // @Description: Fixed part of the delay of a sync packet from the reference's transport to this vehicle's receive stamp (radio and transport queues), which the follower's minimum filter cannot see. Added to the mesh clock offset.
+    // @Units: us
+    // @Range: 0 20000
+    // @User: Advanced
+    AP_GROUPINFO("_SYNC_LAT", 34, AP_SwarmMesh, sync_latency_us, 0),
+
+    // @Param: _SYNC_SLEW
+    // @DisplayName: Clock sync slew rate
+    // @Description: Largest rate at which a follower's mesh clock offset changes while it is armed, so mesh time stays smooth and monotonic in flight. On the ground it also slews, but steps to errors above 20 ms (and to the first estimate).
+    // @Units: ppm
+    // @Range: 100 5000
+    // @User: Advanced
+    AP_GROUPINFO("_SYNC_SLEW", 35, AP_SwarmMesh, sync_slew_ppm, 500),
+
     AP_GROUPEND
 };
 
@@ -284,6 +309,7 @@ void AP_SwarmMesh::update(void)
         return;
     }
     _driver->update();
+    sync_update();
 
 #if AP_FILESYSTEM_FILE_WRITING_ENABLED
     const uint8_t rate_hz = MAX(0, (int8_t)save_rate_hz);
@@ -307,6 +333,104 @@ void AP_SwarmMesh::update(void)
             prune_peer_table();
         }
     }
+}
+
+// ---- mesh clock ----
+
+AP_SwarmMesh_TimeSync::Config AP_SwarmMesh::sync_config() const
+{
+    AP_SwarmMesh_TimeSync::Config cfg;
+    cfg.latency_us = sync_latency_us.get();
+    cfg.slew_ppm = (uint32_t)constrain_int16(sync_slew_ppm.get(), 100, 5000);
+    cfg.timeout_us = AP_SWARMMESH_SYNC_TIMEOUT_MS * 1000U;
+    return cfg;
+}
+
+bool AP_SwarmMesh::sync_is_reference() const
+{
+    return stream_rate[SYNC_BUCKET].get() > 0 && !hal.util->get_soft_armed();
+}
+
+void AP_SwarmMesh::sync_sample(uint8_t ref_id, uint64_t ref_us, uint64_t local_us)
+{
+    if (sync_is_reference()) {
+        return;     // a reference keeps its own clock
+    }
+    // follow the lowest system ID heard; a higher one only once the current one is silent
+    const AP_SwarmMesh_TimeSync::Config cfg = sync_config();
+    const uint8_t current = _sync.reference();
+    if (current != 0 && ref_id > current && _sync.locked(cfg, local_us)) {
+        return;
+    }
+    _sync.sample(cfg, ref_id, ref_us, local_us);
+
+#if HAL_LOGGING_ENABLED
+    // @LoggerMessage: SWSY
+    // @Description: SwarmMesh clock sync sample (follower)
+    // @Field: TimeUS: Time since system startup (local clock)
+    // @Field: Ref: system ID of the reference
+    // @Field: D: local receive time minus the reference's transmit time
+    // @Field: Tgt: target offset (latency minus the window's smallest D)
+    // @Field: Off: applied offset, mesh time = TimeUS + Off
+    AP::logger().WriteStreaming("SWSY", "TimeUS,Ref,D,Tgt,Off", "s-sss", "F-FFF", "QBqqq",
+                                local_us, ref_id, (int64_t)(local_us - ref_us), _sync.target_us(),
+                                _sync.offset_us());
+#endif
+}
+
+void AP_SwarmMesh::sync_update()
+{
+    const uint64_t now_us = AP_HAL::micros64();
+    const AP_SwarmMesh_TimeSync::Config cfg = sync_config();
+    if (!sync_is_reference()) {
+        // on the ground the offset may step; in flight it only slews
+        _sync.update(cfg, now_us, !hal.util->get_soft_armed());
+    }
+    {
+        WITH_SEMAPHORE(_sync_sem);
+        _sync_offset_us = _sync.offset_us();
+    }
+    const bool locked = !sync_is_reference() && _sync.locked(cfg, now_us);
+    if (locked != _sync_was_locked) {
+        _sync_was_locked = locked;
+        GCS_SEND_TEXT(locked ? MAV_SEVERITY_INFO : MAV_SEVERITY_WARNING,
+                      "SwarmMesh: clock %s sysid %u (offset %ld us)", locked ? "synced to" : "lost",
+                      unsigned(_sync.reference()), (long)_sync.offset_us());
+    }
+}
+
+int64_t AP_SwarmMesh::mesh_offset_us() const
+{
+    WITH_SEMAPHORE(_sync_sem);
+    return _sync_offset_us;
+}
+
+uint64_t AP_SwarmMesh::to_mesh_us(uint64_t local_us)
+{
+    const AP_SwarmMesh *mesh = get_singleton();
+    if (mesh == nullptr || !mesh->device_ready()) {
+        return local_us;
+    }
+    return local_us + (uint64_t)mesh->mesh_offset_us();
+}
+
+uint64_t AP_SwarmMesh::mesh_micros64()
+{
+    return to_mesh_us(AP_HAL::micros64());
+}
+
+bool AP_SwarmMesh::get_sync_status(SyncStatus &status) const
+{
+    if (!device_ready()) {
+        return false;
+    }
+    status.is_reference = sync_is_reference();
+    status.locked = !status.is_reference && _sync.locked(sync_config(), AP_HAL::micros64());
+    status.reference = _sync.reference();
+    status.offset_us = _sync.offset_us();
+    status.target_us = _sync.target_us();
+    status.samples = _sync.samples();
+    return true;
 }
 
 // return the number of peers

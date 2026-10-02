@@ -297,6 +297,14 @@ void AP_SwarmMesh_Backend::process_packet()
         return;
     }
 
+    if (hdr->type == SWARMMESH_TYPE_SYNC) {
+        // one hop, not relayed, outside the peer table and its filter
+        if (hdr->origin_id != frontend_sysid()) {
+            process_sync(*hdr);
+        }
+        return;
+    }
+
     if (hdr->type == SWARMMESH_TYPE_CRITICAL && hdr->origin_id == frontend_sysid()) {
         // our own frame heard back (a shared medium such as the SITL multicast group)
         return;
@@ -995,6 +1003,81 @@ void AP_SwarmMesh_Backend::process_critical(const p2p_header_t &hdr)
 #endif
 }
 
+// ---- mesh clock ----
+
+void AP_SwarmMesh_Backend::send_sync()
+{
+    p2p_header_t hdr {};
+    hdr.stx1        = SWARMMESH_SYNC1;
+    hdr.stx2        = SWARMMESH_SYNC2;
+    hdr.version     = SWARMMESH_VERSION_01;
+    hdr.type        = SWARMMESH_TYPE_SYNC;
+    hdr.flags       = SWARMMESH_NO_RTC;
+    hdr.origin_id   = frontend_sysid();
+    hdr.dest_id     = SWARMMESH_BROADCAST;
+    hdr.prev_id     = frontend_sysid();
+    hdr.ttl         = 1;
+    hdr.seq         = _tx_seq++;
+    hdr.payload_len = sizeof(swarmmesh_sync_t);
+    set_header_crc(hdr);
+
+    uint8_t pkt[SWARMMESH_HEADER_SIZE + sizeof(swarmmesh_sync_t)];
+    swarmmesh_sync_t body {};
+    body.version = SWARMMESH_SYNC_VERSION;
+    // stamped as late as possible: right before the transport takes it
+    body.mesh_time_us = AP_SwarmMesh::mesh_micros64();
+    memcpy(pkt, &hdr, SWARMMESH_HEADER_SIZE);
+    memcpy(pkt + SWARMMESH_HEADER_SIZE, &body, sizeof(body));
+    if (transport_write(pkt, sizeof(pkt))) {
+        _sync_tx++;
+    } else {
+        _tx_dropped++;
+    }
+}
+
+void AP_SwarmMesh_Backend::note_datagram(const uint8_t *data, uint16_t len, uint64_t arrival_us)
+{
+    // only SYNC packets are stamped; the header is checked again by the parser
+    if (len < SWARMMESH_HEADER_SIZE + sizeof(swarmmesh_sync_t) || data[0] != SWARMMESH_SYNC1 ||
+        data[1] != SWARMMESH_SYNC2 || data[3] != SWARMMESH_TYPE_SYNC) {
+        return;
+    }
+    p2p_header_t hdr;
+    memcpy(&hdr, data, SWARMMESH_HEADER_SIZE);
+    WITH_SEMAPHORE(_sync_stamp_sem);
+    SyncStamp &st = _sync_stamps[_sync_stamp_next];
+    st.arrival_us = arrival_us;
+    st.seq = hdr.seq;
+    st.origin = hdr.origin_id;
+    _sync_stamp_next = (_sync_stamp_next + 1) % SYNC_STAMPS;
+}
+
+void AP_SwarmMesh_Backend::process_sync(const p2p_header_t &hdr)
+{
+    // receive time: the datagram's arrival if the transport stamped it, else now
+    uint64_t local_us = AP_HAL::micros64();
+    {
+        WITH_SEMAPHORE(_sync_stamp_sem);
+        for (const SyncStamp &st : _sync_stamps) {
+            if (st.arrival_us != 0 && st.origin == hdr.origin_id && st.seq == hdr.seq) {
+                local_us = st.arrival_us;
+                break;
+            }
+        }
+    }
+    if (hdr.payload_len < sizeof(swarmmesh_sync_t)) {
+        _dropped++;
+        return;
+    }
+    swarmmesh_sync_t body;
+    memcpy(&body, (const uint8_t *)&hdr + SWARMMESH_HEADER_SIZE, sizeof(body));
+    if (body.version != SWARMMESH_SYNC_VERSION) {
+        _dropped++;
+        return;
+    }
+    _frontend.sync_sample(hdr.origin_id, body.mesh_time_us, local_us);
+}
+
 void AP_SwarmMesh_Backend::get_critical_stats(CriticalStats &stats, bool restart_max)
 {
     stats = _crit_stats;
@@ -1032,6 +1115,11 @@ void AP_SwarmMesh_Backend::send_stream(Bucket bucket)
         send_coordination();
         break;
 #endif
+    case Bucket::SYNC:
+        if (_frontend.sync_is_reference()) {
+            send_sync();
+        }
+        break;
     }
     // TODO: Add more buckets (mode, mission state, etc.)
 }

@@ -67,6 +67,11 @@ protected:
     // transport refused them (nothing was written)
     virtual bool transport_write(const uint8_t *buf, uint16_t len) = 0;
 
+    // Datagram transports call this with every datagram as it arrives (any thread), so a
+    // SYNC packet's receive time is its arrival, not the next update() tick. Others leave the
+    // stamp to process time.
+    void note_datagram(const uint8_t *data, uint16_t len, uint64_t arrival_us);
+
     // ---- frontend accessors ----
     uint8_t frontend_sysid() const;
     uint8_t frontend_dest_id() const;
@@ -94,6 +99,7 @@ private:
 #if AP_SWARMMESH_COORD_ENABLED
         COORD    = 3,   // TUNNEL carrying the coordination basket
 #endif
+        SYNC     = AP_SwarmMesh::SYNC_BUCKET,  // mesh clock (SWARMMESH_TYPE_SYNC), reference only
     };
 
     // RX message types gated by the _LOG_MASK param (bits 9-31 reserved)
@@ -180,6 +186,21 @@ private:
     void critical_drain(uint8_t max_frames);
     // handle a received critical packet (after the duplicate and TTL checks)
     void process_critical(const p2p_header_t &hdr);
+
+    // mesh clock: broadcast our mesh time (reference), and take a received SYNC (follower)
+    void send_sync();
+    void process_sync(const p2p_header_t &hdr);
+    // arrival times of the last few SYNC datagrams (note_datagram), by origin and sequence
+    struct SyncStamp {
+        uint64_t arrival_us;
+        uint16_t seq;
+        uint8_t  origin;
+    };
+    static constexpr uint8_t SYNC_STAMPS = 4;
+    SyncStamp _sync_stamps[SYNC_STAMPS];
+    uint8_t   _sync_stamp_next;
+    HAL_Semaphore _sync_stamp_sem;
+    uint32_t  _sync_tx;
 
     // fill the header's checksum (sum of every header byte before it)
     static void set_header_crc(p2p_header_t &hdr);

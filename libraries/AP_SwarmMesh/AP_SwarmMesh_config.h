@@ -86,6 +86,12 @@
 #define AP_SWARMMESH_CRITICAL_DEPTH_MAX 8
 #endif
 
+// A follower that hears no SYNC from its reference for this long is no longer locked (it keeps
+// its offset), and may follow another reference.
+#ifndef AP_SWARMMESH_SYNC_TIMEOUT_MS
+#define AP_SWARMMESH_SYNC_TIMEOUT_MS 3000
+#endif
+
 #ifndef AP_SWARMMESH_LITE_HZ
 #define AP_SWARMMESH_LITE_HZ 10
 #endif
