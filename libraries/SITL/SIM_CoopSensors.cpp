@@ -161,6 +161,64 @@ const AP_Param::GroupInfo CoopSensors::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("CAM_LAT", 12, CoopSensors, _cam_lat_ms, 40.0f),
 
+    // @Param: UWB_SD
+    // @DisplayName: UWB range noise
+    // @Description: Standard deviation of a line-of-sight DS-TWR range (SITL ranging, RNG_TYPE 100).
+    // @Units: m
+    // @Range: 0 0.5
+    // @User: Advanced
+    AP_GROUPINFO("UWB_SD", 13, CoopSensors, _uwb_sd, 0.03f),
+
+    // @Param: UWB_NLP
+    // @DisplayName: UWB NLOS probability
+    // @Description: Probability that an exchange is non-line-of-sight: its range gets an exponential excess (mean SIM_COOP_UWB_NLM) and a first-path power gap of N(12, 3) dB instead of N(3, 1) dB.
+    // @Range: 0 1
+    // @User: Advanced
+    AP_GROUPINFO("UWB_NLP", 14, CoopSensors, _uwb_nlos_p, 0.0f),
+
+    // @Param: UWB_NLM
+    // @DisplayName: UWB NLOS mean excess
+    // @Description: Mean of the exponential range excess of an NLOS exchange.
+    // @Units: m
+    // @Range: 0 3
+    // @User: Advanced
+    AP_GROUPINFO("UWB_NLM", 15, CoopSensors, _uwb_nlos_m, 0.3f),
+
+    // @Param: UWB_OUT
+    // @DisplayName: UWB outlier probability
+    // @Description: Probability of a gross outlier: an excess uniform in 0.5 to 3 m (replacing any NLOS excess), with the NLOS power gap.
+    // @Range: 0 1
+    // @User: Advanced
+    AP_GROUPINFO("UWB_OUT", 16, CoopSensors, _uwb_out_p, 0.0f),
+
+    // @Param: UWB_DRP
+    // @DisplayName: UWB dropout probability
+    // @Description: Probability that an exchange fails (the responder does not answer the POLL).
+    // @Range: 0 1
+    // @User: Advanced
+    AP_GROUPINFO("UWB_DRP", 17, CoopSensors, _uwb_drop_p, 0.0f),
+
+    // @Param: ANT_X
+    // @DisplayName: UWB antenna position, forward
+    // @Description: Position of the DW1000 antenna along the body X axis (FRD). The defaults place it as on the thesis hardware, 40 mm ahead of and 20 mm above the body origin.
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("ANT_X", 18, CoopSensors, _ant_frd[0], 0.04f),
+
+    // @Param: ANT_Y
+    // @DisplayName: UWB antenna position, right
+    // @Description: Position of the DW1000 antenna along the body Y axis (FRD). The defaults place it as on the thesis hardware, 40 mm ahead of and 20 mm above the body origin.
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("ANT_Y", 19, CoopSensors, _ant_frd[1], 0.0f),
+
+    // @Param: ANT_Z
+    // @DisplayName: UWB antenna position, down
+    // @Description: Position of the DW1000 antenna along the body Z axis (FRD). The defaults place it as on the thesis hardware, 40 mm ahead of and 20 mm above the body origin.
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("ANT_Z", 20, CoopSensors, _ant_frd[2], -0.02f),
+
     AP_GROUPEND
 };
 
@@ -169,21 +227,62 @@ CoopSensors::CoopSensors()
     AP_Param::setup_object_defaults(this, var_info);
 }
 
-uint64_t CoopSensors::next_random()
+uint64_t CoopSensors::next_random(uint64_t &state)
 {
     // splitmix64: small, fast and reproducible on every host
-    uint64_t z = (_rng += 0x9E3779B97F4A7C15ULL);
+    uint64_t z = (state += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
 }
 
-double CoopSensors::gauss()
+double CoopSensors::uniform(uint64_t &state)
+{
+    return (double(next_random(state) >> 11) + 1.0) * (1.0 / 9007199254740993.0);
+}
+
+double CoopSensors::gauss(uint64_t &state)
 {
     // Box-Muller on two uniforms in (0, 1]
-    const double u1 = (double(next_random() >> 11) + 1.0) * (1.0 / 9007199254740993.0);
-    const double u2 = double(next_random() >> 11) * (1.0 / 9007199254740992.0);
+    const double u1 = uniform(state);
+    const double u2 = double(next_random(state) >> 11) * (1.0 / 9007199254740992.0);
     return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
+}
+
+bool CoopSensors::uwb_antenna(uint64_t t_us, Vector3f &p_enu) const
+{
+    if (!_started) {
+        return false;
+    }
+    // the physics step is about 1 ms; extrapolating with the step's velocity is exact to
+    // well below a millimetre at the speeds flown
+    const float dt = (int64_t(t_us) - int64_t(_ant_t_us)) * 1.0e-6f;
+    p_enu = _ant_p + _ant_v * dt;
+    return true;
+}
+
+void CoopSensors::uwb_error(UwbError &e)
+{
+    // the draws of scenarios._uwb_round_robin, in its order
+    e = UwbError {};
+    if (uniform(_uwb_rng) <= _uwb_drop_p.get()) {
+        e.dropped = true;
+        return;
+    }
+    double excess = 0.0;
+    if (uniform(_uwb_rng) <= _uwb_nlos_p.get()) {
+        excess = -_uwb_nlos_m.get() * log(uniform(_uwb_rng));
+        e.label = 1;
+    }
+    if (uniform(_uwb_rng) <= _uwb_out_p.get()) {
+        excess = 0.5 + 2.5 * (1.0 - uniform(_uwb_rng));
+        e.label = 2;
+    }
+    e.error_m = float(_uwb_sd.get() * gauss(_uwb_rng) + excess);
+    const double gap = e.label != 0 ? 12.0 + 3.0 * gauss(_uwb_rng) : 3.0 + gauss(_uwb_rng);
+    const double rx = -80.0 + 2.0 * gauss(_uwb_rng);
+    e.rx_power_dbm = float(rx);
+    e.fp_power_dbm = float(rx - gap);
 }
 
 bool CoopSensors::depth(const Truth &x, double &d) const
@@ -226,6 +325,7 @@ void CoopSensors::update(const Aircraft &aircraft, uint64_t now_us)
     }
     if (!_rng_seeded) {
         _rng = (uint64_t(uint32_t(_seed.get())) << 32) ^ (uint64_t(uint8_t(_agent.get())) * 0x2545F4914F6CDD1DULL);
+        _uwb_rng = _rng ^ 0x5557423130303030ULL;  // "UWB10000": an independent stream
         _rng_seeded = true;
     }
     Truth x;
@@ -235,6 +335,14 @@ void CoopSensors::update(const Aircraft &aircraft, uint64_t now_us)
     x.gyro_frd = aircraft.get_gyro();
     x.dcm = aircraft.get_dcm();
     x.field_frd = aircraft.get_mag_field_bf();
+
+    // UWB antenna truth in the shared map (ENU), for AP_Ranging_SITL
+    const Vector3f ant_ned = x.dcm * Vector3f(_ant_frd[0], _ant_frd[1], _ant_frd[2]);
+    _ant_t_us = now_us;
+    _ant_p = Vector3f(float(x.p_ned.y) + ant_ned.y + _map_e.get(),
+                      float(x.p_ned.x) + ant_ned.x + _map_n.get(),
+                      -(float(x.p_ned.z) + ant_ned.z));
+    _ant_v = Vector3f(x.v_ned.y, x.v_ned.x, -x.v_ned.z);
 
     if (!_started) {
         // the first step only sets the clock; sensors start on their next grid point

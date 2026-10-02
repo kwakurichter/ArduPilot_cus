@@ -31,6 +31,12 @@
     camera         stand-in for the HM01B0 marker frontend, off by default: sparse fixes of the
                    body position in the map (SIM_COOP_CAM_HZ, _SD, _LAT), released after the
                    detection latency; AP_CoopBridge sends them as COOP_CAMERA (position only)
+    DW1000 UWB     the truth antenna position in the shared map (SIM_COOP_ANT_*, body FRD) and
+                   the error of each DS-TWR exchange as scenarios._uwb_round_robin: dropout,
+                   N(0, SIM_COOP_UWB_SD), NLOS excess (exponential) or gross outlier
+                   (U(0.5, 3) m), and the total and first-path powers (gap N(3, 1) dB in line
+                   of sight, N(12, 3) dB otherwise; total N(-80, 2) dBm). The exchanges
+                   themselves run between SITL instances in AP_Ranging_SITL (RNG_TYPE 100)
 
   Readings are produced on the absolute FC-time grid (multiples of the period), so they line
   up with the IMU sub-intervals and knots. The SITL driver backends (AP_OpticalFlow_SITL_Coop,
@@ -115,6 +121,19 @@ public:
     bool pop_mag(Mag &r) { return _mag_q.pop(r); }
     bool pop_camera(Camera &r) { return _camera_q.pop(r); }
 
+    // UWB (AP_Ranging_SITL, main thread). This vehicle's antenna in the shared map (ENU) at
+    // FC time ``t_us``, extrapolated from the last physics step; false before the first.
+    bool uwb_antenna(uint64_t t_us, Vector3f &p_enu) const;
+    // The error of one exchange, drawn by its responder.
+    struct UwbError {
+        bool dropped;            // the exchange fails (the responder ignores the POLL)
+        float error_m;           // added to the true (1, 2, 1)/4-weighted range
+        float rx_power_dbm;      // total receive power of the FINAL
+        float fp_power_dbm;      // its first-path power
+        uint8_t label;           // 0 line of sight, 1 NLOS, 2 outlier
+    };
+    void uwb_error(UwbError &e);
+
 private:
     // Truth at one instant, in the frames the models use.
     struct Truth {
@@ -138,9 +157,13 @@ private:
     void update_mag(const Truth &x, uint64_t a_us, uint64_t b_us);
     void update_camera(const Truth &x, uint64_t a_us, uint64_t b_us);
 
-    // Deterministic Gaussian noise (seeded by SIM_COOP_SEED and the agent).
-    double gauss();
-    uint64_t next_random();
+    // Deterministic Gaussian noise (seeded by SIM_COOP_SEED and the agent). The UWB errors
+    // have their own stream, so enabling ranging leaves the sensor noise unchanged.
+    double gauss() { return gauss(_rng); }
+    uint64_t next_random() { return next_random(_rng); }
+    static double gauss(uint64_t &state);
+    static uint64_t next_random(uint64_t &state);
+    static double uniform(uint64_t &state);  // (0, 1]
 
     // Parameters
     AP_Int8 _enable;
@@ -153,12 +176,23 @@ private:
     AP_Float _cam_hz;            // camera stand-in fix rate, 0 = off
     AP_Float _cam_sd;            // its position noise per axis (m)
     AP_Float _cam_lat_ms;        // its detection latency (ms)
+    AP_Float _uwb_sd;            // line-of-sight range noise (m)
+    AP_Float _uwb_nlos_p;        // probability of an NLOS exchange
+    AP_Float _uwb_nlos_m;        // mean NLOS excess (m)
+    AP_Float _uwb_out_p;         // probability of a gross outlier
+    AP_Float _uwb_drop_p;        // probability of a failed exchange
+    AP_Float _ant_frd[3];        // antenna in the body (FRD, m)
 
     // State
     bool _started;
     uint64_t _last_us;
     uint64_t _rng;
+    uint64_t _uwb_rng;
     bool _rng_seeded;
+
+    // antenna truth at the last physics step (map ENU)
+    uint64_t _ant_t_us;
+    Vector3f _ant_p, _ant_v;
 
     // flow: the report being integrated
     uint64_t _flow_start_us, _flow_end_us;
