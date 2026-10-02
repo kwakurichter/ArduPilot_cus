@@ -23,13 +23,15 @@
     COOP_FLOW,        per     one message per sensor reading, handed over by the drivers
     COOP_TOF,         reading (push_flow() etc., AP_CoopBridge_Readings.h)
     COOP_BARO, COOP_MAG, COOP_CAMERA (SITL: sparse position fixes, see sitl_camera())
+    COOP_UWB          per     every DS-TWR exchange this vehicle took part in, taken from
+                      exchange AP_Ranging (both ends with RNG_SCHED = 1)
     COOP_LINK_STATUS    1 Hz  health of the cooperative path
 
   COOP_PEER, the companion's cooperative messages, goes both ways: from the companion it is
   handed to AP_SwarmMesh's critical class (handle_coop_peer()), and AP_SwarmMesh writes the
   peers' frames for this vehicle straight to the companion port (P2P_FWD_PORT = COOP_PORT,
-  P2P_FWD_MASK bit 1). Still to come: COOP_UWB (AP_Ranging). The companion's replies (ODOMETRY for ExternalNav, DEBUG_VECT
-  rows for the Lua avoidance) use the existing GCS handlers.
+  P2P_FWD_MASK bit 1). The companion's replies (ODOMETRY for ExternalNav, DEBUG_VECT rows for
+  the Lua avoidance) use the existing GCS handlers.
 
   The port is an ordinary MAVLink2 port (SERIALn_PROTOCOL = 2) selected by COOP_PORT; the
   bridge sends on its channel with the vehicle's system and component ID. GCS streams on that
@@ -49,6 +51,10 @@
 #include <AP_HAL/utility/RingBuffer.h>
 #include "AP_CoopBridge_ImuStage.h"
 #include "AP_CoopBridge_Readings.h"
+#include <AP_Ranging/AP_Ranging_config.h>
+#if AP_RANGING_ENABLED
+#include <AP_Ranging/AP_Ranging.h>
+#endif
 
 class AP_CoopBridge
 {
@@ -91,7 +97,7 @@ public:
         uint32_t imu_dropped;   // completed sub-intervals not sent (no space on the port)
         uint32_t imu_gaps;      // ticks flagged COOP_SAMPLE_GAP (missing or late INS data)
         uint32_t imu_clipped;   // ticks flagged COOP_SAMPLE_CLIPPED
-        uint32_t aids_sent;     // COOP_FLOW/TOF/BARO/MAG sent
+        uint32_t aids_sent;     // COOP_FLOW/TOF/BARO/MAG/CAMERA/UWB sent
         uint32_t aids_dropped;  // readings lost (queue full or no space on the port)
         uint32_t peer_in;       // COOP_PEER frames from the companion
         uint32_t peer_rejected; // of them, not taken by the mesh (not running or dropped)
@@ -107,13 +113,16 @@ private:
     bool resolve_channel();
     // Send one completed sub-interval as COOP_IMU_DELTA.
     void send_imu(const AP_CoopBridge_ImuStage::Sub &sub);
-    // Send every queued reading (flow, ToF, baro, mag).
+    // Send every queued reading (flow, ToF, baro, mag, camera) and UWB exchange.
     void send_aids();
     void send_flow(const AP_CoopReading::Flow &r);
     void send_tof(const AP_CoopReading::Tof &r);
     void send_baro(const AP_CoopReading::Baro &r);
     void send_mag(const AP_CoopReading::Mag &r);
     void send_camera(const AP_CoopReading::Camera &r);
+#if AP_RANGING_ENABLED
+    void send_uwb(const AP_Ranging::Exchange &e);
+#endif
 #if AP_SIM_COOP_SENSORS_ENABLED
     // SITL stand-in for the FC-side marker frontend: pops the SIM_COOP position fixes
     void sitl_camera();

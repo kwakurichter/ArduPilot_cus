@@ -322,7 +322,40 @@ void AP_CoopBridge::send_aids()
     while (_camera_q.pop(camera)) {
         send_camera(camera);
     }
+#if AP_RANGING_ENABLED
+    // UWB exchanges come straight from AP_Ranging's ring (this is its only consumer)
+    AP_Ranging *ranging = AP::ranging();
+    if (ranging != nullptr) {
+        AP_Ranging::Exchange e;
+        while (ranging->pop_exchange(e)) {
+            send_uwb(e);
+        }
+    }
+#endif
 }
+
+#if AP_RANGING_ENABLED
+void AP_CoopBridge::send_uwb(const AP_Ranging::Exchange &e)
+{
+    const mavlink_channel_t chan = mavlink_channel_t(_chan);
+    if (!HAVE_PAYLOAD_SPACE(chan, COOP_UWB)) {
+        _stats.aids_dropped++;
+        return;
+    }
+    mavlink_coop_uwb_t pkt {};
+    pkt.time_usec = e.start_us;
+    pkt.end_after_capture_us = uint16_t(MIN(e.duration_us, uint32_t(UINT16_MAX)));
+    pkt.range = e.range_m;
+    pkt.variance = e.variance_m2;
+    pkt.rx_power = e.rx_power_dbm;
+    pkt.first_path_power = e.fp_power_dbm;
+    pkt.initiator = e.initiator;
+    pkt.responder = e.responder;
+    pkt.flags = COOP_SAMPLE_VALID | (e.power_valid ? COOP_SAMPLE_POWER_VALID : 0);
+    mavlink_msg_coop_uwb_send_struct(chan, &pkt);
+    _stats.aids_sent++;
+}
+#endif
 
 #if AP_SIM_COOP_SENSORS_ENABLED
 void AP_CoopBridge::sitl_camera()
@@ -561,7 +594,7 @@ void AP_CoopBridge::log_stats(uint64_t now_us)
     // @Field: Drop: completed IMU sub-intervals not sent (port full or stall)
     // @Field: Gap: ticks with missing or late INS data
     // @Field: Clip: ticks with accelerometer clipping
-    // @Field: ASent: aid messages (flow, ToF, baro, mag) sent
+    // @Field: ASent: aid messages (flow, ToF, baro, mag, camera, UWB) sent
     // @Field: ADrop: aid readings lost (queue full or port full)
     AP::logger().WriteStreaming("COOP", "TimeUS,Sent,Drop,Gap,Clip,ASent,ADrop", "s------", "F------",
                                 "QIIIIII", now_us, _stats.imu_sent, _stats.imu_dropped, _stats.imu_gaps,
