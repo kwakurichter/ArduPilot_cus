@@ -62,6 +62,9 @@ protected:
     int16_t _flowdeck_delta_max(void) const { return frontend._flowdeck_delta_max; }
     int16_t _flowdeck_squal_min(void) const { return frontend._flowdeck_squal_min; }
     float _flowdeck_scale(void) const { return frontend._flowdeck_scale; }
+#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    bool _flowdeck_raw_log(void) const { return frontend._flowdeck_raw_log.get() != 0; }
+#endif
 #endif
 
     // get the yaw angle in radians

@@ -9,6 +9,9 @@
 #include <AP_Logger/AP_Logger_config.h>
 #if HAL_LOGGING_ENABLED
 #include "AP_OpticalFlow_FlowDeck_Timing.h"
+#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+#include "AP_OpticalFlow_FlowDeck_RawLog.h"
+#endif
 #endif
 
 class AP_OpticalFlow_FlowDeck : public OpticalFlow_backend
@@ -89,7 +92,15 @@ private:
 
 #if HAL_LOGGING_ENABLED
     uint32_t last_publish_us = 0;
+#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    AP_OpticalFlow_FlowDeck_RawLog raw_log;
+    void queue_raw_sample(AP_OpticalFlow_FlowDeck_RawLog::Sample &sample,
+                          AP_OpticalFlow_FlowDeck_RawLog::Reason reason, const Vector3f &gyro);
+    void log_raw_samples();
 #endif
+#endif
+    Vector3f previous_gyro {};       // previous polling endpoint, including rejected polls
+    bool gyro_primed = false;
     uint32_t last_flow_us;            // timestamp of last flow reading
     uint32_t last_diagnostics_ms;     // timestamp of last diagnostic log message
 };

@@ -337,6 +337,8 @@ BUILD_OPTIONS = [
     Feature('Rangefinder', 'RANGEFINDER_LRD1', 'AP_RANGEFINDER_AINSTEIN_LR_D1_ENABLED', "Enable Rangefinder - Ainstein LRD1", 0, "RANGEFINDER"),   # NOQA: E501
 
     Feature('Sensors', 'OPTICALFLOW', 'AP_OPTICALFLOW_ENABLED', 'Enable Optical Flow', 0, None),
+    Feature('Sensors', 'OPTICALFLOW_FD_RAW', 'AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED',
+            'Enable FlowDeck per-poll diagnostic logging', 0, 'OPTICALFLOW,Logging'),
     Feature('Sensors', 'OPTICALFLOW_CXOF', 'AP_OPTICALFLOW_CXOF_ENABLED', 'Enable Optical flow CXOF Sensor', 0, "OPTICALFLOW"),
     Feature('Sensors', 'OPTICALFLOW_HEREFLOW', 'AP_OPTICALFLOW_HEREFLOW_ENABLED', 'Enable Optical flow HereFlow Sensor', 0, "OPTICALFLOW,DroneCAN"),   # NOQA: E501
     Feature('Sensors', 'OPTICALFLOW_MAV', 'AP_OPTICALFLOW_MAV_ENABLED', 'Enable Optical flow MAVLink Sensor', 0, "OPTICALFLOW"),   # NOQA: E501

@@ -134,6 +134,14 @@ const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
     AP_GROUPINFO("_FD_SCALE", 10, AP_OpticalFlow, _flowdeck_scale, FLOWDECK_PIXEL_SCALING_DEFAULT),
 
     // Index 11 was used by the experimental FlowDeck window selector. Do not reuse.
+#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    // @Param: _FD_LOG
+    // @DisplayName: FlowDeck raw diagnostic logging
+    // @Description: Enables OFR per-poll optical flow diagnostics. Adds approximately 5.4 kB/s to the onboard log. Does not change sensor sampling or gyro averaging. Takes effect without a reboot.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Advanced
+    AP_GROUPINFO("_FD_LOG", 12, AP_OpticalFlow, _flowdeck_raw_log, 0),
+#endif
 #endif
 
     AP_GROUPEND
