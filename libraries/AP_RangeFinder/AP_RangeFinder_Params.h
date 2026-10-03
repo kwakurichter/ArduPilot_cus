@@ -32,6 +32,9 @@ public:
     AP_Int8  address;
     AP_Int8  orientation;
     AP_Int8  distance_mode;
+#if AP_RANGEFINDER_FLOWDECK_ENABLED && AP_RANGEFINDER_FLOWDECK_DIAGNOSTICS_ENABLED
+    AP_Int8 flowdeck_log;
+#endif
 };
 
 #endif  // AP_RANGEFINDER_ENABLED

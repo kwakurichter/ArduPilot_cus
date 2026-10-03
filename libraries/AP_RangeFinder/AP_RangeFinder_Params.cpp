@@ -189,6 +189,15 @@ const AP_Param::GroupInfo AP_RangeFinder_Params::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("ORIENT", 53, AP_RangeFinder_Params, orientation, AP_RANGEFINDER_DEFAULT_ORIENTATION),
 
+#if AP_RANGEFINDER_FLOWDECK_ENABLED && AP_RANGEFINDER_FLOWDECK_DIAGNOSTICS_ENABLED
+    // @Param: FD_LOG
+    // @DisplayName: FlowDeck rangefinder diagnostic logging
+    // @Description: Enables RFD, RFS and RFR rangefinder diagnostic records at 1 Hz. Counters include activity while logging is disabled. Does not change measurement or timeout recovery behavior. Takes effect without a reboot.
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Advanced
+    AP_GROUPINFO("FD_LOG", 62, AP_RangeFinder_Params, flowdeck_log, 0),
+#endif
+
     // @Param: MODE
     // @DisplayName: Distance Mode
     // @Description: Sets the ToF sensor distance mode. Only used by the Crazyflie FlowDeck (VL53L1X) backend.
