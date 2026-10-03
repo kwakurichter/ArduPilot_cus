@@ -336,6 +336,9 @@ BUILD_OPTIONS = [
     Feature('Rangefinder', 'RANGEFINDER_HEXSOONRADAR', 'AP_RANGEFINDER_HEXSOONRADAR_ENABLED', "Enable Rangefinder - Hexsoon Radar", 0, "RANGEFINDER"),   # NOQA: E501
     Feature('Rangefinder', 'RANGEFINDER_LRD1', 'AP_RANGEFINDER_AINSTEIN_LR_D1_ENABLED', "Enable Rangefinder - Ainstein LRD1", 0, "RANGEFINDER"),   # NOQA: E501
 
+    Feature('Rangefinder', 'RANGEFINDER_FD_DIAG', 'AP_RANGEFINDER_FLOWDECK_DIAGNOSTICS_ENABLED',
+            'Enable FlowDeck rangefinder stall diagnostics', 0, 'RANGEFINDER,Logging'),
+
     Feature('Sensors', 'OPTICALFLOW', 'AP_OPTICALFLOW_ENABLED', 'Enable Optical Flow', 0, None),
     Feature('Sensors', 'OPTICALFLOW_FD_RAW', 'AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED',
             'Enable FlowDeck per-poll diagnostic logging', 0, 'OPTICALFLOW,Logging'),
