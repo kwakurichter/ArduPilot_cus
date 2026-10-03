@@ -6,6 +6,10 @@
 
 #include "AP_OpticalFlow_Backend.h"
 #include <AP_HAL/utility/OwnPtr.h>
+#include <AP_Logger/AP_Logger_config.h>
+#if HAL_LOGGING_ENABLED
+#include "AP_OpticalFlow_FlowDeck_Timing.h"
+#endif
 
 class AP_OpticalFlow_FlowDeck : public OpticalFlow_backend
 {
@@ -62,6 +66,9 @@ private:
         float dt;
         uint32_t quality_sum;
         uint16_t sample_count;
+#if HAL_LOGGING_ENABLED
+        AP_OpticalFlow_FlowDeck_Timing timing;
+#endif
     } accumulator;
 
     struct Diagnostics {
@@ -73,10 +80,16 @@ private:
         uint32_t squal_reject_count;
         uint32_t gap_reject_count;
         uint32_t publish_count;
+#if HAL_LOGGING_ENABLED
+        AP_OpticalFlow_FlowDeck_MotionStats motion;
+#endif
     } diagnostics;
 
     void log_diagnostics();
 
+#if HAL_LOGGING_ENABLED
+    uint32_t last_publish_us = 0;
+#endif
     uint32_t last_flow_us;            // timestamp of last flow reading
     uint32_t last_diagnostics_ms;     // timestamp of last diagnostic log message
 };

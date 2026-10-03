@@ -24,6 +24,7 @@
 #include <GCS_MAVLink/GCS.h>
 
 #define FLOWDECK_MOTION_VALID 0xB0
+#define FLOWDECK_MOTION_NONE 0x30
  
 extern const AP_HAL::HAL& hal;
  
@@ -321,6 +322,10 @@ void AP_OpticalFlow_FlowDeck::timer()
         return;
     }
 
+#if HAL_LOGGING_ENABLED
+    diagnostics.motion.add(motion, delta_x != 0 || delta_y != 0);
+#endif
+
     const int16_t delta_max = _flowdeck_delta_max();
     const int32_t abs_delta_x = delta_x < 0 ? -int32_t(delta_x) : int32_t(delta_x);
     const int32_t abs_delta_y = delta_y < 0 ? -int32_t(delta_y) : int32_t(delta_y);
@@ -332,7 +337,10 @@ void AP_OpticalFlow_FlowDeck::timer()
         diagnostics.squal_reject_count++;
         return;
     }
-    if (motion != FLOWDECK_MOTION_VALID) {
+    // Keep zero-displacement intervals in the flow and gyro averaging window.
+    // Other statuses, including inconsistent no-motion reports, remain invalid.
+    const bool zero_motion = motion == FLOWDECK_MOTION_NONE && delta_x == 0 && delta_y == 0;
+    if (motion != FLOWDECK_MOTION_VALID && !zero_motion) {
         diagnostics.motion_reject_count++;
         return;
     }
@@ -346,6 +354,9 @@ void AP_OpticalFlow_FlowDeck::timer()
     accumulator.quality_sum += quality;
     accumulator.sample_count++;
     diagnostics.accepted_count++;
+#if HAL_LOGGING_ENABLED
+    accumulator.timing.add_sample(now_us, elapsed_us);
+#endif
 }
  
 // --- Update ---
@@ -391,7 +402,29 @@ void AP_OpticalFlow_FlowDeck::update()
 
     // 6. Final Processing
     _applyYaw(state.flowRate);
+#if HAL_LOGGING_ENABLED
+    const uint64_t publish_us = AP_HAL::micros64();
+#endif
     _update_frontend(state);
+
+#if HAL_LOGGING_ENABLED
+    const uint32_t now_us = uint32_t(publish_us);
+    const uint32_t publication_interval_us = last_publish_us == 0 ? 0 : now_us - last_publish_us;
+    last_publish_us = now_us;
+    // @LoggerMessage: OFT
+    // @Description: FlowDeck publication timing based on accepted driver sample intervals, excluding sensor-internal delay
+    // @Field: TimeUS: Time at frontend publication
+    // @Field: N: Accepted samples in this publication
+    // @Field: Int: Sum of accepted sample interval durations
+    // @Field: Span: Time from first accepted interval start to last accepted interval end, including gaps
+    // @Field: Age: Age at publication of the duration-weighted accepted interval midpoint
+    // @Field: Last: Age at publication of the last accepted interval end
+    // @Field: PubDt: Time since previous publication, zero for the first
+    AP::logger().Write(
+        "OFT", "TimeUS,N,Int,Span,Age,Last,PubDt", "s-sssss", "F-FFFFF", "QHIIIII",
+        publish_us, data.sample_count, data.timing.accepted_us(), data.timing.span_us(),
+        data.timing.mean_age_us(now_us), data.timing.last_age_us(now_us), publication_interval_us);
+#endif
 
     WITH_SEMAPHORE(_sem);
     diagnostics.publish_count++;
@@ -439,6 +472,24 @@ void AP_OpticalFlow_FlowDeck::log_diagnostics()
         data.squal_reject_count,
         data.gap_reject_count,
         data.publish_count);
+
+    // @LoggerMessage: OFM
+    // @Description: Raw FlowDeck motion-status histogram since the previous OFD report, before rejection gates
+    // @Field: TimeUS: Time of histogram report
+    // @Field: Stat: Raw motion-status byte, or 256 for statuses exceeding the eight-entry histogram capacity
+    // @Field: Count: Successful reads with this status
+    // @Field: NZ: Reads with this status and a nonzero raw delta on either axis
+    const uint64_t report_us = AP_HAL::micros64();
+    for (const auto &entry : data.motion.entries) {
+        if (entry.count != 0) {
+            AP::logger().Write("OFM", "TimeUS,Stat,Count,NZ", "s---", "F---", "QHHH",
+                               report_us, uint16_t(entry.status), entry.count, entry.nonzero);
+        }
+    }
+    if (data.motion.overflow_count != 0) {
+        AP::logger().Write("OFM", "TimeUS,Stat,Count,NZ", "s---", "F---", "QHHH",
+                           report_us, uint16_t(256), data.motion.overflow_count, data.motion.overflow_nonzero);
+    }
 #endif
 }
  
