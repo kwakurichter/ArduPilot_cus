@@ -152,6 +152,9 @@ private:
 #if AP_OPTICALFLOW_FLOWDECK_ENABLED
     AP_Int16 _flowdeck_delta_max;   // maximum accepted absolute raw delta count
     AP_Int16 _flowdeck_squal_min;   // minimum accepted PMW3901 surface quality
+#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    AP_Int8 _flowdeck_raw_log;      // enable OFR diagnostic records
+#endif
     AP_Float _flowdeck_scale;       // PMW3901 angular scale in radians per count
 #endif
 

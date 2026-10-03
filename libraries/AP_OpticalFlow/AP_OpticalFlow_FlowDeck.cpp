@@ -294,17 +294,35 @@ bool AP_OpticalFlow_FlowDeck::read_motion_burst(int16_t &delta_x, int16_t &delta
 // --- Update Measurement ---
 void AP_OpticalFlow_FlowDeck::timer()
 {
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    AP_OpticalFlow_FlowDeck_RawLog::Sample raw {};
+    raw.time_us = AP_HAL::micros64();
+    const uint32_t now_us = uint32_t(raw.time_us);
+#else
     const uint32_t now_us = AP_HAL::micros();
-    if (last_flow_us == 0) {
+#endif
+    if (!gyro_primed) {
+        previous_gyro = AP::ahrs().get_gyro();
+        gyro_primed = true;
         last_flow_us = now_us;
         return;
     }
     const uint32_t elapsed_us = now_us - last_flow_us;
     last_flow_us = now_us;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    raw.dt_us = elapsed_us;
+#endif
 
     if (elapsed_us == 0 || elapsed_us > 500000U) {
+        previous_gyro = AP::ahrs().get_gyro();
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+        raw.gyro_us = AP_HAL::micros() - now_us;
+#endif
         WITH_SEMAPHORE(_sem);
         diagnostics.gap_reject_count++;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+        queue_raw_sample(raw, AP_OpticalFlow_FlowDeck_RawLog::Reason::InvalidInterval, previous_gyro);
+#endif
         return;
     }
     const float dt = elapsed_us * 1.0e-6f;
@@ -313,12 +331,34 @@ void AP_OpticalFlow_FlowDeck::timer()
     int16_t delta_y = 0;
     uint8_t quality = 0;
     uint8_t motion = 0;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    raw.read_start_us = AP_HAL::micros() - now_us;
+#endif
     const bool read_ok = read_motion_burst(delta_x, delta_y, quality, motion);
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    raw.read_end_us = AP_HAL::micros() - now_us;
+    raw.delta_x = delta_x;
+    raw.delta_y = delta_y;
+    raw.quality = quality;
+    raw.motion = motion;
+#endif
+
+    // Trapezoidal integration aligns body rate with each flow interval.
+    // Advance the endpoint even when this poll is rejected below.
+    const Vector3f gyro = AP::ahrs().get_gyro();
+    const Vector3f mean_gyro = (previous_gyro + gyro) * 0.5f;
+    previous_gyro = gyro;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    raw.gyro_us = AP_HAL::micros() - now_us;
+#endif
 
     WITH_SEMAPHORE(_sem);
     diagnostics.read_count++;
     if (!read_ok) {
         diagnostics.spi_fail_count++;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+        queue_raw_sample(raw, AP_OpticalFlow_FlowDeck_RawLog::Reason::SpiFailure, gyro);
+#endif
         return;
     }
 
@@ -331,10 +371,16 @@ void AP_OpticalFlow_FlowDeck::timer()
     const int32_t abs_delta_y = delta_y < 0 ? -int32_t(delta_y) : int32_t(delta_y);
     if (delta_max > 0 && (abs_delta_x >= delta_max || abs_delta_y >= delta_max)) {
         diagnostics.delta_reject_count++;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+        queue_raw_sample(raw, AP_OpticalFlow_FlowDeck_RawLog::Reason::DeltaRejected, gyro);
+#endif
         return;
     }
     if (quality < _flowdeck_squal_min()) {
         diagnostics.squal_reject_count++;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+        queue_raw_sample(raw, AP_OpticalFlow_FlowDeck_RawLog::Reason::QualityRejected, gyro);
+#endif
         return;
     }
     // Keep zero-displacement intervals in the flow and gyro averaging window.
@@ -342,14 +388,19 @@ void AP_OpticalFlow_FlowDeck::timer()
     const bool zero_motion = motion == FLOWDECK_MOTION_NONE && delta_x == 0 && delta_y == 0;
     if (motion != FLOWDECK_MOTION_VALID && !zero_motion) {
         diagnostics.motion_reject_count++;
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+        queue_raw_sample(raw, AP_OpticalFlow_FlowDeck_RawLog::Reason::MotionRejected, gyro);
+#endif
         return;
     }
 
-    const Vector3f &gyro = AP::ahrs().get_gyro();
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    queue_raw_sample(raw, AP_OpticalFlow_FlowDeck_RawLog::Reason::Accepted, gyro);
+#endif
     accumulator.flow_sum.x += delta_x;
     accumulator.flow_sum.y += delta_y;
-    accumulator.gyro_integral.x += gyro.x * dt;
-    accumulator.gyro_integral.y += gyro.y * dt;
+    accumulator.gyro_integral.x += mean_gyro.x * dt;
+    accumulator.gyro_integral.y += mean_gyro.y * dt;
     accumulator.dt += dt;
     accumulator.quality_sum += quality;
     accumulator.sample_count++;
@@ -362,6 +413,9 @@ void AP_OpticalFlow_FlowDeck::timer()
 // --- Update ---
 void AP_OpticalFlow_FlowDeck::update()
 {
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    log_raw_samples();
+#endif
     log_diagnostics();
 
     Accumulator data {};
@@ -429,6 +483,65 @@ void AP_OpticalFlow_FlowDeck::update()
     WITH_SEMAPHORE(_sem);
     diagnostics.publish_count++;
 }
+
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+// Called with _sem held. Records retain the current endpoint gyro; integration
+// averages it with the preceding endpoint, including a preceding rejected poll.
+void AP_OpticalFlow_FlowDeck::queue_raw_sample(AP_OpticalFlow_FlowDeck_RawLog::Sample &sample,
+                                             AP_OpticalFlow_FlowDeck_RawLog::Reason reason, const Vector3f &gyro)
+{
+    if (!_flowdeck_raw_log()) {
+        raw_log.clear();
+        return;
+    }
+    sample.gyro_x = gyro.x;
+    sample.gyro_y = gyro.y;
+    sample.gyro_z = gyro.z;
+    sample.reason = reason;
+    raw_log.push(sample);
+}
+
+void AP_OpticalFlow_FlowDeck::log_raw_samples()
+{
+    // Bound main-task work after a stall; never hold the backend lock in Write.
+    for (uint8_t i = 0; i < 4; i++) {
+        AP_OpticalFlow_FlowDeck_RawLog::Sample sample;
+        {
+            WITH_SEMAPHORE(_sem);
+            if (!_flowdeck_raw_log()) {
+                raw_log.clear();
+                return;
+            }
+            if (!raw_log.pop(sample)) {
+                return;
+            }
+        }
+        // @LoggerMessage: OFR
+        // @Description: Diagnostic FlowDeck poll before averaging; timestamps exclude unknown sensor-internal delay
+        // @Field: TimeUS: SPI callback start time, not the deferred log-write time
+        // @Field: Seq: Sequence of diagnostic-enabled polls; gaps indicate missing records
+        // @Field: Dt: Time since previous callback start
+        // @Field: RS: SPI read start offset from TimeUS; zero if no read attempted
+        // @Field: RE: SPI read completion offset from TimeUS; zero if no read attempted
+        // @Field: GT: Gyro capture offset from TimeUS; gyro has AHRS bias correction
+        // @Field: DX: Raw sensor X displacement, before sign, scale and yaw corrections
+        // @Field: DY: Raw sensor Y displacement, before sign, scale and yaw corrections
+        // @Field: Q: Raw surface quality; only valid if SPI read succeeded
+        // @Field: M: Raw motion status; only valid if SPI read succeeded
+        // @Field: R: Disposition: 0 accepted, 1 invalid interval, 2 SPI failure, 3 delta, 4 quality, 5 motion rejection
+        // @Field: GX: Gyro X rate sampled for this record
+        // @Field: GY: Gyro Y rate sampled for this record
+        // @Field: GZ: Gyro Z rate sampled for this record
+        // @Field: Drop: Cumulative diagnostic queue overflows at enqueue; sequence and counter wrap at 32 bits
+        AP::logger().Write("OFR", "TimeUS,Seq,Dt,RS,RE,GT,DX,DY,Q,M,R,GX,GY,GZ,Drop",
+                           "s-ssss-----EEE-", "F-FFFF-----000-", "QIIIIIhhBBBfffI",
+                           sample.time_us, sample.sequence, sample.dt_us,
+                           sample.read_start_us, sample.read_end_us, sample.gyro_us,
+                           sample.delta_x, sample.delta_y, sample.quality, sample.motion, uint8_t(sample.reason),
+                           sample.gyro_x, sample.gyro_y, sample.gyro_z, sample.dropped);
+    }
+}
+#endif
 
 void AP_OpticalFlow_FlowDeck::log_diagnostics()
 {
