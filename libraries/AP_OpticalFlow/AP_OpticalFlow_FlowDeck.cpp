@@ -560,7 +560,7 @@ void AP_OpticalFlow_FlowDeck::log_diagnostics()
 
 #if HAL_LOGGING_ENABLED
     // @LoggerMessage: OFD
-    // @Description: Crazyflie FlowDeck sample diagnostics accumulated since the previous message
+    // @Description: Crazyflie FlowDeck sample diagnostics for the latest one-second reporting interval
     // @Field: TimeUS: Time since system startup
     // @Field: Read: Motion burst read attempts
     // @Field: Good: Accepted samples
@@ -570,24 +570,28 @@ void AP_OpticalFlow_FlowDeck::log_diagnostics()
     // @Field: SQ: Samples rejected by the surface quality gate
     // @Field: Gap: Samples rejected due to an invalid time interval
     // @Field: Pub: Optical flow windows published to the frontend
-    AP::logger().Write(
-        "OFD",
-        "TimeUS,Read,Good,SPI,Mot,Dlt,SQ,Gap,Pub",
-        "s--------",
-        "F--------",
-        "QIIIIIIII",
-        AP_HAL::micros64(),
-        data.read_count,
-        data.accepted_count,
-        data.spi_fail_count,
-        data.motion_reject_count,
-        data.delta_reject_count,
-        data.squal_reject_count,
-        data.gap_reject_count,
-        data.publish_count);
+#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
+    if (_flowdeck_raw_log()) {
+        AP::logger().Write(
+            "OFD",
+            "TimeUS,Read,Good,SPI,Mot,Dlt,SQ,Gap,Pub",
+            "s--------",
+            "F--------",
+            "QIIIIIIII",
+            AP_HAL::micros64(),
+            data.read_count,
+            data.accepted_count,
+            data.spi_fail_count,
+            data.motion_reject_count,
+            data.delta_reject_count,
+            data.squal_reject_count,
+            data.gap_reject_count,
+            data.publish_count);
+    }
+#endif
 
     // @LoggerMessage: OFM
-    // @Description: Raw FlowDeck motion-status histogram since the previous OFD report, before rejection gates
+    // @Description: Raw FlowDeck motion-status histogram for the latest reporting interval, before rejection gates
     // @Field: TimeUS: Time of histogram report
     // @Field: Stat: Raw motion-status byte, or 256 for statuses exceeding the eight-entry histogram capacity
     // @Field: Count: Successful reads with this status
