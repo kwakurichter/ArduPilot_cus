@@ -2,6 +2,7 @@
 
 #include <AP_Param/AP_Param.h>
 #include <Filter/LowPassFilter.h>
+#include "AP_Motors_config.h"
 
 class AP_Motors;
 class Thrust_Linearization {
@@ -47,6 +48,11 @@ public:
     // var_info for holding Parameter information
     static const struct AP_Param::GroupInfo var_info[];
 
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    bool cubic_selected() const { return thrust_model == 1; }
+    bool cubic_configuration_valid() const;
+#endif
+
 protected:
     AP_Float curve_expo;       // curve used to linearize pwm to thrust conversion.  set to 0 for linear and 1 for second order approximation
     AP_Float spin_min;         // throttle out ratio which produces the minimum thrust.  (i.e. 0 ~ 1 ) of the full throttle range
@@ -55,10 +61,20 @@ protected:
     AP_Float batt_voltage_max; // maximum voltage used to scale lift
     AP_Float batt_voltage_min; // minimum voltage used to scale lift
 
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    AP_Int8 thrust_model;      // 0: expo, 1: board-calibrated cubic
+#endif
+
 private:
     float               lift_max;          // maximum lift ratio from battery voltage
     float               throttle_limit;    // ratio of throttle limit between hover and maximum
     LowPassFilterFloat  batt_voltage_filt; // filtered battery voltage expressed as a percentage (0 ~ 1.0) of batt_voltage_max
 
     AP_Motors& motors;
+
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    void update_cubic_voltage(float voltage, bool healthy);
+    LowPassFilterFloat cubic_voltage_filt;
+    bool cubic_voltage_ready;
+#endif
 };

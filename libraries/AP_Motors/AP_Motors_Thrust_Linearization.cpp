@@ -8,6 +8,11 @@
 
 #define AP_MOTORS_BATT_VOLT_FILT_HZ 0.5 // battery voltage filtered at 0.5hz
 
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+#include "AP_Motors_Thrust_Cubic.h"
+static const AP_Motors_Thrust_Cubic cubic_model(AP_MOTORS_THRUST_CUBIC_PROFILE);
+#endif
+
 #if APM_BUILD_TYPE(APM_BUILD_UNKNOWN)
     // Example does not instantiate baro so cannot do density compensation
     #define AP_MOTORS_DENSITY_COMP 0
@@ -95,6 +100,14 @@ Thrust_Linearization::Thrust_Linearization(AP_Motors& _motors) :
     batt_voltage_filt.set_cutoff_frequency(AP_MOTORS_BATT_VOLT_FILT_HZ);
     batt_voltage_filt.reset(1.0);
 
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    // Equivalent to approximately alpha=0.01 at 1 kHz, independent of loop rate.
+    thrust_model.set(0);
+    cubic_voltage_filt.set_cutoff_frequency(1.6f);
+    cubic_voltage_filt.reset(cubic_model.reference_voltage());
+    cubic_voltage_ready = false;
+#endif
+
 #if APM_BUILD_TYPE(APM_BUILD_Heli)
     AP_Param::setup_object_defaults(this, var_info);
 #endif
@@ -118,6 +131,15 @@ float Thrust_Linearization::actuator_to_thrust(float actuator) const
 // apply_thrust_curve_and_volt_scaling - returns throttle in the range 0 ~ 1
 float Thrust_Linearization::apply_thrust_curve_and_volt_scaling(float thrust) const
 {
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    if (cubic_selected() && cubic_model.valid() && spin_max > spin_min) {
+        // Undo the mixer's available-thrust normalization exactly once.
+        const float force = constrain_float(thrust, 0.0f, 1.0f) * lift_max * cubic_model.maximum_thrust();
+        const float actuator = cubic_model.actuator(force, cubic_voltage_filt.get(), spin_min, spin_max);
+        // The caller applies the spin range; the calibrated output is already absolute.
+        return (actuator - spin_min) / (spin_max - spin_min);
+    }
+#endif
     float battery_scale = 1.0;
     if (is_positive(batt_voltage_filt.get())) {
         battery_scale = 1.0 / batt_voltage_filt.get();
@@ -136,6 +158,13 @@ float Thrust_Linearization::apply_thrust_curve_and_volt_scaling(float thrust) co
 // used to calculate equivelent motor throttle level to direct ouput, used in tailsitter transtions
 float Thrust_Linearization::remove_thrust_curve_and_volt_scaling(float throttle) const
 {
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    if (cubic_selected() && cubic_model.valid() && is_positive(lift_max)) {
+        const float actuator = spin_min + constrain_float(throttle, 0.0f, 1.0f) * (spin_max - spin_min);
+        return constrain_float(cubic_model.force(actuator, cubic_voltage_filt.get()) /
+                               (lift_max * cubic_model.maximum_thrust()), 0.0f, 1.0f);
+    }
+#endif
     float battery_scale = 1.0;
     if (is_positive(batt_voltage_filt.get())) {
         battery_scale = 1.0 / batt_voltage_filt.get();
@@ -155,6 +184,16 @@ float Thrust_Linearization::remove_thrust_curve_and_volt_scaling(float throttle)
 // update_lift_max from battery voltage - used for voltage compensation
 void Thrust_Linearization::update_lift_max_from_batt_voltage()
 {
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    if (cubic_selected() && cubic_model.valid()) {
+#if AP_BATTERY_ENABLED
+        update_cubic_voltage(AP::battery().voltage(batt_idx), AP::battery().healthy(batt_idx));
+#else
+        update_cubic_voltage(0.0f, false);
+#endif
+        return;
+    }
+#endif
 #if AP_BATTERY_ENABLED
     // sanity check battery_voltage_min is not too small
     // if disabled or misconfigured exit immediately
@@ -184,6 +223,55 @@ void Thrust_Linearization::update_lift_max_from_batt_voltage()
     lift_max = batt_voltage_filt.get() * (1 - thrust_curve_expo) + thrust_curve_expo * batt_voltage_filt.get() * batt_voltage_filt.get();
 #endif
 }
+
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+bool Thrust_Linearization::cubic_configuration_valid() const
+{
+    if (thrust_model == 0) {
+        return true;
+    }
+    if (!cubic_selected() || !cubic_model.valid() || !motors.is_digital_pwm_type() ||
+        !isfinite(spin_min) || !isfinite(spin_max) || is_negative(spin_min) ||
+        spin_max > 1.0f || spin_max <= spin_min ||
+        !isfinite(batt_voltage_min) || !isfinite(batt_voltage_max) ||
+        !is_positive(batt_voltage_min) || batt_voltage_min >= batt_voltage_max ||
+        batt_voltage_max > cubic_model.reference_voltage()) {
+        return false;
+    }
+    // Keep the entire running range inside the measured portion of the curve.
+    if (cubic_model.force(spin_min, batt_voltage_min) < cubic_model.minimum_thrust() ||
+        cubic_model.force(spin_min, batt_voltage_max) >= cubic_model.maximum_thrust()) {
+        return false;
+    }
+#if AP_BATTERY_ENABLED
+    const float voltage = AP::battery().voltage(batt_idx);
+    return AP::battery().healthy(batt_idx) && isfinite(voltage) && voltage >= batt_voltage_min &&
+           voltage <= 1.25f * cubic_model.reference_voltage();
+#else
+    return false;
+#endif
+}
+
+void Thrust_Linearization::update_cubic_voltage(float voltage, bool healthy)
+{
+    if (healthy && isfinite(voltage) &&
+        voltage >= 0.5f * cubic_model.reference_voltage() &&
+        voltage <= 1.25f * cubic_model.reference_voltage() &&
+        is_positive(batt_voltage_min) && batt_voltage_min < batt_voltage_max &&
+        batt_voltage_max <= cubic_model.reference_voltage()) {
+        const float bounded_voltage = constrain_float(voltage, batt_voltage_min, batt_voltage_max);
+        if (!cubic_voltage_ready) {
+            cubic_voltage_filt.reset(bounded_voltage);
+            cubic_voltage_ready = true;
+        } else {
+            cubic_voltage_filt.apply(bounded_voltage, motors.get_dt_s());
+        }
+    }
+    // Retain the last usable voltage during telemetry loss; battery failsafes
+    // remain responsible for the vehicle's response, without switching models.
+    lift_max = cubic_model.available_thrust(cubic_voltage_filt.get(), spin_max) / cubic_model.maximum_thrust();
+}
+#endif // AP_MOTORS_THRUST_CUBIC_ENABLED
 
 // return gain scheduling gain based on voltage and air density
 float Thrust_Linearization::get_compensation_gain() const
