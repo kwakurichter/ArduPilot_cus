@@ -4,6 +4,16 @@
 #include <AP_Scripting/AP_Scripting_config.h>
 #include <SRV_Channel/SRV_Channel_config.h>
 
+#ifndef AP_MOTORS_THRUST_CUBIC_ENABLED
+#define AP_MOTORS_THRUST_CUBIC_ENABLED 0
+#endif
+
+// Boards enabling the calibrated model supply a AP_Motors_Thrust_Cubic::Profile.
+// An absent profile is rejected by the motor arming checks.
+#ifndef AP_MOTORS_THRUST_CUBIC_PROFILE
+#define AP_MOTORS_THRUST_CUBIC_PROFILE {}
+#endif
+
 #ifndef AP_MOTORS_MAX_NUM_MOTORS
 #if AP_SCRIPTING_ENABLED
 #define AP_MOTORS_MAX_NUM_MOTORS 32

@@ -254,6 +254,16 @@ const AP_Param::GroupInfo AP_MotorsMulticopter::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("IDLE_SEC", 45, AP_MotorsMulticopter, _idle_time_delay_s, 0),
 
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    // @Param: THST_MODEL
+    // @DisplayName: Motor thrust model
+    // @Description: Selects the standard expo curve or the board-calibrated cubic force versus voltage model for DShot motors. Cubic uses filtered measured battery voltage and ignores THST_EXPO and the raw-voltage option. SPIN_MIN and SPIN_MAX remain actuator limits. Requires matching motors, propellers and ESC settings. Recheck hover thrust and tuning when changing models.
+    // @Values: 0:Expo,1:Calibrated cubic
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("THST_MODEL", 46, AP_MotorsMulticopter, thr_lin.thrust_model, 0),
+#endif
+
     AP_GROUPEND
 };
 
@@ -991,6 +1001,13 @@ bool AP_MotorsMulticopter::arming_checks(size_t buflen, char *buffer) const
         hal.util->snprintf(buffer, buflen, "Check %sPWM_MIN and %sPWM_MAX", AP_MOTORS_PARAM_PREFIX, AP_MOTORS_PARAM_PREFIX);
         return false;
     }
+
+#if AP_MOTORS_THRUST_CUBIC_ENABLED
+    if (!thr_lin.cubic_configuration_valid()) {
+        hal.util->snprintf(buffer, buflen, "Check %sTHST_MODEL, spin limits, DShot and battery", AP_MOTORS_PARAM_PREFIX);
+        return false;
+    }
+#endif
 
     return true;
 }
