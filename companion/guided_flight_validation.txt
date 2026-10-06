@@ -1,0 +1,171 @@
+Commit checkpoint: 2026-10-06
+
+PASS: all 31 existing unit tests rerun, including the localhost UDP relay test.
+PASS: flake8 for guided_flight.py and test_guided_flight.py using repository config.
+Historical SITL validation below was not rerun for this checkpoint; script code
+is unchanged. README updated for continuous-only FlowDeck firmware and the
+outstanding height-reference investigation.
+
+User-operated hardware logs 18, 20, 22 and 25 show all six translation targets
+followed by LAND and normal autopilot disarm. The user reported completion;
+log 25 felt cleaner. The current gains and onboard position errors do not
+establish independent physical position accuracy or a fully tuned controller.
+
+Open issue: log 22 -> 25 home altitude 0.07 -> 0.16 m, local target height
+1.07 -> 1.16 m, median measured range 1.10 -> 1.34 m. The captured startup
+height reference and EKF height-to-ground offset need investigation. No script
+or firmware correction for this issue is part of this checkpoint.
+
+AI-assisted implementation, analysis, documentation and validation.
+Previous dated evidence retained below as historical records, including the
+now-removed selectable A/B flow-window experiment.
+
+Three-axis pattern validation: 2026-10-02
+
+PASS: 31 unit tests, retaining all 28 existing cases. New tests cover heading-
+relative left/right/backward targets, fixed returns, unchanged altitude, preview
+without sockets, and invalid pattern rejection. Full mocked takeoff/readiness
+sequence now exercises both patterns, requiring horizontal EKF validity before
+any translation and checking the ordered target list.
+PASS: flake8 for both modified Python files with repository configuration.
+PASS: complete GPS-disabled optical-flow/rangefinder SITL run: takeoff, initial
+settle, left/return, right/return, backward/return, LAND and autopilot disarm.
+All seven move() calls reached the unchanged arrival criteria. Existing SITL
+binary was used: /tmp/loiter-profile-sitl/sitl/bin/arducopter. It uses the simulated
+flow backend; hardware FlowDeck A/B selection was checked separately by host
+production-function regression tests and a crazyflie2_bl build.
+No physical aircraft commands were sent. Implementation and tests AI-assisted.
+Evidence: /Users/kwaku/.codex/visualizations/2026/09/25/01a0da0c-75dd-7423-b74e-db4de1bddead/flowdeck-window-select
+
+Previous validation retained below:
+
+Untuned arrival defaults: 2026-10-01
+
+Source: /Users/kwaku/Documents/QGroundControl Daily/Logs/guided/log_14_UnknownDate.bin
+GUIDED 51.383 s; arm 51.571 s; accepted takeoff 52.110 s.
+Only one GUIP target was issued: initial hover at 58.947 s, local NED
+(0.017089, -0.049718, -0.920000) m. There was NO left or return target.
+LAND was commanded at 89.819 s, roughly 30.9 s after the hover target;
+this is consistent with the 30-second settling timeout plus link delay.
+The host JSONL log is unavailable, so the trigger is not confirmed from host state.
+Normal autopilot disarm followed at 94.921 s. Post-landing behavior excluded.
+
+Against that target, onboard XKF1 estimates satisfied the old 0.20 m position
+limit continuously for up to 3.103 s, but the combined 0.20 m and 0.20 m/s rule
+for only 1.301 s. The required dwell was 3 s. Between 65 and 75 s the median
+3D error was 0.228 m and median speed was 0.345 m/s; vertical error median 0.023 m.
+The old acceptance limits required more settling than this untuned response delivers.
+
+New coarse waypoint acceptance defaults:
+--position-tolerance 0.30 m
+--settle-speed 0.40 m/s
+--hold 1.0 s continuous
+Both conditions must hold throughout the dwell; excursions still reset it.
+The 30 s timeout, sensor guards, takeoff and landing behavior are unchanged.
+Movement targets, target transmission rate and speed commands are unchanged,
+as requested. The new settle speed is an arrival criterion, not a speed command.
+
+Actual move() replay with onboard XKF1 samples:
+log_14 initial hover: old defaults time out; new defaults complete at 59.966 s,
+1.019 s after the hover target. There are no subsequent movement data in log_14
+from which to validate a left or return leg.
+log_12 left leg: old defaults complete after 7.383 s; new defaults after 3.481 s.
+These are counterfactual onboard-data replays, not exact host MAVLink timing or
+predictions of the later trajectory after advancing to the next leg.
+
+PASS: 28 unit tests. The original 26 remain; strict-rule tests now explicitly
+select their original limits. Added tests exercise the new defaults accepting
+moderate residual motion while rejecting brief passes, excess speed and height.
+PASS: flake8 with repository configuration.
+PASS: full GPS-disabled optical-flow/rangefinder SITL flight: takeoff, initial
+hover, left, return, LAND and autopilot disarm. No firmware changes or build.
+No physical vehicle commands were sent. AI-assisted analysis and implementation.
+
+Evidence: /Users/kwaku/.codex/visualizations/2026/09/25/01a0da0c-75dd-7423-b74e-db4de1bddead/guided-arrival-log14
+
+Previous validation retained below:
+
+Arrival analysis and revision: 2026-10-01
+
+Input: /Users/kwaku/Documents/QGroundControl Daily/Logs/guided/log_12_UnknownDate.bin
+Onboard ArduSwarm v2.1.1 (9575f57b), crazyflie2_bl.
+GUIDED started 59.54 s; arm 59.75 s; takeoff command 60.24 s.
+First hover target 67.257 s; left target 73.291 s; LAND 103.017 s.
+There is no return target in this log. The left target is one metre from the
+hover target. All analysis below excludes landing/post-landing data.
+
+Previous arrival rule: 3D position error <= 0.15 m AND 3D speed <= 0.10 m/s
+continuously for 3 seconds, otherwise reset dwell. Using onboard XKF1 estimates
+against GUIP targets, the longest position-only qualifying run was 7.1 s;
+the longest run satisfying BOTH requirements was only 1.7 s. Between 80 and
+90 s the median 3D speed was 0.135 m/s, with median error 0.125 m. Median vertical
+error was 0.010 m. Speed/dwell was the main obstruction to completion.
+
+Revised defaults: 3D radius 0.20 m; --settle-speed 0.20 m/s; continuous dwell
+still 3 seconds. No fast-pass acceptance or cumulative dwell across excursions.
+Actual move() replay using XKF1 samples completes at 80.674 s, 7.383 s after
+the left target; the old thresholds time out. This is a counterfactual replay
+of onboard estimates, not an exact replay of the host's MAVLink receive timing.
+The JSONL host log was not available. LAND at 103.017 s was also near the old
+30-second deadline; the onboard log alone cannot distinguish Ctrl-C vs timeout.
+
+Per user preference, movement targets, their transmission rate and speed command
+sequence are unchanged. Only arrival criteria, progress diagnostics and CLI/help
+have changed. The earlier speed request can be reset by firmware position-mode
+initialization; it has NOT been reapplied after takeoff in this revision.
+
+PASS: all 26 unit tests, including the original 22. New tests cover moderate
+residual motion completing dwell, speed/distance excursions resetting dwell,
+fast passes and vertical errors not completing, positive finite CLI thresholds,
+progress logging and no extra speed commands during move().
+PASS: flake8 with repository configuration.
+PASS: complete GPS-disabled optical-flow/rangefinder SITL flight: takeoff, hover,
+left, return, LAND and autopilot disarm. Existing binary used; no firmware changes.
+No real vehicle commands sent. AI-assisted analysis and code.
+
+Evidence: /Users/kwaku/.codex/visualizations/2026/09/25/01a0da0c-75dd-7423-b74e-db4de1bddead/guided-arrival-log12
+
+Previous validation retained below:
+
+Validation: 2026-10-01, takeoff comparison/fix
+
+PASS: 22 unittest protocol/abort/regression tests. All original 12 tests retained.
+Added coverage: ground EKF flags 39 permit vertical takeoff, but block horizontal
+commands until relative position becomes valid; missing vertical state or stale
+telemetry still blocks readiness; origin command units/ACK and origin reuse;
+explicit home altitude from local ground height; transient arming retries,
+denial/ambiguous timeout handling and mode takeover during retries.
+PASS: flake8 with this repository configuration.
+PASS: complete ArduCopter SITL sequence with GPS disabled, simulated optical flow
+and rangefinder, and normal arming checks. Acknowledged origin command; explicit
+home; GUIDED; normal arm; 1 m takeoff; 1 m left; return; LAND and auto-disarm.
+Final simulated target errors: 0.040 m after takeoff, 0.026 m left, 0.030 m return.
+
+The simulator had valid ground flow positioning. The ground flags=39 path is
+covered by mocked protocol/sequence regression tests, not a physical flight or
+a HAL_CF21 simulator build. Aircraft source ModeGuided::requires_position()
+explicitly exempts HAL_CF21 from requiring horizontal position for GUIDED arming.
+The script now follows that distinction, checking horizontal validity before
+translation. It still requires fresh local telemetry for launch height.
+
+Differences found in the working companion code:
+- It deliberately defers position readiness until airborne.
+- It uses COMMAND_INT / MAV_CMD_DO_SET_GLOBAL_ORIGIN with ACK/readback.
+- It retries transient arming rejection; the host script now does so boundedly.
+- It does not send the old "use current home" command. That command requires a
+  valid horizontal location, so the script now sets an explicit home at the
+  indoor origin latitude/longitude and measured ground altitude.
+- Its NAV_TAKEOFF command is identical to the script's command.
+- Its timed STABILIZE/force-disarm landing fallback is not copied. Normal disarm
+  remains gated by confirmed touchdown; autopilot auto-disarm is accepted.
+
+No failed hardware-run JSONL log was available when this comparison was made;
+these are source-verified potential blockers, not proof of the actual stop point.
+No aircraft was connected or commanded. The forwarding bridge is unchanged.
+Existing SITL executable: /tmp/loiter-profile-sitl/sitl/bin/arducopter.
+AI-assisted implementation and tests.
+
+Evidence: /Users/kwaku/.codex/visualizations/2026/09/25/01a0da0c-75dd-7423-b74e-db4de1bddead/guided-flight-takeoff-fix-validation
+
+Run unit tests from the repository root:
+python3 -m unittest discover -s companion -p test_guided_flight.py -v
