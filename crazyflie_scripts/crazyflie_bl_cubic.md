@@ -1,10 +1,12 @@
 # Crazyflie 2.1 Brushless cubic thrust model
 
-This opt-in model uses the stock Crazyflie 2.1 Brushless motor, propeller and ESC
+This model uses the stock Crazyflie 2.1 Brushless motor, propeller and ESC
 calibration from Bitcraze's `crazyflie-firmware`,
 `src/platform/interface/platform_defaults_cf21bl.h`. Its coefficients are
-compiled into the `crazyflie2_bl` board definition. The existing expo model
-remains the default (`MOT_THST_MODEL=0`). This implementation and its tests are
+compiled into the `crazyflie2_bl` board definition. This board's defaults select
+the cubic model (`MOT_THST_MODEL=1`); the generic motor-library default remains
+the expo model (`MOT_THST_MODEL=0`). Saved parameter overrides take precedence
+over board defaults. This implementation and its tests are
 AI-assisted and require human review and thrust-stand validation before flight.
 
 The calibration fits per-motor force in newtons to effective motor voltage:
@@ -51,13 +53,15 @@ The inverse reports modeled force, including that minimum force, rather than
 claiming a perfect round trip through clipping. The arming check rejects an idle
 setting below the measured curve's minimum of 0.0213626 N at the minimum voltage.
 
-## Opting in
+## Configuration
 
 1. Save the aircraft's current parameters, particularly the spin limits, hover
    thrust, battery limits and motor protocol.
-2. Build for `crazyflie2_bl` and load `crazyflie_bl_cubic.params`. This selects the
-   cubic model and DShot300, sets the voltage limits to 3.3–4.2 V, and sets the
-   spin limits to 0.25–0.95. No parameters are sent to an aircraft by this change.
+2. Build for `crazyflie2_bl`. Its defaults select the cubic model and DShot300,
+   voltage limits of 3.3–4.2 V, spin limits of 0.25–0.95 and hover thrust of 0.47.
+   Check saved parameter overrides on existing aircraft; `crazyflie_bl_cubic.params`
+   can apply the model, protocol, voltage and spin settings explicitly. It does
+   not set hover thrust or controller gains.
 3. Set `MOT_THST_HOVER` for the new physical thrust scale. A starting estimate is
    `mass_kg * 9.80665 / 0.8`; for a 40 g aircraft this is approximately 0.49.
    Use the actual mass with its battery and decks. The old learned hover value
@@ -68,7 +72,9 @@ setting below the measured curve's minimum of 0.0213626 N at the minimum voltage
    thrust scale.
 
 To return to the expo model, set `MOT_THST_MODEL=0`, restore the saved spin and
-hover settings (and any other parameters changed by the opt-in file), and reboot.
+hover and expo settings (and any other parameters changed by the calibration
+file), and reboot. The board no longer overrides `MOT_THST_EXPO` to 0.45, so
+restore that value explicitly if it was part of the previous configuration.
 
 ## Validation
 
@@ -81,8 +87,6 @@ To include the board's calibration in a SITL test build:
 
 ```sh
 rg '^define AP_MOTORS_THRUST_CUBIC_' libraries/AP_HAL_ChibiOS/hwdef/crazyflie2_bl/hwdef.dat > /tmp/cubic-sitl.dat
-# This branch's SwarmMesh SITL header needs this otherwise undefined option.
-printf '%s\n' 'define AP_SIM_SWARMMESH_LOSS_ENABLED 0' >> /tmp/cubic-sitl.dat
 ./waf configure --board sitl --no-submodule-update --extra-hwdef /tmp/cubic-sitl.dat
 ./waf --targets tests/test_thrust_cubic,tests/test_thrust_linearization
 ./build/sitl/tests/test_thrust_cubic

@@ -193,7 +193,7 @@ define HAL_CF21_BRUSHLESS              #BDSHOT support
 # Stock CF2.1 Brushless calibration from Bitcraze crazyflie-firmware.
 # Profile: c0..c3, min/max force (N), reference voltage (V), actuator scale/offset.
 # DShot conversion: CF sends ratio*2048; ArduPilot sends actuator*2000+48.
-# Compiled in but opt-in through MOT_THST_MODEL (default 0).
+# Selected by MOT_THST_MODEL=1 in this board's defaults.parm.
 define AP_MOTORS_THRUST_CUBIC_ENABLED 1
 define AP_MOTORS_THRUST_CUBIC_PROFILE {-0.014058926705279723f,0.04265273261724981f,0.0018327760144017432f,0.0020576974784587178f,0.02136263065537499f,0.2f,4.2f,1.024f,-0.024f}
 

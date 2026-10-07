@@ -1,4 +1,4 @@
-# Opt-in calibration for stock Crazyflie 2.1 Brushless motors, props and ESCs.
+# Calibration settings for stock Crazyflie 2.1 Brushless motors, props and ESCs.
 # Review crazyflie_bl_cubic.md and bench-test before flight. Reboot after loading.
 # Set MOT_THST_HOVER from actual flying mass: mass_kg * 9.80665 / 0.8.
 MOT_THST_MODEL 1
