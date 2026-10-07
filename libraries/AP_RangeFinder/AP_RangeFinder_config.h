@@ -213,7 +213,7 @@
 
 #define AP_RANGEFINDER_NRA24_CAN_DRIVER_ENABLED (AP_RANGEFINDER_HEXSOONRADAR_ENABLED || AP_RANGEFINDER_NRA24_CAN_ENABLED)
 
-// Temporary FlowDeck stall diagnostics, emitted from the main thread.
+// FlowDeck stall diagnostics, emitted from the main thread when FD_LOG is enabled.
 #ifndef AP_RANGEFINDER_FLOWDECK_DIAGNOSTICS_ENABLED
 #define AP_RANGEFINDER_FLOWDECK_DIAGNOSTICS_ENABLED 0
 #endif

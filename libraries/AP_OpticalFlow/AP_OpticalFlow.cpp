@@ -133,7 +133,6 @@ const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_FD_SCALE", 10, AP_OpticalFlow, _flowdeck_scale, FLOWDECK_PIXEL_SCALING_DEFAULT),
 
-    // Index 11 was used by the experimental FlowDeck window selector. Do not reuse.
 #if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     // @Param: _FD_LOG
     // @DisplayName: FlowDeck diagnostic logging

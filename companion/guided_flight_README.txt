@@ -13,11 +13,7 @@ distance, speed and dwell can be changed with command-line options.
 
 Three-axis flight pattern
 -------------------------
-This branch uses the continuous FlowDeck measurement window selected after the
-A/B experiments. The experimental FLOW_FD_WINDOW parameter and OFT.Win field
-have been removed; there is no window selection or reboot step for this script.
-
-The script now offers --pattern three-axis:
+Use --pattern three-axis for:
   takeoff -> settle -> 1 m left -> start -> 1 m right -> start
           -> 1 m backward -> start -> LAND -> confirmed normal disarm.
 All directions use the heading captured before takeoff. Each target is an
@@ -25,7 +21,7 @@ absolute offset from the same initial hover target, not from the current
 estimated position or accumulated leg endpoints. Altitude and heading stay
 fixed for the translation targets. The defaults remain 1 m excursions, 0.30 m
 3D arrival radius, 0.40 m/s arrival speed threshold, 1 s continuous settled dwell
-and 30 s timeout per leg. The earlier speed command sequence is unchanged.
+and 30 s timeout per leg.
 --pattern left-return remains the default for the original short mission.
 
 With the existing bridge/relay setup, preview from the isolated clone root:
@@ -174,19 +170,19 @@ this script, restart the bridge with its original --udp 127.0.0.1:14550 setting.
 
 Validation
 ----------
-See guided_flight_validation.txt alongside this script. AI-assisted code and
-tests. Simulation tests do not establish physical flight performance. Hardware test
-results and the outstanding height-reference investigation are recorded there.
+Run the protocol and sequence tests from the repository root:
+  python3 -m unittest discover -s companion -p test_guided_flight.py
+
+AI-assisted code and tests. Simulation tests do not establish physical flight
+performance.
 
 Ground-level position readiness on this aircraft
 -----------------------------------------------
 This custom Crazyflie firmware defines HAL_CF21 and exempts GUIDED from requiring
-horizontal position for arming. The earlier version of this script incorrectly
-imposed that requirement on the ground. In log_6 the below-minimum ground range
-coincided with missing horizontal-position validity; setting an origin alone
-does not make that flag valid.
+horizontal position for arming. Below-minimum ground range can prevent a valid
+horizontal-position estimate; setting an origin alone does not make it valid.
 
-Before takeoff the script now requires an initialized EKF with attitude, vertical
+Before takeoff the script requires an initialized EKF with attitude, vertical
 velocity and vertical position flags, plus fresh finite LOCAL_POSITION_NED,
 attitude and ON_GROUND telemetry. Horizontal EKF validity is checked after the
 climb and throughout all position-target movements. If it is still unavailable
