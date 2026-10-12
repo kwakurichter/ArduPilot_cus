@@ -362,7 +362,7 @@ void AP_OpticalFlow_FlowDeck::timer()
         return;
     }
 
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     diagnostics.motion.add(motion, delta_x != 0 || delta_y != 0);
 #endif
 
@@ -405,7 +405,7 @@ void AP_OpticalFlow_FlowDeck::timer()
     accumulator.quality_sum += quality;
     accumulator.sample_count++;
     diagnostics.accepted_count++;
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     accumulator.timing.add_sample(now_us, elapsed_us);
 #endif
 }
@@ -456,12 +456,12 @@ void AP_OpticalFlow_FlowDeck::update()
 
     // 6. Final Processing
     _applyYaw(state.flowRate);
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     const uint64_t publish_us = AP_HAL::micros64();
 #endif
     _update_frontend(state);
 
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     const uint32_t now_us = uint32_t(publish_us);
     const uint32_t publication_interval_us = last_publish_us == 0 ? 0 : now_us - last_publish_us;
     last_publish_us = now_us;
@@ -474,10 +474,12 @@ void AP_OpticalFlow_FlowDeck::update()
     // @Field: Age: Age at publication of the duration-weighted accepted interval midpoint
     // @Field: Last: Age at publication of the last accepted interval end
     // @Field: PubDt: Time since previous publication, zero for the first
-    AP::logger().Write(
-        "OFT", "TimeUS,N,Int,Span,Age,Last,PubDt", "s-sssss", "F-FFFFF", "QHIIIII",
-        publish_us, data.sample_count, data.timing.accepted_us(), data.timing.span_us(),
-        data.timing.mean_age_us(now_us), data.timing.last_age_us(now_us), publication_interval_us);
+    if (_flowdeck_raw_log()) {
+        AP::logger().Write(
+            "OFT", "TimeUS,N,Int,Span,Age,Last,PubDt", "s-sssss", "F-FFFFF", "QHIIIII",
+            publish_us, data.sample_count, data.timing.accepted_us(), data.timing.span_us(),
+            data.timing.mean_age_us(now_us), data.timing.last_age_us(now_us), publication_interval_us);
+    }
 #endif
 
     WITH_SEMAPHORE(_sem);
@@ -545,6 +547,7 @@ void AP_OpticalFlow_FlowDeck::log_raw_samples()
 
 void AP_OpticalFlow_FlowDeck::log_diagnostics()
 {
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     const uint32_t now_ms = AP_HAL::millis();
     if (now_ms - last_diagnostics_ms < 1000U) {
         return;
@@ -558,7 +561,10 @@ void AP_OpticalFlow_FlowDeck::log_diagnostics()
         diagnostics = {};
     }
 
-#if HAL_LOGGING_ENABLED
+    if (!_flowdeck_raw_log()) {
+        return;
+    }
+
     // @LoggerMessage: OFD
     // @Description: Crazyflie FlowDeck sample diagnostics for the latest one-second reporting interval
     // @Field: TimeUS: Time since system startup
@@ -570,25 +576,21 @@ void AP_OpticalFlow_FlowDeck::log_diagnostics()
     // @Field: SQ: Samples rejected by the surface quality gate
     // @Field: Gap: Samples rejected due to an invalid time interval
     // @Field: Pub: Optical flow windows published to the frontend
-#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
-    if (_flowdeck_raw_log()) {
-        AP::logger().Write(
-            "OFD",
-            "TimeUS,Read,Good,SPI,Mot,Dlt,SQ,Gap,Pub",
-            "s--------",
-            "F--------",
-            "QIIIIIIII",
-            AP_HAL::micros64(),
-            data.read_count,
-            data.accepted_count,
-            data.spi_fail_count,
-            data.motion_reject_count,
-            data.delta_reject_count,
-            data.squal_reject_count,
-            data.gap_reject_count,
-            data.publish_count);
-    }
-#endif
+    AP::logger().Write(
+        "OFD",
+        "TimeUS,Read,Good,SPI,Mot,Dlt,SQ,Gap,Pub",
+        "s--------",
+        "F--------",
+        "QIIIIIIII",
+        AP_HAL::micros64(),
+        data.read_count,
+        data.accepted_count,
+        data.spi_fail_count,
+        data.motion_reject_count,
+        data.delta_reject_count,
+        data.squal_reject_count,
+        data.gap_reject_count,
+        data.publish_count);
 
     // @LoggerMessage: OFM
     // @Description: Raw FlowDeck motion-status histogram for the latest reporting interval, before rejection gates

@@ -7,11 +7,9 @@
 #include "AP_OpticalFlow_Backend.h"
 #include <AP_HAL/utility/OwnPtr.h>
 #include <AP_Logger/AP_Logger_config.h>
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
 #include "AP_OpticalFlow_FlowDeck_Timing.h"
-#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
 #include "AP_OpticalFlow_FlowDeck_RawLog.h"
-#endif
 #endif
 
 class AP_OpticalFlow_FlowDeck : public OpticalFlow_backend
@@ -69,7 +67,7 @@ private:
         float dt;
         uint32_t quality_sum;
         uint16_t sample_count;
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
         AP_OpticalFlow_FlowDeck_Timing timing;
 #endif
     } accumulator;
@@ -83,21 +81,19 @@ private:
         uint32_t squal_reject_count;
         uint32_t gap_reject_count;
         uint32_t publish_count;
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
         AP_OpticalFlow_FlowDeck_MotionStats motion;
 #endif
     } diagnostics;
 
     void log_diagnostics();
 
-#if HAL_LOGGING_ENABLED
+#if HAL_LOGGING_ENABLED && AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     uint32_t last_publish_us = 0;
-#if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     AP_OpticalFlow_FlowDeck_RawLog raw_log;
     void queue_raw_sample(AP_OpticalFlow_FlowDeck_RawLog::Sample &sample,
                           AP_OpticalFlow_FlowDeck_RawLog::Reason reason, const Vector3f &gyro);
     void log_raw_samples();
-#endif
 #endif
     Vector3f previous_gyro {};       // previous polling endpoint, including rejected polls
     bool gyro_primed = false;

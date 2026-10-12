@@ -56,7 +56,7 @@
 #define AP_OPTICALFLOW_FLOWDECK_ENABLED AP_OPTICALFLOW_BACKEND_DEFAULT_ENABLED
 #endif
 
-// FlowDeck per-poll diagnostics, controlled at runtime by FLOW_FD_LOG.
+// FlowDeck diagnostic logs (OFR, OFD, OFM, OFT), controlled at runtime by FLOW_FD_LOG.
 #ifndef AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
 #define AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED 0
 #endif

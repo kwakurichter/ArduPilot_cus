@@ -136,7 +136,7 @@ const AP_Param::GroupInfo AP_OpticalFlow::var_info[] = {
 #if AP_OPTICALFLOW_FLOWDECK_RAW_LOG_ENABLED
     // @Param: _FD_LOG
     // @DisplayName: FlowDeck diagnostic logging
-    // @Description: Enables OFR per-poll and OFD one-second optical flow diagnostics. Adds approximately 5.4 kB/s to the onboard log. Does not change sensor sampling or gyro averaging. Takes effect without a reboot.
+    // @Description: Enables OFR per-poll, OFT publication timing, and OFD/OFM one-second optical flow diagnostics. Adds approximately 5.4 kB/s to the onboard log. Does not change sensor sampling or gyro averaging. Takes effect without a reboot.
     // @Values: 0:Disabled,1:Enabled
     // @User: Advanced
     AP_GROUPINFO("_FD_LOG", 12, AP_OpticalFlow, _flowdeck_raw_log, 0),
