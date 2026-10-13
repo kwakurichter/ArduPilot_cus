@@ -1,0 +1,73 @@
+Two-vehicle sequencer validation — 2026-10-12
+
+Source: codex/guided-two-vehicle, based on released master bc5205102c.
+New host-side files only; existing guided_flight.py and firmware are unchanged.
+AI-assisted implementation and tests.
+
+PASS: 42 tests (31 existing single-vehicle tests plus 11 paired-flight tests).
+PASS: flake8 for both new Python files, using repository configuration.
+PASS: preview creates no relay or sockets and sends no commands.
+PASS: full two-instance ArduCopter SITL sequence through one simulated shared
+UDP bridge: normal arm both -> takeoff both -> hover 3 s -> backward 1 m ->
+return -> LAND both -> confirmed disarm both.
+
+The existing local SITL executable embeds ArduCopter V4.7.0 (57c22c0d).
+Do not confuse the currently generated ap_version.h beside it with the binary.
+This run used the existing executable; no new SITL firmware was built. GPS-based
+position estimates and quad dynamics were used. This does not reproduce the
+Crazyflie FlowDeck altitude-reference issue or model Crazyradio bandwidth/loss.
+SIM IDs 1 and 2 had initial headings of 0 and 90 degrees, respectively, exercising
+independent heading-relative backward targets. No hardware connection was made.
+All simulator and bridge network connections used dedicated localhost ports.
+The SITL-only fixture set FS_THR_ENABLE=0 because no RC transmitter was attached;
+normal autopilot arming checks remained enabled. No aircraft parameters changed.
+
+Successful-run stage completion:
+                    elapsed     vehicle 1 error     vehicle 2 error
+Initial hover       3.057 s      0.0156 m            0.0197 m
+Backward            2.694 s      0.0489 m            0.0517 m
+Return              2.646 s      0.0334 m            0.0330 m
+Final heartbeats: both LAND, both disarmed.
+Elapsed time includes arrival and the requested continuously-settled dwell.
+The movement speed is not limited by --speed; see the README.
+
+Initial harness attempts stopped before flight because of duplicate simulator
+serial ports, then the test bridge's strict parser rejecting a startup banner.
+The harness was corrected to use distinct ports and ignore non-MAVLink startup
+text. These were harness fixes, not changes to flight behavior.
+
+Protocol/deterministic checks cover telemetry and ACK isolation, unknown system
+filtering, fragmented/coalesced MAVLink frames, addressed QGC takeover, independent
+heading transforms, synchronized stage completion with unequal simulated speeds,
+arm rejection, lost LAND ACK accepted only with observed LAND, stale vehicle
+heartbeat, movement timeout, peer LAND on abort, and confirmed-ground-only normal
+disarm. Deterministic kinematics are not a flight-dynamics simulation.
+
+User-performed hardware validation — 2026-10-12
+---------------------------------------------
+Two stock Crazyflie 2.1 Brushless aircraft, MAV_SYSID 1 and 2, shared one
+Crazyradio 2 dongle on channel 80 with the USB transfer-completion fix and the
+updated per-aircraft MAVLink bridge. The assistant reviewed the user's logs;
+it did not operate the aircraft.
+
+Evidence: guided-pair-03.jsonl, log_18_UnknownDate_1.bin (aircraft 2), and the
+matching bridge transcript/diagnostics. Both aircraft completed takeoff,
+3-second hover, backward 1 m, return, LAND, and confirmed disarm. No script
+abort or communication-related interruption occurred during GUIDED flight.
+Backward and return stages, including arrival dwell, took 3.532 and 4.978 s.
+Return completion 3D position errors were 0.136 and 0.180 m, using each
+aircraft's EKF estimate. These are not external position measurements.
+
+Longest position-telemetry gaps from takeoff through disarm were 0.282 and
+0.295 s. Aircraft 2 received movement setpoints at intervals no greater than
+0.210 s. The bridge reported no USB errors or >=900 ms slow USB reads during
+the captured session. Four-aircraft operation has not been flight-tested.
+
+The altitude-reference/takeoff issue remains: downward range peaked at 2.15 m
+for aircraft 1 (telemetry) and 1.706 m for aircraft 2 (onboard log), despite
+the nominal 1 m request. During movements, mean ranges were 1.625 and 1.269 m.
+Aircraft 1 reported ENOSPC for /APM/LOGS; its assessment uses host telemetry.
+Peak horizontal speeds were 1.023 and 0.902 m/s; --speed is not a movement cap.
+
+Commit preparation checks: all 42 offline tests and flake8 passed again.
+The earlier SITL result above was not rerun during commit preparation.
