@@ -32,5 +32,7 @@ def libdw1000(bld, **kw):
         target='libdw1000',
         includes=['modules/libdw1000/inc'],
         export_includes=['modules/libdw1000/inc'],
+        # The external driver defines functions without prior declarations.
+        cflags=['-Wno-error=missing-declarations'],
     )
     return bld.stlib(**kw)
