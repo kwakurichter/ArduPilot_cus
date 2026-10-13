@@ -27,6 +27,7 @@
 // @Field: Drop: RX packets dropped
 // @Field: TXseq: TX packets sent (original)
 // @Field: TXfwd: TX packets sent (forwarded)
+// @Field: TXdrop: TX packets dropped
 
 struct PACKED log_SwarmMesh {
     LOG_PACKET_HEADER;
@@ -152,9 +153,7 @@ struct PACKED log_SwarmMesh_PT {
 // @Description: SwarmMesh RX Extended System State
 // @Field: TimeUS: Time since system startup
 // @Field: SysID: SysID of origin
-// @Field: Lat: Latitude in degE7
-// @Field: Lon: Longitude in degE7
-// @Field: Alt: Altitude above MSL in mm
+// @Field: LS: Landed state reported by the peer
 
 struct PACKED log_SwarmMesh_ES {
     LOG_PACKET_HEADER;
@@ -184,9 +183,9 @@ struct PACKED log_SwarmMesh_AT {
 // @Description: SwarmMesh RX EKF Status Report
 // @Field: TimeUS: Time since system startup
 // @Field: SysID: SysID of origin
-// @Field: Pos Horiz Variance:
-// @Field: Pos Vert Variance:
-// @Field: Vel Variance:
+// @Field: PHV: Horizontal position variance reported by the peer
+// @Field: PVV: Vertical position variance reported by the peer
+// @Field: VV: Velocity variance reported by the peer
 
 struct PACKED log_SwarmMesh_EK {
     LOG_PACKET_HEADER;

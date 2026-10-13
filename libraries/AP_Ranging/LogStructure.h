@@ -6,9 +6,7 @@
     LOG_RANGING_MSG
 
 // @LoggerMessage: TWR
-// @Description: UWB two-way-ranging: per-node id / health / range. Slots are
-// stable - a given node id keeps the same slot for the life of the vehicle, so
-// column N always refers to the same node across log messages.
+// @Description: UWB two-way ranging with per-node ID, health and range. Node slots stay fixed for the vehicle's lifetime.
 // @Field: TimeUS: Time since system startup
 // @Field: Cnt: Number of peer nodes being ranged
 // @Field: Hlth: Per-node health bitmask (bit N set => node in slot N has a recent range)
