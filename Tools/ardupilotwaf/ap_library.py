@@ -159,6 +159,10 @@ def process_ap_libraries(self):
         self.use.append(_common_tgen_name(l))
         if vehicle:
             self.use.append(_vehicle_tgen_name(l, vehicle))
+        if l == 'AP_RangeFinder':
+            self.use.append('vl53l1x_api')
+        elif l == 'AP_Ranging':
+            self.use.append('libdw1000')
 
 @before_method('process_source')
 @feature('cxxstlib')
