@@ -25,12 +25,12 @@ mkdir artifacts
 WAF_OPTIONS="-j8"
 
 (
-    python ./waf --color yes --toolchain $TOOLCHAIN --board sitl configure 2>&1
-    python ./waf plane $WAF_OPTIONS 2>&1
-    python ./waf copter $WAF_OPTIONS 2>&1
-    python ./waf heli $WAF_OPTIONS 2>&1
-    python ./waf rover $WAF_OPTIONS 2>&1
-    python ./waf sub $WAF_OPTIONS 2>&1
+    "${PYTHON:-python}" ./waf --color yes --toolchain $TOOLCHAIN --board sitl configure 2>&1
+    "${PYTHON:-python}" ./waf plane $WAF_OPTIONS 2>&1
+    "${PYTHON:-python}" ./waf copter $WAF_OPTIONS 2>&1
+    "${PYTHON:-python}" ./waf heli $WAF_OPTIONS 2>&1
+    "${PYTHON:-python}" ./waf rover $WAF_OPTIONS 2>&1
+    "${PYTHON:-python}" ./waf sub $WAF_OPTIONS 2>&1
 ) | tee artifacts/build.txt
 
 # artifacts are expected to have .exe as they are executable
