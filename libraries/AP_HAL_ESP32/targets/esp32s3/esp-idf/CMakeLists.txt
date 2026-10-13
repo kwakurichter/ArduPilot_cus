@@ -102,6 +102,8 @@ add_custom_target(showinc ALL
 
 # Link the static libraries to the executable
 target_link_libraries(${elf_file}
+                "${ARDUPILOT_LIB}/libvl53l1x_api.a"
+                "${ARDUPILOT_LIB}/../liblibdw1000.a"
                 idf::freertos
                 idf::fatfs
                 idf::nvs_flash

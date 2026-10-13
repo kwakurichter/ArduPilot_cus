@@ -161,6 +161,13 @@ def esp32_firmware(self):
 
     build.cmake_build_task.set_run_after(self.link_task)
 
+    # ESP-IDF links these archives directly, outside Waf's static library graph.
+    for name in ('vl53l1x_api', 'libdw1000'):
+        library = self.bld.get_tgen_by_name(name)
+        library.post()
+        build.cmake_build_task.set_run_after(library.link_task)
+        build.cmake_build_task.dep_nodes.extend(library.link_task.outputs)
+
     # optional upload is last
     if self.bld.options.upload:
         flasher = esp_idf.build('flash')
