@@ -298,8 +298,9 @@ void NavEKF3_core::ResetHeight(void)
     if (onGround) {
         // assume vehicle is sitting on the ground
         terrainState = stateStruct.position.z + rngOnGnd;
-    } else {
-        // can make no assumption other than vehicle is not below ground level
+    } else if (frontend->sources.getPosZSource(core_index) != AP_NavEKF_Source::SourceZ::RANGEFINDER) {
+        // Preserve the primary rangefinder's datum through an airborne height reset.
+        // Other height sources can only assume the vehicle is not below ground.
         terrainState = MAX(stateStruct.position.z + rngOnGnd , terrainState);
     }
     for (uint8_t i=0; i<imu_buffer_length; i++) {

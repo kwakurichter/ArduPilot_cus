@@ -2057,7 +2057,9 @@ void NavEKF3_core::ConstrainStates()
     // wind velocity limit 100 m/s (could be based on some multiple of max airspeed * EAS2TAS) - TODO apply circular limit
     for (uint8_t i=22; i<=23; i++) statesArray[i] = constrain_ftype(statesArray[i],-100.0f,100.0f);
     // constrain the terrain state to be below the vehicle height unless we are using terrain as the height datum
-    if (!inhibitGndState) {
+    // A primary rangefinder uses a fixed terrain datum, including while low or
+    // missing range data causes a temporary fallback to barometric height.
+    if (!inhibitGndState && frontend->sources.getPosZSource(core_index) != AP_NavEKF_Source::SourceZ::RANGEFINDER) {
         terrainState = MAX(terrainState, stateStruct.position.z + rngOnGnd);
     }
 }

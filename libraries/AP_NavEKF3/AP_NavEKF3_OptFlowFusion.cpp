@@ -86,7 +86,9 @@ void NavEKF3_core::EstimateTerrainOffset(const of_elements &ofDataDelayed)
     || velHorizSq < 25.0f 
     || (MAX(ofDataDelayed.flowRadXY[0],ofDataDelayed.flowRadXY[1]) > frontend->_maxFlowRate));
 
-    if ((!rangeDataToFuse && cantFuseFlowData) || (activeHgtSource == AP_NavEKF_Source::SourceZ::RANGEFINDER)) {
+    if ((!rangeDataToFuse && cantFuseFlowData) ||
+        (activeHgtSource == AP_NavEKF_Source::SourceZ::RANGEFINDER) ||
+        (frontend->sources.getPosZSource(core_index) == AP_NavEKF_Source::SourceZ::RANGEFINDER)) {
         // skip update
         inhibitGndState = true;
     } else {
