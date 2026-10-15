@@ -180,7 +180,7 @@ define AP_SWARMMESH_SERIAL_ENABLED 0
 define AP_SWARMMESH_MAX_PEERS 8
 
 # Identify this build as the Crazyflie port rather than stock ArduCopter.
-define AP_CUSTOM_FIRMWARE_STRING "ArduSwarm v2.2.0"
+define AP_CUSTOM_FIRMWARE_STRING "ArduSwarm v2.2.1"
 define HAL_CF21_BRUSHLESS              #BDSHOT support
 
 # Stock CF2.1 Brushless calibration from Bitcraze crazyflie-firmware.
