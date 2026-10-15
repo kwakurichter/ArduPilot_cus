@@ -174,6 +174,5 @@ Validation
 
 Tests cover protocol isolation, setup/ACK recovery, preflight, all patterns
 and vehicle counts, geometry, bounded recovery, arrival dwell, timeouts,
-tracking/separation, takeover and disarm. See guided_swarm_validation.txt for
-physical-log evidence and simulator results. Simulated four-drone operation
-is not a four-aircraft radio/clearance validation.
+tracking/separation, takeover and disarm. Simulated four-drone operation is
+not a four-aircraft radio/clearance validation.
