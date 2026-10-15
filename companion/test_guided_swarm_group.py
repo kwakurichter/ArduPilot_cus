@@ -10,7 +10,7 @@ import socket
 import unittest
 from unittest.mock import Mock, patch
 
-import guided_pair as gp
+import guided_swarm as gp
 
 
 class SimRelay:
@@ -58,7 +58,7 @@ class SimRelay:
             assert all(v['armed'] for v in self.state.values())
             s['target'] = [*s['pos'][:2], -params[6]]
         elif cmd == gp.mav.MAV_CMD_NAV_LAND:
-            s['mode'] = gp.gf.LAND
+            s['mode'] = gp.LAND
             s['target'] = [*s['pos'][:2], 0.0]
         self.ack(sid, cmd)
 
@@ -68,7 +68,7 @@ class SimRelay:
         self.ack(sid, cmd)
 
     def setpoint(self, boot, sid, comp, frame, mask, x, y, z, *rest):
-        assert comp == 1 and frame == gp.mav.MAV_FRAME_LOCAL_NED and mask == gp.gf.MASK_POSITION_YAW
+        assert comp == 1 and frame == gp.mav.MAV_FRAME_LOCAL_NED and mask == gp.MASK_POSITION_YAW
         self.state[sid]['target'] = [x, y, z]
         self.events.append((self.now, sid, 'setpoint', (x, y, z)))
 
@@ -83,7 +83,7 @@ class SimRelay:
                 'LOCAL_POSITION_NED': gp.mav.MAVLink_local_position_ned_message(
                     int(self.now * 1000), *s['pos'], *velocity),
                 'ATTITUDE': argparse.Namespace(yaw=s['yaw']),
-                'EKF_STATUS_REPORT': argparse.Namespace(flags=gp.gf.EKF_REQUIRED),
+                'EKF_STATUS_REPORT': argparse.Namespace(flags=gp.EKF_REQUIRED),
                 'EXTENDED_SYS_STATE': argparse.Namespace(landed_state=(gp.mav.MAV_LANDED_STATE_ON_GROUND
                                                                        if s['pos'][2] == 0 else 2)),
                 'SYS_STATUS': argparse.Namespace(onboard_control_sensors_health=gp.mav.MAV_SYS_STATUS_PREARM_CHECK),
@@ -113,13 +113,13 @@ class SimRelay:
 
 class PairTests(unittest.TestCase):
     def mission(self):
-        args = gp.arguments(['--hover', '.5', '--hold', '.3'])
+        args = gp.arguments(['--target-systems', '1', '2', '--pattern', 'backward-return', '--hover', '.5', '--hold', '.3'])
         relay = SimRelay(args)
         log = Mock()
-        return gp.PairFlight(relay, args, log), relay, log
+        return gp.SwarmFlight(relay, args, log), relay, log
 
     def test_preview_has_no_sockets(self):
-        with patch.object(gp, 'PairRelay') as relay, contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(gp, 'Relay') as relay, contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(gp.main([]), 0)
             relay.assert_not_called()
 
@@ -145,7 +145,7 @@ class PairTests(unittest.TestCase):
             flight.run()
         self.assertTrue(all(not s['armed'] for s in relay.state.values()))
         phases = [c.kwargs['name'] for c in log.call_args_list if c.args == ('phase',)]
-        self.assertEqual(phases, ['takeoff', 'hover', 'backward', 'return', 'land'])
+        self.assertEqual(phases, ['takeoff', 'hover', 'move backward', 'return from backward', 'land'])
         for sid, start in flight.starts.items():
             targets = [e[3] for e in relay.events if e[1:3] == (sid, 'setpoint')]
             self.assertEqual(targets[0], start)
@@ -157,11 +157,51 @@ class PairTests(unittest.TestCase):
         settled = [c for c in log.call_args_list if c.args == ('settled',)]
         self.assertEqual(len(settled), 3)
 
+    def test_missing_takeoff_ack_requires_each_vehicle_to_leave_ground(self):
+        flight, relay, _ = self.mission()
+        relay.drop_acks.add((2, gp.mav.MAV_CMD_NAV_TAKEOFF))
+        relay.speed[2] = 0
+        with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gp.WaitTimeout, 'Vehicle 2: TAKEOFF ACK missing'):
+                flight.run()
+        self.assertFalse(any(e[2] == 'setpoint' for e in relay.events))
+        self.assertEqual(sum(e[2] == gp.mav.MAV_CMD_NAV_TAKEOFF for e in relay.events), 2)
+
+    def test_rejected_takeoff_does_not_use_state_fallback(self):
+        flight, relay, _ = self.mission()
+        original_ack = relay.ack
+
+        def ack(sid, command, result=gp.mav.MAV_RESULT_ACCEPTED):
+            if sid == 2 and command == gp.mav.MAV_CMD_NAV_TAKEOFF:
+                result = gp.mav.MAV_RESULT_DENIED
+            original_ack(sid, command, result)
+
+        relay.ack = ack
+        with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gp.FlightError, 'Vehicle 2: command 22 rejected'):
+                flight.run()
+        self.assertTrue(all(f.unconfirmed_takeoff_since is None for f in flight.flights))
+
+    def test_late_takeoff_rejection_stops_group(self):
+        flight, relay, log = self.mission()
+        relay.drop_acks.add((2, gp.mav.MAV_CMD_NAV_TAKEOFF))
+
+        def event(event_name, **fields):
+            if event_name == 'phase' and fields['name'] == 'hover':
+                relay.drop_acks.clear()
+                relay.ack(2, gp.mav.MAV_CMD_NAV_TAKEOFF, gp.mav.MAV_RESULT_DENIED)
+
+        log.side_effect = event
+        with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gp.FlightError, 'Vehicle 2:.*22'):
+                flight.run()
+        self.assertFalse(any(e[2] == 'setpoint' for e in relay.events))
+
     def test_arm_failure_never_starts_takeoff_and_lands_peer(self):
         flight, relay, _ = self.mission()
         relay.reject_arm = 2
         with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), contextlib.redirect_stdout(io.StringIO()):
-            with self.assertRaises(gp.gf.FlightError) as error:
+            with self.assertRaises(gp.FlightError) as error:
                 flight.run()
             flight.abort(error.exception)
         self.assertFalse(any(e[2] == gp.mav.MAV_CMD_NAV_TAKEOFF for e in relay.events))
@@ -173,12 +213,12 @@ class PairTests(unittest.TestCase):
             for f in flight.flights:
                 f.armed_by_script = True
                 f.monitor_mode = True
-                relay.state[f.args.target_system].update(mode=gp.gf.GUIDED, armed=True)
+                relay.state[f.args.target_system].update(mode=gp.GUIDED, armed=True)
             relay.publish()
             relay.stale = 2
             relay.now += 4
             relay.publish()
-            with self.assertRaises(gp.gf.FlightError) as error:
+            with self.assertRaises(gp.FlightError) as error:
                 flight.check_group()
             flight.abort(error.exception)
         lands = [e[1] for e in relay.events if e[2] == gp.mav.MAV_CMD_NAV_LAND]
@@ -189,10 +229,10 @@ class PairTests(unittest.TestCase):
         with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), contextlib.redirect_stdout(io.StringIO()):
             for f in flight.flights:
                 f.armed_by_script = f.monitor_mode = True
-                relay.state[f.args.target_system].update(mode=gp.gf.GUIDED, armed=True)
+                relay.state[f.args.target_system].update(mode=gp.GUIDED, armed=True)
             relay.publish()
             relay.links[2].takeover = True
-            with self.assertRaises(gp.gf.FlightError) as error:
+            with self.assertRaises(gp.FlightError) as error:
                 flight.check_group()
             flight.abort(error.exception)
         self.assertEqual([e[1] for e in relay.events if e[2] == gp.mav.MAV_CMD_NAV_LAND], [1])
@@ -203,12 +243,12 @@ class PairTests(unittest.TestCase):
         flight.args.move_timeout = .5
         for f in flight.flights:
             f.armed_by_script = f.monitor_mode = True
-            relay.state[f.args.target_system].update(mode=gp.gf.GUIDED, armed=True)
+            relay.state[f.args.target_system].update(mode=gp.GUIDED, armed=True)
         flight.yaws = {1: 0, 2: 0}
         with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), contextlib.redirect_stdout(io.StringIO()):
             relay.publish()
             relay.guard_callback = flight.check_group
-            with self.assertRaises(gp.gf.FlightError) as error:
+            with self.assertRaises(gp.FlightError) as error:
                 flight.move({1: (-1, 0, 0), 2: (2, 4, 0)}, 'backward', .3)
             flight.abort(error.exception)
         self.assertEqual([e[1] for e in relay.events if e[2] == gp.mav.MAV_CMD_NAV_LAND], [1, 2])
@@ -217,7 +257,7 @@ class PairTests(unittest.TestCase):
         flight, relay, _ = self.mission()
         for f in flight.flights:
             f.armed_by_script = f.monitor_mode = True
-            relay.state[f.args.target_system].update(mode=gp.gf.GUIDED, armed=True)
+            relay.state[f.args.target_system].update(mode=gp.GUIDED, armed=True)
         with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now):
             relay.publish()
             start = relay.now
@@ -229,17 +269,17 @@ class PairTests(unittest.TestCase):
     def test_unconfirmed_touchdown_never_disarms(self):
         flight, relay, _ = self.mission()
         for sid, s in relay.state.items():
-            s.update(mode=gp.gf.GUIDED, armed=True)
+            s.update(mode=gp.GUIDED, armed=True)
             s['pos'][2] = -1
             relay.speed[sid] = 0
         with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now):
             relay.publish()
-            with self.assertRaises(gp.gf.FlightError):
+            with self.assertRaises(gp.FlightError):
                 flight.land()
         self.assertFalse(any(e[2] == gp.mav.MAV_CMD_COMPONENT_ARM_DISARM for e in relay.events))
 
     def test_shared_udp_demultiplexes_telemetry_acks_and_takeover(self):
-        args = gp.arguments(['--listen', '127.0.0.1:14561'])
+        args = gp.arguments(['--target-systems', '1', '2', '--listen', '127.0.0.1:14561'])
         args.listen = ('127.0.0.1', 0)
         with contextlib.ExitStack() as stack:
             bridge = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
@@ -249,7 +289,7 @@ class PairTests(unittest.TestCase):
             qgc.bind(('127.0.0.1', 0))
             qgc.settimeout(1)
             args.qgc = qgc.getsockname()
-            relay = gp.PairRelay(args, Mock())
+            relay = gp.Relay(args, Mock())
             relay.heartbeat_enabled = False
             try:
                 for sid in [1, 2, 42]:
@@ -267,7 +307,7 @@ class PairTests(unittest.TestCase):
                     self.assertEqual(relay.links[sid].fresh('HEARTBEAT').get_srcSystem(), sid)
                     self.assertEqual(len(relay.links[sid].acks), 1)
                     relay.links[sid].watch_takeover = True
-                msg = gp.mav.MAVLink_set_mode_message(2, 1, gp.gf.LAND)
+                msg = gp.mav.MAVLink_set_mode_message(2, 1, gp.LAND)
                 raw = msg.pack(gp.mav.MAVLink(None, srcSystem=255, srcComponent=190))
                 qgc.sendto(raw, relay.qgc.getsockname())
                 relay.pump()

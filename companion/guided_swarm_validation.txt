@@ -1,0 +1,128 @@
+GUIDED swarm consolidation validation — 2026-10-14
+=================================================
+
+AI-assisted implementation, migration, analysis and tests. The user performed
+physical flights; assistant-run flights used isolated localhost simulators.
+No aircraft parameters or firmware changed during this consolidation.
+
+Current interface and scope
+---------------------------
+guided_swarm.py is self-contained and supports 1–4 vehicle IDs with hover,
+forward-return, backward-return, left-return, right-return, three-axis,
+circle and diamond. The old guided_flight.py, guided_pair.py and experimental
+guided_trajectory.py entry points and their separate documents are removed.
+
+The shared transport, vehicle state/ACK handling and group sequencing now live
+in the remaining script. Circle/diamond sampling, telemetry freshness, spacing,
+tracking limits, bounded horizontal recovery and landing/takeover handling
+are retained. Hover/fixed movements retain the earlier relaxed arrival defaults
+(0.30 m, 0.40 m/s, 30 s timeout); paths retain 0.15 m, 0.15 m/s, 8 s. Dwell is
+additional to the move timeout; all phases remain subject to the flight limit.
+All patterns use the existing group arming policy: one normal arm request per
+vehicle, confirmation by ACK or fresh armed state, and no retry after an
+explicit rejection. The redundant single-aircraft retry path was removed.
+
+Current automated checks
+------------------------
+86 unittest tests pass:
+  python3 -m unittest discover -s companion -p 'test_guided_swarm*.py'
+Flake8 passes for the script and all three test files. Diff whitespace checks
+pass. Preview mode opens no transport and sends no commands.
+
+The former single/pair protocol and group tests were migrated into
+ test_guided_swarm_protocol.py
+ test_guided_swarm_group.py
+with geometry and complete demo scenarios in test_guided_swarm.py. Obsolete
+single-entry-point run/arming tests were replaced by shared-flow tests; common
+landing coverage now exercises the group implementation. Coverage includes:
+- All patterns for one through four aircraft; fixed height, captured heading,
+  return targets and ordered phases; circle/diamond geometry and velocities.
+- Missing setup/TAKEOFF ACKs, state confirmation, late/explicit rejection,
+  preflight readiness, independent vehicle caches and protocol isolation.
+- Shared arm state confirmation without force/retry; no takeoff following an
+  explicit DENIED, FAILED or TEMPORARILY_REJECTED arm response.
+- Vertical readiness during climb and initial horizontal readiness before
+  movement; one-second horizontal recovery and restarted settled dwell.
+- Group trajectory pause/resume, overlapping dropouts, stale/non-finite data,
+  retained required EKF flags, tracking/separation limits and sender stalls.
+- Time limits, QGC takeover, normal LAND, sustained ground confirmation and
+  normal disarm; no forced airborne disarm.
+
+Post-consolidation SITL
+----------------------
+Two separate ArduCopter processes, IDs 1 and 2, one simulated shared UDP bridge:
+0.75 m diamond, duration 35 s, hover 3 s, return hold 2 s, height 1 m, total
+flight limit 60 s. Both completed takeoff, hover, full diamond, final return,
+LAND and confirmed normal disarm. No abort occurred.
+
+Single ArduCopter process, ID 2: three-axis, distance 0.4 m, hover 3 s, hold
+2 s, height 1 m, total flight limit 60 s. Completed left/return, right/return,
+backward/return, LAND and confirmed normal disarm with the final relaxed
+fixed-target arrival defaults. No abort occurred.
+
+These ran the consolidated implementation and the previously built simulator
+containing the separate rangefinder-datum fix. They validate script sequencing
+and simulated dynamics; they do not validate real radio capacity, optical-flow
+drift, physical clearance or the consolidated script on hardware.
+
+Prior feature validation, before consolidation
+---------------------------------------------
+Recorded earlier validation includes one/four-aircraft circles, a single
+circle with dropped setup/TAKEOFF ACKs, bounded EKF-flag-loss injection during
+hover/path, and a two-aircraft 1 m / 40 s diamond in SITL. These were runs of
+the earlier split implementation, not fresh tests of this consolidation.
+The current deterministic suite exercises the corresponding migrated behavior.
+Four-aircraft radio operation has not been established by these simulations.
+
+Physical 0.75 m flight supplied by the user
+-----------------------------------------
+Onboard: log_69_UnknownDate.bin, MAV_SYSID 2.
+Host: diamond-pair-1m-06.jsonl (despite its filename, recorded radius is 0.75 m).
+Plan: IDs 1 and 2, diamond duration 35 s, hover 3 s, return hold 2 s, nominal
+height 1 m, tracking limit 0.50 m, maximum flight time 60 s.
+
+Both vehicles completed the full diamond, returned, entered LAND and confirmed
+normal disarm. Three brief relative-horizontal-position flag losses during
+initial hover recovered in 0.40, 0.21 and 0.29 s. No path pause or abort occurred.
+
+Sampled estimated pairwise separation: 1.44–1.74 m.
+Reconstructed host tracking peak: 0.39 m (ID 1), 0.45 m (ID 2).
+ID 2 onboard 3-D target error: 0.12 m RMS, 0.27 m maximum during the diamond.
+ID 2 valid downward range during diamond: 0.953–1.003 m, mean 0.983 m.
+ID 2 valid rangefinder takeoff peak: 1.888 m; transient overshoot remains.
+
+Host comparisons use the latest received position against the path phase, so
+telemetry lag affects them. Onboard error compares primary XKF1 position with
+the latest GUIP position target. Neither establishes drift-free physical
+position or externally measured separation. Only ID 2 has an onboard log in
+this review; ID 1 completion and separation are from the shared host trace.
+
+ID 2 commanded LAND at 113.372 s and disarmed at 118.281 s onboard log time.
+The EKF failsafe record at 116.730 s occurred during landing, after the path
+completed. It did not cause a choreography interruption.
+
+This physical flight used the previous split implementation. No hardware
+flight of the consolidated script is claimed. Keep the 0.75 m recipe for the
+current space; software acceptance of 1 m does not establish available room.
+
+Separate pending firmware change
+--------------------------------
+The existing AP_NavEKF3 primary-rangefinder ground-datum fix is unchanged and
+should be reviewed/committed separately from companion-script consolidation.
+Its earlier evidence includes native SITL and crazyflie2_bl builds, startup
+barometer-disturbance comparisons, range NoData/low/high recovery, and primary
+barometer/GPS controls. No new firmware build or full upstream CI was run for
+this script consolidation. Persistent takeoff overshoot remains a separate
+problem even when the eventual hover range is close to 1 m.
+
+Follow-up flight evidence (2026-10-15)
+------------------------------------
+Logs 92, 95 and 98 confirm that a commanded 1 m above home does not guarantee
+a 1 m takeoff peak. Log 98 (SYSID 2, Medium range mode) recorded a highest
+valid range of 1.662 m and two approximately 0.60 s range NoData intervals
+requiring sensor restarts. Its initial altitude-estimate error preceded those
+stalls. The final five seconds before LAND averaged 0.970 m measured range.
+These observations leave takeoff estimation and sensor readiness unresolved;
+they do not justify describing the datum change as a complete overshoot fix.
+The onboard logs alone do not identify the exact companion-script revision,
+so they add no claimed hardware coverage for the consolidated implementation.
