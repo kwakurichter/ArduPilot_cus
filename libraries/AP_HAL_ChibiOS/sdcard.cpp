@@ -24,6 +24,13 @@
 #include "bouncebuffer.h"
 #include "stm32_util.h"
 
+#ifndef HAL_SDCARD_SPI_RELEASE_CLOCKS
+#define HAL_SDCARD_SPI_RELEASE_CLOCKS 0
+#endif
+#ifndef HAL_SDCARD_SPI_R1_START_BIT
+#define HAL_SDCARD_SPI_R1_START_BIT 0
+#endif
+
 extern const AP_HAL::HAL& hal;
 
 #if HAL_USE_FATFS
@@ -45,6 +52,34 @@ static AP_HAL::SPIDevice *device;
 static MMCConfig mmcconfig;
 static SPIConfig lowspeed;
 static SPIConfig highspeed;
+
+#if HAL_SDCARD_SPI_R1_START_BIT
+// The legacy MMC driver stops on any non-FF byte. During connect, keep its
+// bounded response polling running until the R1 start bit is actually zero.
+struct SDCardSPIResponseFilter {
+    bool active;
+    bool waiting;
+
+    void sent(const uint8_t *data, size_t n, bool ok)
+    {
+        // CMD12 has a stuff byte and is not used by mmcConnect.
+        waiting = active && ok && n == 6 && (data[0] & 0xC0) == 0x40 && (data[0] & 0x3F) != 12;
+    }
+
+    void receive(uint8_t *data, size_t n, bool ok)
+    {
+        if (!active || !waiting || !ok || n != 1) {
+            return;
+        }
+        if ((data[0] & 0x80) != 0) {
+            data[0] = 0xFF; // not a response; let the existing timeout bound the wait
+        } else {
+            waiting = false; // leave error bits, R3/R7 tails and subsequent data unchanged
+        }
+    }
+};
+static SDCardSPIResponseFilter sdcard_spi_r1;
+#endif
 #endif
 
 /*
@@ -155,7 +190,15 @@ bool sdcard_init()
     for (uint8_t i=0; i<tries; i++) {
         mmcStart(&MMCD1, &mmcconfig);
 
-        if (mmcConnect(&MMCD1) == HAL_FAILED) {
+#if HAL_SDCARD_SPI_R1_START_BIT
+        sdcard_spi_r1 = {};
+        sdcard_spi_r1.active = true;
+#endif
+        const bool connect_failed = mmcConnect(&MMCD1) == HAL_FAILED;
+#if HAL_SDCARD_SPI_R1_START_BIT
+        sdcard_spi_r1 = {};
+#endif
+        if (connect_failed) {
             mmcStop(&MMCD1);
             continue;
         }
@@ -257,13 +300,24 @@ __RAMFUNC__ void spiSelectHook(SPIDriver *spip)
     if (sdcard_running) {
         device->get_semaphore()->take_blocking();
         device->set_chip_select(true);
+#if HAL_SDCARD_SPI_R1_START_BIT
+        sdcard_spi_r1.waiting = false;
+#endif
     }
 }
 
 __RAMFUNC__ void spiUnselectHook(SPIDriver *spip)
 {
     if (sdcard_running) {
+#if HAL_SDCARD_SPI_R1_START_BIT
+        sdcard_spi_r1.waiting = false;
+#endif
         device->set_chip_select(false);
+#if HAL_SDCARD_SPI_RELEASE_CLOCKS
+        // The card releases MISO after clocks with CS high. Keep the outer
+        // bus semaphore held so another SPI device cannot be selected yet.
+        device->clock_pulse(1);
+#endif
         device->get_semaphore()->give();
     }
 }
@@ -278,14 +332,24 @@ void spiIgnoreHook(SPIDriver *spip, size_t n)
 __RAMFUNC__ void spiSendHook(SPIDriver *spip, size_t n, const void *txbuf)
 {
     if (sdcard_running) {
-        device->transfer((const uint8_t *)txbuf, n, nullptr, 0);
+        const bool ok = device->transfer((const uint8_t *)txbuf, n, nullptr, 0);
+#if HAL_SDCARD_SPI_R1_START_BIT
+        sdcard_spi_r1.sent((const uint8_t *)txbuf, n, ok);
+#else
+        (void)ok;
+#endif
     }
 }
 
 __RAMFUNC__ void spiReceiveHook(SPIDriver *spip, size_t n, void *rxbuf)
 {
     if (sdcard_running) {
-        device->transfer(nullptr, 0, (uint8_t *)rxbuf, n);
+        const bool ok = device->transfer(nullptr, 0, (uint8_t *)rxbuf, n);
+#if HAL_SDCARD_SPI_R1_START_BIT
+        sdcard_spi_r1.receive((uint8_t *)rxbuf, n, ok);
+#else
+        (void)ok;
+#endif
     }
 }
 

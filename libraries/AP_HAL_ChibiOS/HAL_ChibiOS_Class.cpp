@@ -45,6 +45,10 @@
 #define SERIAL0_BAUD DEFAULT_SERIAL0_BAUD
 #endif
 
+#ifndef HAL_DW1000_RESET_ON_BOOT
+#define HAL_DW1000_RESET_ON_BOOT 0
+#endif
+
 #ifndef HAL_SCHEDULER_LOOP_DELAY_ENABLED
 #define HAL_SCHEDULER_LOOP_DELAY_ENABLED 1
 #endif
@@ -265,6 +269,16 @@ static void main_loop()
 
     hal.analogin->init();
     hal.scheduler->init();
+
+#if HAL_DW1000_RESET_ON_BOOT
+    // Reset before any filesystem access, even when ranging is disabled.
+    // RSTn must only be driven low; release it as a floating input.
+    palClearLine(HAL_GPIO_PIN_DW1000_RESET);
+    palSetLineMode(HAL_GPIO_PIN_DW1000_RESET, PAL_MODE_OUTPUT_OPENDRAIN);
+    hal.scheduler->delay(1);
+    palSetLineMode(HAL_GPIO_PIN_DW1000_RESET, PAL_MODE_INPUT);
+    hal.scheduler->delay(5);
+#endif
 
     /*
       run setup() at low priority to ensure CLI doesn't hang the
