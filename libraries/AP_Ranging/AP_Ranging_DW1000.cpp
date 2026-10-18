@@ -59,17 +59,10 @@ bool AP_Ranging_DW1000::init_device()
     _ops.spiWrite    = &AP_Ranging_DW1000::spiWrite;
     _ops.spiSetSpeed = &AP_Ranging_DW1000::spiSetSpeed;
     _ops.delayms     = &AP_Ranging_DW1000::delayms;
-    _ops.reset       = nullptr;   // SPI soft-reset (no reset GPIO wired)
+    _ops.reset       = nullptr;   // SPI soft-reset; board startup handles the hardware reset
 
     dwInit(&_dw, &_ops);
     dwSetUserdata(&_dw, this);     // lets the C ops/handlers recover 'this'
-
-    // (Optional) hardware reset - requires a GPIO wired to the DW1000 RSTn pin.
-    //hal.gpio->pinMode(HAL_DW1000_RESET_PIN, HAL_GPIO_OUTPUT);
-    //hal.gpio->write(HAL_DW1000_RESET_PIN, 0);
-    //hal.scheduler->delay(2);
-    //hal.gpio->pinMode(HAL_DW1000_RESET_PIN, HAL_GPIO_INPUT);
-    //hal.scheduler->delay(5);
 
     {
         WITH_SEMAPHORE(_dev->get_semaphore());
@@ -88,6 +81,9 @@ bool AP_Ranging_DW1000::init_device()
 
         _node_id   = get_node_id();
         _next_peer = 0;          // roster index, not an id: start of RNG_PEER_n
+        // Match the Loco deck firmware: startup blink, then hardware RX/TX/SFD/RXOK indicators.
+        dwEnableAllLeds(&_dw);
+
         configure_radio();
         arm_receiver();          // start listening
     }
@@ -496,11 +492,6 @@ void AP_Ranging_DW1000::spiSetSpeed(dwDevice_t *dev, dwSpiSpeed_t speed)
 void AP_Ranging_DW1000::delayms(dwDevice_t *dev, unsigned int delay)
 {
     hal.scheduler->delay(delay);
-}
-
-void AP_Ranging_DW1000::reset(dwDevice_t *dev)
-{
-    // optional hardware reset - not wired (_ops.reset is nullptr -> SPI soft-reset)
 }
 
 #endif  // AP_RANGING_DW1000_ENABLED

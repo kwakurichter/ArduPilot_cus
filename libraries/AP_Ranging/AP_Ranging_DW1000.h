@@ -145,7 +145,6 @@ private:
     static void spiWrite(dwDevice_t *dev, const void *header, size_t header_len, const void *data, size_t data_len);
     static void spiSetSpeed(dwDevice_t *dev, dwSpiSpeed_t speed);
     static void delayms(dwDevice_t *dev, unsigned int delay);
-    static void reset(dwDevice_t *dev);
 
     AP_HAL::OwnPtr<AP_HAL::SPIDevice> _dev;
 
