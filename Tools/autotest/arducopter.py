@@ -9366,6 +9366,85 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
             if m.lat != 0 or m.lon != 0:
                 return m
 
+    def AnchorRanging(self):
+        """GPS-free positioning using surveyed UWB ranges and an independent bootstrap."""
+        self.set_parameters({
+            "RNG_TYPE": 10,
+            "RNG_MODE": 1,
+            "BCN_TYPE": 4,
+            "BCN_LATITUDE": SITL_START_LOCATION.lat,
+            "BCN_LONGITUDE": SITL_START_LOCATION.lng,
+            "BCN_ALT": SITL_START_LOCATION.alt,
+            "BCN_ORIENT_YAW": 0,
+            "AVOID_ENABLE": 0,
+            "GPS1_TYPE": 0,
+            "EK3_SRC1_POSXY": 4,
+            "EK3_SRC1_POSZ": 1,
+            "EK3_SRC1_VELXY": 0,
+            "EK3_SRC1_VELZ": 0,
+            "EK3_BCN_DELAY": 0,
+            "EK3_BCN_M_NSE": 0.3,
+            "EK2_ENABLE": 0,
+            "AHRS_EKF_TYPE": 3,
+        })
+        anchors = [(-10, -10, 0), (10, -10, 0), (10, 10, 0), (-10, 10, 0),
+                   (-10, -10, -8), (10, -10, -8), (10, 10, -8), (-10, 10, -8)]
+        for anchor, position in enumerate(anchors, start=1):
+            self.set_parameter("RNG_A%u_EN" % anchor, 1)
+            for axis, value in zip("XYZ", position):
+                self.set_parameter("RNG_A%u_POS_%s" % (anchor, axis), value)
+        self.reboot_sitl()
+        self.wait_ready_to_arm(require_absolute=False)
+        self.takeoff(3, mode="LOITER")
+        self.context_push()
+        validator = vehicle_test_suite.TestSuite.ValidateGlobalPositionIntAgainstSimState(
+            self, max_allowed_divergence=2)
+        self.install_message_hook_context(validator)
+        self.set_rc(2, 1450)
+        self.delay_sim_time(5)
+        self.set_rc(2, 1500)
+        self.wait_groundspeed(0, 0.3, timeout=60)
+        self.delay_sim_time(5)
+        self.context_pop()
+        self.land_and_disarm()
+        # Sparse operational set includes physical ID 8; map indices must remain stable.
+        self.set_parameter("RNG_SIM_MASK", 165)  # IDs 1, 3, 6, 8
+        self.wait_ready_to_arm(require_absolute=False)
+        # Fewer than four ranges must expire, and recovery must require fresh samples.
+        self.set_parameter("RNG_SIM_MASK", 7)
+        self.delay_sim_time(2)
+        self.assert_prearm_failure("Ranging: survey, anchors or reboot")
+        self.set_parameter("RNG_SIM_MASK", 255)
+        self.wait_ready_to_arm(require_absolute=False)
+        self.set_parameter("RNG_A1_POS_X", -11)
+        self.assert_prearm_failure("Ranging: survey, anchors or reboot")
+        self.set_parameter("RNG_A1_POS_X", -10)
+        # A truly sparse configured map must retain ID 8 and create dense beacon indices.
+        for anchor in (2, 4, 5, 7):
+            self.set_parameter("RNG_A%u_EN" % anchor, 0)
+        self.reboot_sitl()
+        self.wait_ready_to_arm(require_absolute=False)
+        # Test the separate beacon-height configuration with all eight anchors.
+        for anchor in (2, 4, 5, 7):
+            self.set_parameter("RNG_A%u_EN" % anchor, 1)
+        self.set_parameter("EK3_SRC1_POSZ", 4)
+        self.reboot_sitl()
+        self.wait_ready_to_arm(require_absolute=False)
+        self.takeoff(3, mode="LOITER")
+        self.delay_sim_time(5)
+        self.land_and_disarm()
+        self.assert_current_onboard_log_contains_message("BCN")
+        # Verify that beacon height produced real simulated motion, not only an EKF altitude change.
+        log = self.dfreader_for_current_onboard_log()
+        peak_height = 0
+        while True:
+            message = log.recv_match(type="SIM")
+            if message is None:
+                break
+            peak_height = max(peak_height, message.Alt - SITL_START_LOCATION.alt)
+        if not 2.5 < peak_height < 4.5:
+            raise NotAchievedException("Beacon-height truth peak was %.2f m" % peak_height)
+
     def BeaconPosition(self):
         '''Fly Beacon Position'''
         self.reboot_sitl()
@@ -13507,6 +13586,7 @@ class AutoTestCopter(vehicle_test_suite.TestSuite):
         '''return list of all tests'''
         ret = ([
              self.BeaconPosition,
+             self.AnchorRanging,
              self.RTLSpeed,
              self.Mount,
              self.MountYawVehicleForMountROI,

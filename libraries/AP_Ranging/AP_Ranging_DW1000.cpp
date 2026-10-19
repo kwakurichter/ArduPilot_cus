@@ -21,18 +21,61 @@
 #include <AP_Math/AP_Math.h>
 #include <GCS_MAVLink/GCS.h>
 #include <string.h>
+#include <AP_Logger/AP_Logger.h>
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+#include "dw1000_radio_diag.h"
+#endif
 
 extern const AP_HAL::HAL &hal;
 
 AP_Ranging_DW1000::AP_Ranging_DW1000(AP_Ranging &frontend) : AP_Ranging_Backend(frontend)
 {
-    // attempt init now; healthy() reports the outcome
-    init_device();
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "UWB: DW1000 initializing");
+    if (!init_device()) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "UWB: DW1000 init FAILED");
+    }
 }
 
 // acquire the SPI device, initialise libdw1000 and verify the chip id.
 bool AP_Ranging_DW1000::init_device()
 {
+    _mode = get_mode();
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED && HAL_LOGGING_ENABLED
+    _rf_mask = _mode == AP_Ranging::Mode::Anchor ? get_rf_diag_mask() : 0;
+    if (_rf_mask != 0) {
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "UWB: radio diagnostics mask=%u", unsigned(_rf_mask));
+    }
+#endif
+    _poll_ms = get_poll_ms();
+    _reply_us = get_reply_us();
+    const uint16_t timeout = get_xchg_ms();
+    if (get_node_id() == 0 || _poll_ms < 10 || _poll_ms > 1000 ||
+        _reply_us < 1500 || _reply_us > 20000 || timeout > 200 ||
+        timeout * 1000U < 4U * _reply_us + 3000U) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Ranging: invalid four-message timing");
+        return false;
+    }
+    twr_init(&_engine, TWR_TAG, get_node_id(), get_network_id(), timeout);
+    if (!hal.util->get_true_random_vals(reinterpret_cast<uint8_t *>(&_session), sizeof(_session), 1000)) {
+        _session = (uint32_t(get_random16()) << 16) ^ get_random16() ^ AP_HAL::micros();
+    }
+    _random_state = (_session ^ (uint32_t(_engine.id) * 0x9e3779b9U)) | 1U;
+    _poll_interval = random_below(50);
+    if (_mode == AP_Ranging::Mode::Anchor) {
+        for (uint8_t i = 0; i < AP_RANGING_MAX_ANCHORS; i++) {
+            if (anchor_enabled(i)) {
+                _targets[_target_count++] = i + 1;
+            }
+        }
+    } else {
+        for (uint8_t i = 0; i < AP_RANGING_MAX_NODES; i++) {
+            const uint8_t id = get_peer_id(i);
+            if (id != 0 && id != _engine.id && !admitted_peer(id)) {
+                _targets[_target_count++] = id;
+            }
+        }
+    }
+
     _dev = hal.spi->get_device("dw1000");
     if (!_dev) {
         GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: SPI device not found");
@@ -79,8 +122,6 @@ bool AP_Ranging_DW1000::init_device()
             return false;
         }
 
-        _node_id   = get_node_id();
-        _next_peer = 0;          // roster index, not an id: start of RNG_PEER_n
         // Match the Loco deck firmware: startup blink, then hardware RX/TX/SFD/RXOK indicators.
         dwEnableAllLeds(&_dw);
 
@@ -88,67 +129,131 @@ bool AP_Ranging_DW1000::init_device()
         arm_receiver();          // start listening
     }
 
-    // service radio + drive the exchange from the SPI bus thread (300Hz)
-    _dev->register_periodic_callback(300, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void));
-
-    _initialised = true;
-    uint8_t peers = 0;
-    for (uint8_t i = 0; i < AP_RANGING_MAX_NODES; i++) {
-        if (get_peer_id(i) != 0 && get_peer_id(i) != _node_id) {
-            peers++;
+    // AP_HAL periods are microseconds. SPI/IRQ servicing stays on the bus thread.
+    if (_dev->register_periodic_callback(300, FUNCTOR_BIND_MEMBER(&AP_Ranging_DW1000::timer, void)) == nullptr) {
+        {
+            WITH_SEMAPHORE(_dev->get_semaphore());
+            dwIdle(&_dw);
         }
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "DW1000: callback registration failed");
+        return false;
     }
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: ready (sysid %u, %u peers)", (unsigned)_node_id, (unsigned)peers);
+    _initialised = true;
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "UWB: init OK, %s id=%u targets=%u",
+                  _mode == AP_Ranging::Mode::Anchor ? "anchor" : "peer",
+                  unsigned(_engine.id), unsigned(_target_count));
     return true;
 }
 
-// healthy if we came up and have computed a range recently
 bool AP_Ranging_DW1000::healthy()
 {
-    return _initialised && (AP_HAL::millis() - _last_update_ms < AP_RANGING_TIMEOUT_MS);
+    return _initialised && _have_range && AP_HAL::millis() - _last_update_ms < AP_RANGING_TIMEOUT_MS;
 }
 
-// main loop hook
 void AP_Ranging_DW1000::update()
 {
-    // nothing to do here - ranges are published from compute_range()
+    // Only the main thread mutates frontend snapshots and writes logs.
+    for (uint8_t i = 0; i < QUEUE_SIZE; i++) {
+        Sample sample;
+        {
+            WITH_SEMAPHORE(_queue_sem);
+            if (_queue_count == 0) {
+                break;
+            }
+            sample = _queue[_queue_head];
+            _queue_head = (_queue_head + 1) % QUEUE_SIZE;
+            _queue_count--;
+        }
+        if (_mode == AP_Ranging::Mode::Anchor) {
+            set_anchor_distance(sample.remote_id, sample.distance, sample.time_ms);
+        } else {
+            set_node_distance(sample.remote_id, sample.distance, sample.time_ms);
+        }
+        _last_update_ms = sample.time_ms;
+        _have_range = true;
+#if HAL_LOGGING_ENABLED
+        AP::logger().Write("RTWR", "TimeUS,AcqMS,Session,Seq,Remote,InitID,Init,Dist",
+                          "QIIHBBBf", AP_HAL::micros64(), sample.time_ms, sample.session,
+                          sample.sequence, sample.remote_id, sample.initiator_id,
+                          uint8_t(sample.initiated), sample.distance);
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+        if (sample.rf_requested) {
+            for (uint8_t j = 0; j < 3; j++) {
+                const auto &rx = sample.rf_rx[j];
+                // Pkt 1/3 are captured at the anchor, Pkt 2 at this tag.
+                AP::logger().Write("RFRX", "TimeUS,Session,Seq,Anchor,Pkt,RxP,FpP,Corr,Raw,Flags,CapUS",
+                                   "QIHBBhhhQBI", AP_HAL::micros64(), sample.session, sample.sequence,
+                                   sample.remote_id, uint8_t(j + 1), rx.rx_cdbm, rx.fp_cdbm,
+                                   rx.correction, rx.raw, rx.flags, j == 1 ? sample.rf_capture_us : 0U);
+            }
+            AP::logger().Write("RFRG", "TimeUS,AcqMS,Session,Seq,Anchor,Dist,Uncorr,Valid", "QIIHBffB",
+                               AP_HAL::micros64(), sample.time_ms, sample.session, sample.sequence,
+                               sample.remote_id, sample.distance, sample.uncorrected, uint8_t(sample.rf_valid));
+        }
+#endif
+#endif
+    }
+    Diagnostics diag;
+    {
+        WITH_SEMAPHORE(_queue_sem);
+        if (!_diag_ready) {
+            return;
+        }
+        diag = _diag_snapshot;
+        _diag_ready = false;
+    }
+    if (get_debug() <= 0) {
+        return;
+    }
+#if HAL_LOGGING_ENABLED
+    AP::logger().Write("RWDG", "TimeUS,Fail,TxSt,TxDif,Exp,RxErr,RxTO,SPI,QDrop,Gap,GapMax,Work",
+                      "QIIIIIIIIIII", uint64_t(diag.time_ms) * 1000,
+                      diag.failures, diag.tx_state, diag.tx_mismatch, diag.expired,
+                      diag.rx_error, diag.rx_timeout, diag.spi_error, diag.queue_drops,
+                      diag.gap_us, diag.gap_max_us, diag.work_max_us);
+    if (diag.tx_time_us != 0 && diag.tx_time_us != _last_tx_diag_us) {
+        _last_tx_diag_us = diag.tx_time_us;
+        AP::logger().Write("RWTX", "TimeUS,ID,State,Seq,Expected,Actual,GapUS",
+                          "QBBHQQI", diag.tx_time_us, diag.tx_remote, diag.tx_state_before,
+                          diag.tx_sequence, diag.expected_tx, diag.actual_tx, diag.tx_gap_us);
+    }
+#endif
 }
 
-// periodic bus-thread callback (~1kHz). Services radio events, times out stalled exchanges, and round-robin polls neighbours when idle.
 void AP_Ranging_DW1000::timer()
 {
-    service_radio();
-
-    const uint32_t now = AP_HAL::millis();
-
-    // abort an exchange that stalled (lost packet / busy peer)
-    if (_state != State::IDLE && (now - _exchange_start_ms) > get_xchg_ms()) {
+    const uint32_t start_us = AP_HAL::micros();
+    _callback_gap_us = _last_callback_us == 0 ? 0 : start_us - _last_callback_us;
+    _last_callback_us = start_us;
+    _diag.gap_us = MAX(_diag.gap_us, _callback_gap_us);
+    _diag.gap_max_us = MAX(_diag.gap_max_us, _callback_gap_us);
+    // Expiry is checked before dispatch as well, so a late TX cannot revive a transaction.
+    if (twr_expired(&_engine, AP_HAL::millis())) {
+        _diag.expired++;
         abort_exchange();
     }
-
-    // when idle, start a new poll to the next neighbour on a JITTERED cadence.
-    // The jitter is essential: two nodes on the same fixed period boot in phase
-    // and livelock (each polls while the other is mid-poll (not IDLE)), so both
-    // drop the incoming POLL and time out, forever. Random jitter drifts them
-    // apart so one is usually IDLE when the other polls.
-    if (_state == State::IDLE && (now - _last_poll_ms) >= _poll_interval) {
+    service_radio();
+    const uint32_t now = AP_HAL::millis();
+    if (_engine.state == TWR_IDLE && now - _last_poll_ms >= _poll_interval) {
         _last_poll_ms = now;
-        _poll_interval = get_poll_ms() + (get_random16() % POLL_JITTER_MS);
+        const uint16_t jitter = _mode == AP_Ranging::Mode::Anchor ? 6 : 50;
+        _poll_interval = _poll_ms + random_below(jitter);
         const uint8_t target = next_poll_target();
-        if (target != _node_id) {
-            start_poll(target);
+        if (target != 0 && twr_start(&_engine, _mode == AP_Ranging::Mode::Anchor ? TWR_ANCHOR : TWR_TAG,
+                                     target, _session, ++_next_sequence, now)) {
+            send_packet();
         }
     }
-
-    // debug report, gated behind RNG_DEBUG (runtime toggle)
-    if (get_debug() > 0 && (now - _last_report_ms >= LINK_REPORT_MS)) {
-        _last_report_ms = now;
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: rng=%lu rx=%lu tx=%lu irq=%lu",
-                      (unsigned long)_range_count, (unsigned long)_rx_count,
-                      (unsigned long)_tx_count, (unsigned long)_irq_count);
-        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "DW1000: xfail=%u rxfail=%u | %u=%.2fm",
-                      (unsigned)_exchange_fail, (unsigned)_rx_failed,
-                      (unsigned)_last_range_peer, (double)_last_range);
+    _diag.work_max_us = MAX(_diag.work_max_us, uint32_t(AP_HAL::micros() - start_us));
+    if (now - _last_diag_ms >= 1000 && _queue_sem.take_nonblocking()) {
+        _diag.time_ms = now;
+        _diag.failures = _exchange_fail;
+        _diag.queue_drops = _queue_drops;
+        _diag_snapshot = _diag;
+        _diag.gap_us = 0;
+        _diag_ready = true;
+        _last_diag_ms = now;
+        _queue_sem.give();
     }
 }
 
@@ -202,252 +307,239 @@ void AP_Ranging_DW1000::arm_receiver()
 void AP_Ranging_DW1000::service_radio()
 {
     if (hal.gpio->read(HAL_DW1000_IRQ_PIN)) {
-        _irq_count++;
         dwHandleInterrupt(&_dw);
     }
 }
 
-// RNG_REPLY_US -> DW1000 device ticks. TIME_RES is microseconds per tick.
-uint64_t AP_Ranging_DW1000::reply_delay_ticks() const
+uint16_t AP_Ranging_DW1000::random_below(uint16_t limit)
 {
-    return (uint64_t)((double)get_reply_us() / TIME_RES);
+    // Private state avoids sharing AP_Math's deterministic generator across bus threads.
+    _random_state ^= _random_state << 13;
+    _random_state ^= _random_state >> 17;
+    _random_state ^= _random_state << 5;
+    return _random_state % limit;
 }
 
-/*
-  Round-robin the configured peer roster, skipping empty slots and our own id.
-  Returns _node_id when there is nobody to poll, which start_poll() treats as
-  "do nothing".
-
-  This walks RNG_PEER_1..n rather than counting from zero: node ids are
-  MAV_SYSIDs now, so they are sparse. The old form polled 0.._num_nodes-1
-  directly, which only worked while ids happened to be dense and zero based.
- */
 uint8_t AP_Ranging_DW1000::next_poll_target()
 {
-    for (uint8_t i = 0; i < AP_RANGING_MAX_NODES; i++) {
-        _next_peer = (_next_peer + 1) % AP_RANGING_MAX_NODES;
-        const uint8_t id = get_peer_id(_next_peer);
-        if (id != 0 && id != _node_id) {
-            return id;
+    if (_target_count == 0) {
+        return 0;
+    }
+    const uint32_t now = AP_HAL::millis();
+    for (uint8_t i = 0; i < _target_count; i++) {
+        const uint8_t slot = _next_target;
+        _next_target = (_next_target + 1) % _target_count;
+        if (now - _target_time_ms[slot] >= _target_wait_ms[slot]) {
+            return _targets[slot];
         }
     }
-    return _node_id;
+    return 0;
 }
 
-// initiator: send POLL (delayed tx so poll_tx is known immediately), then wait4resp so the receiver arms for the RESPONSE.
-void AP_Ranging_DW1000::start_poll(uint8_t dst)
+bool AP_Ranging_DW1000::admitted_peer(uint8_t id) const
 {
-    _peer = dst;
-    _seq++;
-
-    dwNewTransmit(&_dw);
-    dwTime_t delay = {}; delay.full = reply_delay_ticks();
-    const dwTime_t tx = dwSetDelay(&_dw, &delay);
-    _poll_tx = tx.full & TS_MASK;
-
-    const uint8_t f[FRAME_HDR_LEN] = { FRAME_POLL, _node_id, dst, _seq };
-    dwSetData(&_dw, (uint8_t *)f, FRAME_HDR_LEN);
-    dwWaitForResponse(&_dw, true);
-    dwStartTransmit(&_dw);
-    _tx_count++;
-
-    _state = State::I_WAIT_RESP;
-    _exchange_start_ms = AP_HAL::millis();
+    for (uint8_t i = 0; i < _target_count; i++) {
+        if (_targets[i] == id) {
+            return true;
+        }
+    }
+    return false;
 }
 
-// responder: reply to a POLL with a delayed RESPONSE, wait4resp for the FINAL.
-void AP_Ranging_DW1000::send_response(uint8_t dst)
+void AP_Ranging_DW1000::send_packet()
 {
     dwNewTransmit(&_dw);
-    dwTime_t delay = {}; delay.full = reply_delay_ticks();
-    const dwTime_t tx = dwSetDelay(&_dw, &delay);
-    _resp_tx = tx.full & TS_MASK;
-
-    const uint8_t f[FRAME_HDR_LEN] = { FRAME_RESPONSE, _node_id, dst, _seq };
-    dwSetData(&_dw, (uint8_t *)f, FRAME_HDR_LEN);
-    dwWaitForResponse(&_dw, true);
-    dwStartTransmit(&_dw);
-    _tx_count++;
-
-    _state = State::R_WAIT_FINAL;
-    _exchange_start_ms = AP_HAL::millis();
-}
-
-// initiator: FINAL carries our three timestamps so the responder can range.
-// The delayed tx time (final_tx) is read from dwSetDelay before we build the
-// payload, so it can be embedded.
-void AP_Ranging_DW1000::send_final(uint8_t dst)
-{
-    dwNewTransmit(&_dw);
-    dwTime_t delay = {}; delay.full = reply_delay_ticks();
-    const dwTime_t tx = dwSetDelay(&_dw, &delay);
-    _final_tx = tx.full & TS_MASK;
-
-    uint8_t f[FINAL_LEN] = { FRAME_FINAL, _node_id, dst, _seq };
-    ts_pack(&f[FRAME_HDR_LEN + 0 * TS_LEN], _poll_tx);
-    ts_pack(&f[FRAME_HDR_LEN + 1 * TS_LEN], _resp_rx);
-    ts_pack(&f[FRAME_HDR_LEN + 2 * TS_LEN], _final_tx);
-    dwSetData(&_dw, f, FINAL_LEN);
-    dwWaitForResponse(&_dw, false);   // initiator is done after the FINAL
-    dwStartTransmit(&_dw);
-    _tx_count++;
-
-    _state = State::I_SENDING_FINAL;
-}
-
-// responder: apply Alternative DS-TWR (eq. 17) and publish the range.
-void AP_Ranging_DW1000::compute_range()
-{
-    const uint64_t Ra = (_resp_rx  - _poll_tx) & TS_MASK;  // A round-trip
-    const uint64_t Da = (_final_tx - _resp_rx) & TS_MASK;  // A reply delay
-    const uint64_t Db = (_resp_tx  - _poll_rx) & TS_MASK;  // B reply delay
-    const uint64_t Rb = (_final_rx - _resp_tx) & TS_MASK;  // B round-trip
-
-    const uint64_t den = Ra + Da + Rb + Db;
-    if (den == 0) {
+    dwTime_t delay {};
+    delay.full = uint64_t(double(_reply_us) / TIME_RES);
+    const dwTime_t scheduled = dwSetDelay(&_dw, &delay);
+    // libdw1000 writes two additional FCS bytes from this buffer.
+    uint8_t frame[FRAME_SIZE + 2] {};
+    unsigned len = twr_prepare_tx(&_engine, scheduled.full, frame);
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    if (_engine.state == TWR_TX_POLL) {
+        _rf_active = _mode == AP_Ranging::Mode::Anchor && _engine.remote_id <= 8 &&
+                     (_rf_mask & (1U << (_engine.remote_id - 1))) != 0;
+        memset(_rf_rx, 0, sizeof(_rf_rx));
+        _rf_capture_us = 0;
+        if (_rf_active) {
+            len = twr_diag_request(frame, len);
+        }
+    }
+#endif
+    if (len == 0) {
+        abort_exchange();
         return;
     }
-    const int64_t num = (int64_t)(Ra * Rb) - (int64_t)(Da * Db);
-    const double tof_ticks = (double)num / (double)den;
-    const float dist = (float)(tof_ticks * DISTANCE_OF_RADIO);
-
-    if (dist <= RANGE_MIN_M || dist >= RANGE_MAX_M) {
-        return;   // reject nonsense (bad exchange / clock glitch)
-    } // TODO: pre-filter?
-
-    set_node_distance(_peer, dist);
-    _range_count++;
-    _last_range = dist;
-    _last_range_peer = _peer;
-    _last_update_ms = AP_HAL::millis();
+    dwSetData(&_dw, frame, len);
+    dwWaitForResponse(&_dw, _engine.state != TWR_TX_REPORT);
+    dwStartTransmit(&_dw);
 }
 
-// give up on the in progress exchange and go back to listening
+void AP_Ranging_DW1000::publish_range(uint64_t rx_timestamp)
+{
+    const uint64_t *times = _engine.initiator ? _engine.a : _engine.b;
+    const uint32_t span_ms = ((times[2] - times[0]) & TWR_TIMESTAMP_MASK) / TWR_TICKS_PER_MS;
+    const uint32_t report_ms = _engine.initiator ?
+        ((rx_timestamp - times[2]) & TWR_TIMESTAMP_MASK) / TWR_TICKS_PER_MS : 0;
+    for (uint8_t i = 0; i < _target_count; i++) {
+        if (_targets[i] == _engine.remote_id) {
+            _target_time_ms[i] = AP_HAL::millis();
+            _target_failures[i] = 0;
+            // Either exchange role refreshes a peer; avoid an immediate reverse poll.
+            _target_wait_ms[i] = _mode == AP_Ranging::Mode::Peer ? _poll_ms : 0;
+        }
+    }
+    Sample sample {};
+    sample.distance = _engine.distance;
+    sample.time_ms = AP_HAL::millis() - report_ms - span_ms / 2;
+    sample.session = _engine.session;
+    sample.sequence = _engine.sequence;
+    sample.remote_id = _engine.remote_id;
+    sample.initiator_id = _engine.initiator ? _engine.id : _engine.remote_id;
+    sample.initiated = _engine.initiator;
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    sample.rf_requested = _rf_active && _engine.initiator;
+    if (sample.rf_requested) {
+        memcpy(sample.rf_rx, _rf_rx, sizeof(_rf_rx));
+        sample.rf_capture_us = _rf_capture_us;
+        sample.uncorrected = NAN;
+        sample.rf_valid = twr_diag_uncorrected(&_engine, _rf_rx, &sample.uncorrected);
+    }
+#endif
+    if (!_queue_sem.take_nonblocking()) {
+        _queue_drops++;
+        return;
+    }
+    if (_queue_count < QUEUE_SIZE) {
+        _queue[(_queue_head + _queue_count) % QUEUE_SIZE] = sample;
+        _queue_count++;
+    } else {
+        _queue_drops++;
+    }
+    _queue_sem.give();
+}
+
 void AP_Ranging_DW1000::abort_exchange()
 {
     _exchange_fail++;
-    _state = State::IDLE;
+    if (_engine.initiator && _engine.state != TWR_IDLE) {
+        for (uint8_t i = 0; i < _target_count; i++) {
+            if (_targets[i] == _engine.remote_id) {
+                _target_failures[i] = MIN(_target_failures[i] + 1, 4);
+                _target_time_ms[i] = AP_HAL::millis();
+                _target_wait_ms[i] = 50U << _target_failures[i];
+            }
+        }
+    }
+    twr_abort(&_engine);
+    // Stop TX before clearing its latch. dwNewReceive() only clears RX status,
+    // so an expired exchange could otherwise dispatch TX-done against IDLE.
+    dwIdle(&_dw);
+    dwClearTransmitStatus(&_dw);
     arm_receiver();
 }
 
-// ---- 40-bit timestamp (de)serialisation ----
-void AP_Ranging_DW1000::ts_pack(uint8_t *dst, uint64_t v)
-{
-    for (uint8_t i = 0; i < TS_LEN; i++) {
-        dst[i] = (uint8_t)((v >> (8 * i)) & 0xFF);
-    }
-}
-
-uint64_t AP_Ranging_DW1000::ts_unpack(const uint8_t *src)
-{
-    uint64_t v = 0;
-    for (uint8_t i = 0; i < TS_LEN; i++) {
-        v |= (uint64_t)src[i] << (8 * i);
-    }
-    return v;
-}
-
-// ---- libdw1000 event handlers (bus thread, semaphore held) ----
-
 void AP_Ranging_DW1000::handle_sent(dwDevice_t *dev)
 {
-    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
-    if (b == nullptr) {
+    auto *b = static_cast<AP_Ranging_DW1000 *>(dwGetUserdata(dev));
+    dwTime_t tx {};
+    dwGetTransmitTimestamp(dev, &tx);
+    const bool pending = twr_tx_pending(&b->_engine);
+    if (!pending || (tx.full & TWR_TIMESTAMP_MASK) != b->_engine.expected_tx) {
+        if (pending) {
+            b->_diag.tx_mismatch++;
+        } else {
+            b->_diag.tx_state++;
+        }
+        b->_diag.tx_time_us = AP_HAL::micros64();
+        b->_diag.tx_remote = b->_engine.remote_id;
+        b->_diag.tx_sequence = b->_engine.sequence;
+        b->_diag.tx_state_before = b->_engine.state;
+        b->_diag.expected_tx = b->_engine.expected_tx;
+        b->_diag.actual_tx = tx.full & TWR_TIMESTAMP_MASK;
+        b->_diag.tx_gap_us = b->_callback_gap_us;
+        // Preserve the pre-abort state so retry backoff still sees the target.
+        b->abort_exchange();
         return;
     }
-    // POLL/RESPONSE sends auto-armed RX via wait4resp; only the FINAL (which
-    // ends the initiator's job) needs us to resume plain listening.
-    if (b->_state == State::I_SENDING_FINAL) {
-        b->_state = State::IDLE;
+    twr_sent(&b->_engine, tx.full);
+    if (b->_engine.state == TWR_IDLE) {
         b->arm_receiver();
     }
 }
 
 void AP_Ranging_DW1000::handle_received(dwDevice_t *dev)
 {
-    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
-    if (b == nullptr) {
-        return;
+    auto *b = static_cast<AP_Ranging_DW1000 *>(dwGetUserdata(dev));
+    uint8_t frame[FRAME_SIZE];
+    twr_packet packet;
+    dwTime_t rx {};
+    const unsigned len = dwGetDataLength(dev);
+    bool valid = false;
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    bool request = false, report = false;
+    twr_diag_rx remote[2] {};
+#endif
+    if (len <= sizeof(frame)) {
+        dwGetData(dev, frame, len);
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+        valid = twr_diag_decode(frame, len, &packet, &request, &report, remote);
+        // This backend is a diagnostic requester, not an extended responder.
+        valid = valid && !request;
+#else
+        valid = twr_decode(frame, len, &packet);
+#endif
     }
-
-    uint8_t buf[RX_BUF_LEN];
-    const unsigned int len = dwGetDataLength(dev);
-    if (len < FRAME_HDR_LEN || len > sizeof(buf)) {
-        b->arm_receiver();
-        return;
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    const bool matching = valid && b->_rf_active && b->_engine.initiator &&
+        packet.network == b->_engine.network && packet.src_role == TWR_ANCHOR &&
+        packet.src_id == b->_engine.remote_id && packet.dst_role == TWR_TAG &&
+        packet.dst_id == b->_engine.id && packet.session == b->_engine.session &&
+        packet.sequence == b->_engine.sequence;
+    if (matching && packet.type == TWR_RESPONSE && b->_engine.state == TWR_WAIT_RESPONSE) {
+        const uint32_t start = AP_HAL::micros();
+        rx = twr_diag_read(dev, &b->_rf_rx[1]);
+        b->_rf_capture_us = AP_HAL::micros() - start;
+    } else {
+        dwGetReceiveTimestamp(dev, &rx);
     }
-    dwGetData(dev, buf, len);
-    b->_rx_count++;
-
-    const uint8_t type = buf[0];
-    const uint8_t src  = buf[1];
-    const uint8_t dst  = buf[2];
-    const uint8_t seq  = buf[3];
-
-    // ignore frames not addressed to us, keep listening
-    if (dst != b->_node_id) {
-        b->arm_receiver();
-        return;
+    if (matching && report && b->_engine.state == TWR_WAIT_REPORT) {
+        b->_rf_rx[0] = remote[0];
+        b->_rf_rx[2] = remote[1];
     }
-
-    dwTime_t rx = {};
+#else
     dwGetReceiveTimestamp(dev, &rx);
-
-    switch (type) {
-    case FRAME_POLL:
-        if (b->_state == State::IDLE) {
-            b->_peer = src;
-            b->_seq  = seq;
-            b->_poll_rx = rx.full & TS_MASK;
-            b->send_response(src);   // wait4resp arms RX for the FINAL
-        } else {
-            b->arm_receiver();       // busy: drop, keep listening
+#endif
+    enum twr_result result = TWR_IGNORED;
+    if (valid) {
+        const bool admit = b->_mode == AP_Ranging::Mode::Peer && b->admitted_peer(packet.src_id);
+        result = twr_receive(&b->_engine, &packet, rx.full, AP_HAL::millis(), admit);
+        if (b->_engine.new_range) {
+            b->publish_range(rx.full);
         }
-        break;
-
-    case FRAME_RESPONSE:
-        if (b->_state == State::I_WAIT_RESP && src == b->_peer && seq == b->_seq) {
-            b->_resp_rx = rx.full & TS_MASK;
-            b->send_final(src);      // -> I_SENDING_FINAL, completes in handle_sent
-        } else {
-            b->arm_receiver();
-        }
-        break;
-
-    case FRAME_FINAL:
-        if (b->_state == State::R_WAIT_FINAL && src == b->_peer && seq == b->_seq &&
-            len >= FINAL_LEN) {
-            b->_final_rx = rx.full & TS_MASK;
-            b->_poll_tx  = ts_unpack(&buf[FRAME_HDR_LEN + 0 * TS_LEN]);
-            b->_resp_rx  = ts_unpack(&buf[FRAME_HDR_LEN + 1 * TS_LEN]);
-            b->_final_tx = ts_unpack(&buf[FRAME_HDR_LEN + 2 * TS_LEN]);
-            b->compute_range();
-            b->_state = State::IDLE;
-        }
-        b->arm_receiver();           // exchange done (or bad) -> listen again
-        break;
-
-    default:
+    }
+    if (result == TWR_SEND) {
+        b->send_packet();
+    } else if (result == TWR_FAILED) {
+        b->abort_exchange();
+    } else if (!twr_tx_pending(&b->_engine)) {
+        // Do not cancel a scheduled TX in response to an unrelated latched RX event.
         b->arm_receiver();
-        break;
     }
 }
 
 void AP_Ranging_DW1000::handle_rx_timeout(dwDevice_t *dev)
 {
-    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
-    if (b != nullptr) {
-        b->abort_exchange();
-    }
+    auto *b = static_cast<AP_Ranging_DW1000 *>(dwGetUserdata(dev));
+    b->_diag.rx_timeout++;
+    b->abort_exchange();
 }
 
 void AP_Ranging_DW1000::handle_rx_failed(dwDevice_t *dev)
 {
-    auto *b = (AP_Ranging_DW1000 *)dwGetUserdata(dev);
-    if (b != nullptr) {
-        b->_rx_failed++;
-        // a corrupted frame doesn't end the exchange; keep waiting (the software
-        // timeout in timer() gives up if the good frame never arrives)
+    auto *b = static_cast<AP_Ranging_DW1000 *>(dwGetUserdata(dev));
+    b->_diag.rx_error++;
+    if (!twr_tx_pending(&b->_engine)) {
         b->arm_receiver();
     }
 }
@@ -461,7 +553,10 @@ void AP_Ranging_DW1000::spiRead(dwDevice_t *dev, const void *header, size_t head
     if (backend == nullptr || !backend->_dev) {
         return;
     }
-    backend->_dev->transfer((const uint8_t *)header, header_len, (uint8_t *)data, data_len);
+    if (!backend->_dev->transfer((const uint8_t *)header, header_len, (uint8_t *)data, data_len)) {
+        backend->_diag.spi_error++;
+        memset(data, 0, data_len);
+    }
 }
 
 void AP_Ranging_DW1000::spiWrite(dwDevice_t *dev, const void *header, size_t header_len, const void *data, size_t data_len)
@@ -477,7 +572,9 @@ void AP_Ranging_DW1000::spiWrite(dwDevice_t *dev, const void *header, size_t hea
     if (data_len > 0) {
         memcpy(backend->_tx_scratch + header_len, data, data_len);
     }
-    backend->_dev->transfer(backend->_tx_scratch, header_len + data_len, nullptr, 0);
+    if (!backend->_dev->transfer(backend->_tx_scratch, header_len + data_len, nullptr, 0)) {
+        backend->_diag.spi_error++;
+    }
 }
 
 void AP_Ranging_DW1000::spiSetSpeed(dwDevice_t *dev, dwSpiSpeed_t speed)

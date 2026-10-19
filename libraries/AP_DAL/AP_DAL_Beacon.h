@@ -65,9 +65,12 @@ public:
 
     void handle_message(const log_RBCH &msg) {
         _RBCH = msg;
+        _RBCH.count = MIN(_RBCH.count, AP_BEACON_MAX_BEACONS);
     }
     void handle_message(const log_RBCI &msg) {
-        _RBCI[msg.instance] = msg;
+        if (msg.instance < AP_BEACON_MAX_BEACONS) {
+            _RBCI[msg.instance] = msg;
+        }
     }
 
 private:

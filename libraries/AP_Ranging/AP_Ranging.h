@@ -40,8 +40,40 @@ public:
     enum class Type : uint8_t {
         None   = 0,
         DW1000 = 1,
-        // TODO: add SITL
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+        SITL = 10,
+#endif
     };
+
+    enum class Mode : uint8_t { Peer = 0, Anchor = 1 };
+
+    class AnchorParams {
+    public:
+        AnchorParams() { AP_Param::setup_object_defaults(this, var_info); }
+        AP_Int8 enable;
+        AP_Vector3f position;
+        static const AP_Param::GroupInfo var_info[];
+    };
+
+    struct AnchorState {
+        Vector3f position;
+        float distance;
+        uint32_t time_ms;
+        uint32_t sample;
+        bool enabled;
+        bool valid;
+    };
+
+    Mode mode() const { return _active_mode; }
+    bool configuration_valid() const { return _config_valid; }
+    const AnchorState &anchor(uint8_t index) const { return _anchors[index]; }
+    uint8_t anchor_count() const;
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+    uint8_t sim_mask() const { return uint8_t(_sim_mask.get()); }
+#endif
+    float anchor_noise() const { return _anchor_noise.get(); }
+    bool configuration_changed() const;
+    bool anchor_healthy(uint8_t index) const;
 
     struct NodeState {
         uint16_t id;                 // unique id of the peer node
@@ -102,7 +134,23 @@ private:
 
     // parameters
     AP_Enum<Type> _type;
-    AP_Int8       _debug;     // debug verbosity (RNG_DEBUG): 0=off
+    AP_Enum<Mode> _mode;
+    AP_Int16 _network_id;
+    AP_Int16 _anchor_poll_ms;
+    AP_Int16 _anchor_timeout_ms;
+    AP_Float _anchor_noise;
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+    AP_Int16 _sim_mask;
+#endif
+    AnchorParams _anchor_params[AP_RANGING_MAX_ANCHORS];
+    AnchorState _anchors[AP_RANGING_MAX_ANCHORS] {};
+    Mode _active_mode = Mode::Peer;
+    bool _config_valid = false;
+    int32_t _boot_values[14] {};
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    AP_Int16 _rf_diag_mask;
+#endif
+    AP_Int8       _debug;     // diagnostic logging (RNG_DEBUG): 0=off
     AP_Int16      _peer_id[AP_RANGING_MAX_NODES]; // peers to range against (RNG_PEER_n), 0 = unused
     AP_Int16      _ant_delay; // DW1000 antenna delay, device ticks (RNG_ANT_DLY)
     AP_Int16      _poll_ms;   // base poll cadence, ms (RNG_POLL_MS)

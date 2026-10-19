@@ -26,7 +26,7 @@ class AP_Beacon_Backend
 {
 public:
     // constructor. This incorporates initialisation as well.
-    AP_Beacon_Backend(AP_Beacon &frontend);
+    AP_Beacon_Backend(AP_Beacon &frontend, bool use_uart = true);
 
     // return true if sensor is basically healthy (we are receiving data)
     virtual bool healthy() = 0;
@@ -51,6 +51,10 @@ public:
     float get_beacon_origin_alt(void) const { return _frontend.origin_alt; }
 
 protected:
+    void set_beacon_distance_at(uint8_t instance, float distance, uint32_t time_ms);
+    void set_vehicle_position_at(const Vector3f &pos, float accuracy, uint32_t time_ms);
+    void invalidate_ranging_data();
+    bool has_ned_orientation() const { return _frontend.orient_yaw == 0; }
 
     // references
     AP_Beacon &_frontend;

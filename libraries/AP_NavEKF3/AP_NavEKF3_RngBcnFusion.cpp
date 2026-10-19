@@ -44,8 +44,8 @@ void NavEKF3_core::BeaconFusion::InitialiseVariables()
     numFusionReports = 0;
     auto *beacon = dal.beacon();
     if (beacon != nullptr) {
-        const uint8_t count = beacon->count();
-        fusionReport = NEW_NOTHROW BeaconFusion::FusionReport[count];
+        const uint8_t count = AP_BEACON_MAX_BEACONS;
+        fusionReport = NEW_NOTHROW BeaconFusion::FusionReport[count] {};
         if (fusionReport != nullptr) {
             numFusionReports = count;
         }
@@ -246,9 +246,6 @@ void NavEKF3_core::FuseRngBcn()
         // test the ratio before fusing data
         if (rngBcn.health) {
 
-            // restart the counter
-            rngBcn.lastPassTime_ms = imuSampleTime_ms;
-
             // correct the covariance P = (I - K*H)*P = P - K*H*P. take advantage of
             // the zero elements of H to reduce the number of operations.
             for (unsigned i = 0; i<=stateIndexLim; i++) {
@@ -287,7 +284,14 @@ void NavEKF3_core::FuseRngBcn()
                     statesArray[j] = statesArray[j] - Kfusion[j] * rngBcn.innov;
                 }
 
-                // record healthy fusion
+                // A recovered beacon observation must clear the timeouts set by
+                // controlFilterModes during an outage, just as starting aiding does.
+                rngBcn.lastPassTime_ms = imuSampleTime_ms;
+                posTimeout = false;
+                velTimeout = false;
+                if (activeHgtSource == AP_NavEKF_Source::SourceZ::BEACON) {
+                    lastHgtPassTime_ms = imuSampleTime_ms;
+                }
                 faultStatus.bad_rngbcn = false;
 
             } else {

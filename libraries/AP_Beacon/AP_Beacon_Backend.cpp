@@ -25,9 +25,12 @@
   base class constructor. 
   This incorporates initialisation as well.
 */
-AP_Beacon_Backend::AP_Beacon_Backend(AP_Beacon &frontend) :
+AP_Beacon_Backend::AP_Beacon_Backend(AP_Beacon &frontend, bool use_uart) :
     _frontend(frontend)
 {
+    if (!use_uart) {
+        return;
+    }
     const AP_SerialManager &serialmanager = AP::serialmanager();
     uart = serialmanager.find_serial(AP_SerialManager::SerialProtocol_Beacon, 0);
     if (uart == nullptr) {
@@ -42,13 +45,24 @@ AP_Beacon_Backend::AP_Beacon_Backend(AP_Beacon &frontend) :
 // accuracy_estimate is also in meters
 void AP_Beacon_Backend::set_vehicle_position(const Vector3f& pos, float accuracy_estimate)
 {
-    _frontend.veh_pos_update_ms = AP_HAL::millis();
+    set_vehicle_position_at(pos, accuracy_estimate, AP_HAL::millis());
+}
+
+void AP_Beacon_Backend::set_vehicle_position_at(const Vector3f &pos, float accuracy_estimate, uint32_t time_ms)
+{
+    _frontend.veh_pos_valid = true;
+    _frontend.veh_pos_update_ms = time_ms;
     _frontend.veh_pos_accuracy = accuracy_estimate;
     _frontend.veh_pos_ned = correct_for_orient_yaw(pos);
 }
 
 // set individual beacon distance from vehicle in meters in NED frame
 void AP_Beacon_Backend::set_beacon_distance(uint8_t beacon_instance, float distance)
+{
+    set_beacon_distance_at(beacon_instance, distance, AP_HAL::millis());
+}
+
+void AP_Beacon_Backend::set_beacon_distance_at(uint8_t beacon_instance, float distance, uint32_t time_ms)
 {
     // sanity check instance
     if (beacon_instance >= AP_BEACON_MAX_BEACONS) {
@@ -60,9 +74,17 @@ void AP_Beacon_Backend::set_beacon_distance(uint8_t beacon_instance, float dista
         _frontend.num_beacons = beacon_instance+1;
     }
 
-    _frontend.beacon_state[beacon_instance].distance_update_ms = AP_HAL::millis();
+    _frontend.beacon_state[beacon_instance].distance_update_ms = time_ms;
     _frontend.beacon_state[beacon_instance].distance = distance;
     _frontend.beacon_state[beacon_instance].healthy = true;
+}
+
+void AP_Beacon_Backend::invalidate_ranging_data()
+{
+    _frontend.veh_pos_valid = false;
+    for (auto &state : _frontend.beacon_state) {
+        state.healthy = false;
+    }
 }
 
 // set beacon's position

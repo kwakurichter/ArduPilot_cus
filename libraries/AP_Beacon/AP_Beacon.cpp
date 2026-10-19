@@ -22,6 +22,7 @@
 #include "AP_Beacon_Marvelmind.h"
 #include "AP_Beacon_Nooploop.h"
 #include "AP_Beacon_SITL.h"
+#include "AP_Beacon_Ranging.h"
 
 #include <AP_Common/Location.h>
 #include <AP_Logger/AP_Logger.h>
@@ -38,7 +39,7 @@ const AP_Param::GroupInfo AP_Beacon::var_info[] = {
     // @Param: _TYPE
     // @DisplayName: Beacon based position estimation device type
     // @Description: What type of beacon based position estimation device is connected
-    // @Values: 0:None,1:Pozyx,2:Marvelmind,3:Nooploop,10:SITL
+    // @Values: 0:None,1:Pozyx,2:Marvelmind,3:Nooploop,4:AP_Ranging,10:SITL
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE",    0, AP_Beacon, _type, 0, AP_PARAM_FLAG_ENABLE),
 
@@ -103,19 +104,30 @@ void AP_Beacon::init(void)
     // create backend
     switch ((Type)_type) {
     case Type::Pozyx:
+#if AP_BEACON_POZYX_ENABLED
         _driver = NEW_NOTHROW AP_Beacon_Pozyx(*this);
+#endif
         break;
     case Type::Marvelmind:
+#if AP_BEACON_MARVELMIND_ENABLED
         _driver = NEW_NOTHROW AP_Beacon_Marvelmind(*this);
+#endif
         break;
     case Type::Nooploop:
+#if AP_BEACON_NOOPLOOP_ENABLED
         _driver = NEW_NOTHROW AP_Beacon_Nooploop(*this);
+#endif
         break;
 #if AP_BEACON_SITL_ENABLED
     case Type::SITL:
         _driver = NEW_NOTHROW AP_Beacon_SITL(*this);
         break;
 #endif
+    case Type::Ranging:
+#if AP_BEACON_RANGING_ENABLED
+        _driver = NEW_NOTHROW AP_Beacon_Ranging(*this);
+#endif
+        break;
     case Type::None:
         break;
     }
@@ -174,12 +186,14 @@ bool AP_Beacon::get_origin(Location &origin_loc) const
 // return position in NED from position estimate system's origin in meters
 bool AP_Beacon::get_vehicle_position_ned(Vector3f &position, float& accuracy_estimate) const
 {
+    position.zero();
+    accuracy_estimate = 1000.0f;
     if (!device_ready()) {
         return false;
     }
 
     // check for timeout
-    if (AP_HAL::millis() - veh_pos_update_ms > AP_BEACON_TIMEOUT_MS) {
+    if (!veh_pos_valid || AP_HAL::millis() - veh_pos_update_ms > AP_BEACON_TIMEOUT_MS) {
         return false;
     }
 

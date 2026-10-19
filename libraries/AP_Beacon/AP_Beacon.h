@@ -41,6 +41,7 @@ public:
         Pozyx  = 1,
         Marvelmind = 2,
         Nooploop  = 3,
+        Ranging = 4,
 #if AP_BEACON_SITL_ENABLED
         SITL   = 10
 #endif
@@ -63,6 +64,7 @@ public:
 
     // return true if sensor is basically healthy (we are receiving data)
     bool healthy(void) const;
+    bool uses_ranging() const { return _type == Type::Ranging; }
 
     // update state of all beacons
     void update(void);
@@ -136,6 +138,7 @@ private:
     Vector3f veh_pos_ned;
     float veh_pos_accuracy;
     uint32_t veh_pos_update_ms;
+    bool veh_pos_valid = false;
 
     // individual beacon data
     uint8_t num_beacons = 0;

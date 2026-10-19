@@ -40,17 +40,24 @@ public:
     virtual void update() = 0;
 
     // record a measured range (meters) to the peer identified by node_id.
-    void set_node_distance(uint8_t node_id, float distance);
+    void set_node_distance(uint8_t node_id, float distance, uint32_t time_ms);
+    void set_anchor_distance(uint8_t id, float distance, uint32_t time_ms);
 
 protected:
 
-    // this node's configured UWB address (RNG_NODE_ID)
+    AP_Ranging::Mode get_mode() const { return _frontend.mode(); }
+    uint16_t get_network_id() const { return (uint16_t)_frontend._network_id.get(); }
+    bool anchor_enabled(uint8_t i) const { return _frontend.anchor(i).enabled; }
+
+    // this vehicle's MAV_SYSID
     uint8_t get_node_id() const;
 
-    // debug verbosity (RNG_DEBUG); >0 means debug output is enabled
+    // diagnostic logging (RNG_DEBUG); >0 enables health and timestamp logs
     int8_t get_debug() const;
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    uint8_t get_rf_diag_mask() const { return uint8_t(_frontend._rf_diag_mask.get()); }
+#endif
 
-    // MAV_SYSID of peer slot n from the RNG_PEER_n roster, 0 if unused
     // MAV_SYSID of peer slot n from the RNG_PEER_n roster, 0 if unused
     uint8_t get_peer_id(uint8_t n) const;
 

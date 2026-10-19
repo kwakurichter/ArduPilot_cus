@@ -1263,7 +1263,10 @@ void NavEKF3_core::selectHeightForFusion()
     } else if ((frontend->sources.getPosZSource(core_index) == AP_NavEKF_Source::SourceZ::GPS) && ((imuSampleTime_ms - lastTimeGpsReceived_ms) < 500) && validOrigin && gpsAccuracyGood) {
         activeHgtSource = AP_NavEKF_Source::SourceZ::GPS;
 #if EK3_FEATURE_BEACON_FUSION
-    } else if ((frontend->sources.getPosZSource(core_index) == AP_NavEKF_Source::SourceZ::BEACON) && validOrigin && rngBcn.goodToAlign) {
+    } else if ((frontend->sources.getPosZSource(core_index) == AP_NavEKF_Source::SourceZ::BEACON) &&
+               PV_AidingMode == AID_ABSOLUTE && validOrigin && rngBcn.goodToAlign) {
+        // Keep the startup barometer until main-filter range fusion is active.
+        // Static beacon alignment alone does not constrain the main filter height.
         activeHgtSource = AP_NavEKF_Source::SourceZ::BEACON;
 #endif
 #if EK3_FEATURE_EXTERNAL_NAV

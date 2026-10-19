@@ -37,107 +37,99 @@ extern "C" {
 #define HAL_DW1000_IRQ_PIN 60
 #endif
 
-// Alternative Double-Sided Two-Way Ranging (Decawave APS013, eq. 17):
-//   Tf = (Ra*Rb - Da*Db) / (Ra + Da + Rb + Db)
-// This form tolerates arbitrary/asymmetric reply delays, so we can use generous
-// reply delays that comfortably exceed the ~1ms software polling latency.
-//
-// Every node both initiates (round-robin polls to all neighbours) and responds.
-// In a 3-message exchange the RESPONDER receives last and holds all six
-// timestamps, so it computes and stores the range - therefore a node's ranges
-// come from responding to its neighbours' polls (no report needed).
-//
-// Only ONE exchange runs at a time (single half-duplex radio): the node is
-// listening when IDLE, and is either initiating or responding otherwise.
+#include "twr_protocol.h"
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+#include "twr_radio_diag.h"
+#endif
 
 class AP_Ranging_DW1000 : public AP_Ranging_Backend
 {
 public:
     AP_Ranging_DW1000(AP_Ranging &frontend);
-
     bool healthy() override;
     void update() override;
 
 private:
     bool init_device();
-    void timer();               // periodic bus-thread callback (~1kHz)
-
-    // radio setup
-    bool configure_radio();     // mode/channel/preamble + attach handlers, commit
-    void arm_receiver();        // plain (non-permanent) receive = "listening"
-    void service_radio();       // poll dwHandleInterrupt (no hardware interrupt)
-
-    // ---- Alternative DS-TWR exchange ----
-    void start_poll(uint8_t dst);   // initiator: POLL (delayed tx)
-    void send_response(uint8_t dst);// responder: RESPONSE (delayed tx)
-    void send_final(uint8_t dst);   // initiator: FINAL carrying our 3 timestamps
-    void compute_range();           // responder: eq(17) -> distance -> publish
-    void abort_exchange();          // count a failure, return to IDLE + listen
-    uint8_t next_poll_target();     // round-robin neighbour id (skips self)
-
-    // libdw1000 event handlers (recover 'this' via dwGetUserdata)
+    bool configure_radio();
+    void timer();
+    void arm_receiver();
+    void service_radio();
+    void send_packet();
+    void abort_exchange();
+    uint8_t next_poll_target();
+    uint16_t random_below(uint16_t limit);
+    bool admitted_peer(uint8_t id) const;
+    void publish_range(uint64_t rx_timestamp);
     static void handle_sent(dwDevice_t *dev);
     static void handle_received(dwDevice_t *dev);
     static void handle_rx_timeout(dwDevice_t *dev);
     static void handle_rx_failed(dwDevice_t *dev);
 
-    // 40-bit timestamp (de)serialisation (little-endian, 5 bytes)
-    static void     ts_pack(uint8_t *dst, uint64_t v);
-    static uint64_t ts_unpack(const uint8_t *src);
-    static constexpr uint64_t TS_MASK = 0xFFFFFFFFFFULL;   // 40-bit
-
-    // frame layout: [type, src, dst, seq, <payload>]
-    enum : uint8_t { FRAME_POLL = 0xC1, FRAME_RESPONSE = 0xC2, FRAME_FINAL = 0xC3 };
-    static constexpr uint8_t FRAME_HDR_LEN = 4;
-    static constexpr uint8_t TS_LEN        = 5;
-    static constexpr uint8_t FINAL_LEN     = FRAME_HDR_LEN + 3 * TS_LEN;  // 19
-    static constexpr uint8_t RX_BUF_LEN    = 32;
-
-    // exchange state (single exchange at a time)
-    enum class State : uint8_t {
-        IDLE,             // listening
-        I_WAIT_RESP,      // initiator: POLL sent, awaiting RESPONSE
-        I_SENDING_FINAL,  // initiator: FINAL queued, awaiting sent event
-        R_WAIT_FINAL,     // responder: RESPONSE sent, awaiting FINAL
-    };
-    State    _state = State::IDLE;
-    uint8_t  _peer = 0;               // node id of the in progress exchange
-    uint8_t  _seq = 0;                // sequence of the in progress exchange
-    uint32_t _exchange_start_ms = 0;  // for the software exchange timeout
-
-    // timestamps for the in progress exchange (device ticks, 40-bit)
-    // initiator captures: poll_tx, resp_rx, final_tx
-    // responder captures: poll_rx, resp_tx, final_rx (+ the 3 above from FINAL)
-    uint64_t _poll_tx = 0, _resp_rx = 0, _final_tx = 0;
-    uint64_t _poll_rx = 0, _resp_tx = 0, _final_rx = 0;
-
-    // round-robin initiator scheduler
-    uint8_t  _next_peer = 0;
+    twr_engine _engine {};
+    AP_Ranging::Mode _mode = AP_Ranging::Mode::Peer;
+    uint8_t _targets[AP_RANGING_MAX_ANCHORS] {};
+    uint8_t _target_count = 0;
+    uint8_t _next_target = 0;
+    uint32_t _target_time_ms[AP_RANGING_MAX_ANCHORS] {};
+    uint16_t _target_wait_ms[AP_RANGING_MAX_ANCHORS] {};
+    uint8_t _target_failures[AP_RANGING_MAX_ANCHORS] {};
+    uint16_t _next_sequence = 0;
+    uint32_t _session = 0;
+    uint32_t _random_state = 1;
+    uint16_t _poll_ms = 0;
+    uint16_t _reply_us = 0;
     uint32_t _last_poll_ms = 0;
-    uint32_t _poll_interval = 50;  // current (jittered) poll interval; from RNG_POLL_MS
+    uint32_t _poll_interval = 0;
 
-    // cached config
-    uint8_t  _node_id = 0;
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    uint8_t _rf_mask = 0;
+    bool _rf_active = false;
+    twr_diag_rx _rf_rx[3] {};
+    uint32_t _rf_capture_us = 0;
+    static constexpr uint8_t FRAME_SIZE = TWR_DIAG_MAX_FRAME_SIZE;
+#else
+    static constexpr uint8_t FRAME_SIZE = TWR_MAX_FRAME_SIZE;
+#endif
+    struct Sample {
+        float distance;
+        uint32_t time_ms;
+        uint32_t session;
+        uint16_t sequence;
+        uint8_t remote_id;
+        uint8_t initiator_id;
+        bool initiated;
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+        bool rf_requested;
+        bool rf_valid;
+        twr_diag_rx rf_rx[3];
+        uint32_t rf_capture_us;
+        float uncorrected;
+#endif
+    };
+    static constexpr uint8_t QUEUE_SIZE = 16;
+    Sample _queue[QUEUE_SIZE] {};
+    uint8_t _queue_head = 0;
+    uint8_t _queue_count = 0;
+    HAL_Semaphore _queue_sem;
+    uint32_t _queue_drops = 0;
+    uint32_t _exchange_fail = 0;
 
-    // Tuning now comes from params (RNG_POLL_MS / _REPLY_US / _XCHG_MS / _CHAN)
-    // via the get_*() accessors. Reply delay is converted to device ticks here:
-    uint64_t reply_delay_ticks() const;   // RNG_REPLY_US -> DW1000 ticks
-
-    static constexpr uint32_t POLL_JITTER_MS = 50;   // random jitter to de-sync nodes
-    static constexpr uint32_t LINK_REPORT_MS = 5000; // GCS debug cadence
-    static constexpr float    RANGE_MIN_M = -1.0f;   // range sanity gate
-    static constexpr float    RANGE_MAX_M = 1000.0f;
-
-    // counters / diagnostics (bus thread only)
-    uint32_t _rx_count = 0;        // frames received
-    uint32_t _tx_count = 0;        // frames transmitted
-    uint16_t _rx_failed = 0;       // RX CRC/PHY errors
-    uint16_t _exchange_fail = 0;   // exchanges that timed out
-    uint32_t _range_count = 0;     // ranges successfully computed
-    float    _last_range = 0.0f;   // last computed range (m)
-    uint8_t  _last_range_peer = 0; // peer of the last computed range
-    uint32_t _irq_count = 0;       // times the DW1000 IRQ line was seen asserted
-    uint32_t _last_report_ms = 0;
+    // Written on the SPI thread; the main loop consumes a bounded snapshot.
+    struct Diagnostics {
+        uint32_t time_ms;
+        uint32_t failures, tx_state, tx_mismatch, expired, rx_error, rx_timeout;
+        uint32_t spi_error, queue_drops, gap_us, gap_max_us, work_max_us;
+        uint64_t tx_time_us, expected_tx, actual_tx;
+        uint32_t tx_gap_us;
+        uint16_t tx_sequence;
+        uint8_t tx_remote, tx_state_before;
+    } _diag {}, _diag_snapshot {};
+    uint32_t _last_callback_us = 0;
+    uint32_t _callback_gap_us = 0;
+    uint32_t _last_diag_ms = 0;
+    uint64_t _last_tx_diag_us = 0;
+    bool _diag_ready = false;
 
     // ---- libdw1000 hardware ops (C callbacks) ----
     // Recover the backend via dwGetUserdata(); assume the bus semaphore is held.
@@ -153,6 +145,8 @@ private:
 
     bool     _initialised = false;
     uint32_t _last_update_ms = 0;  // last successful range (drives healthy())
+
+    bool _have_range = false;
 
     // scratch buffer for combined header+payload SPI writes (single CS transaction)
     static constexpr uint16_t TX_SCRATCH_LEN = 1024 + 3;

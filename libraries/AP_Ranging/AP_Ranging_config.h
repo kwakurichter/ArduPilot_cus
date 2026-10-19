@@ -6,6 +6,10 @@
 #define AP_RANGING_ENABLED 1
 #endif
 
+#ifndef AP_RANGING_RF_DIAGNOSTICS_ENABLED
+#define AP_RANGING_RF_DIAGNOSTICS_ENABLED 0
+#endif
+
 // maximum number of peer nodes we can hold a range to at once
 #ifndef AP_RANGING_MAX_NODES
 #define AP_RANGING_MAX_NODES 4
@@ -32,4 +36,8 @@
  */
 #ifndef AP_RANGING_TUNNEL_PAYLOAD_TYPE
 #define AP_RANGING_TUNNEL_PAYLOAD_TYPE 220
+#endif
+
+#ifndef AP_RANGING_MAX_ANCHORS
+#define AP_RANGING_MAX_ANCHORS 8
 #endif

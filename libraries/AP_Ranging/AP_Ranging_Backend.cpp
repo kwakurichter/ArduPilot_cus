@@ -35,16 +35,17 @@ uint8_t AP_Ranging_Backend::get_peer_id(uint8_t n) const
     return (uint8_t)constrain_int16(_frontend._peer_id[n].get(), 0, 255);
 }
 uint16_t AP_Ranging_Backend::get_ant_delay() const { return (uint16_t)_frontend._ant_delay.get(); }
-uint16_t AP_Ranging_Backend::get_poll_ms() const   { return (uint16_t)_frontend._poll_ms.get(); }
+uint16_t AP_Ranging_Backend::get_poll_ms() const   { return (uint16_t)(get_mode() == AP_Ranging::Mode::Anchor ? _frontend._anchor_poll_ms.get() : _frontend._poll_ms.get()); }
 uint8_t  AP_Ranging_Backend::get_channel() const   { return (uint8_t)_frontend._channel.get(); }
 uint16_t AP_Ranging_Backend::get_reply_us() const  { return (uint16_t)_frontend._reply_us.get(); }
-uint16_t AP_Ranging_Backend::get_xchg_ms() const   { return (uint16_t)_frontend._xchg_ms.get(); }
+uint16_t AP_Ranging_Backend::get_xchg_ms() const   { return (uint16_t)(get_mode() == AP_Ranging::Mode::Anchor ? _frontend._anchor_timeout_ms.get() : _frontend._xchg_ms.get()); }
 
 // record a measured range (meters) to the peer identified by node_id
-void AP_Ranging_Backend::set_node_distance(uint8_t node_id, float distance)
+void AP_Ranging_Backend::set_node_distance(uint8_t node_id, float distance, uint32_t now)
 {
-    const uint32_t now = AP_HAL::millis();
-
+    if (!isfinite(distance) || distance <= 0 || distance >= 1000) {
+        return;
+    }
     // find the stable slot already assigned to this node id
     for (uint8_t i = 0; i < _frontend.num_nodes; i++) {
         if (_frontend.node_state[i].id == node_id) {
@@ -65,6 +66,21 @@ void AP_Ranging_Backend::set_node_distance(uint8_t node_id, float distance)
     _frontend.node_state[i].distance = distance;
     _frontend.node_state[i].distance_update_ms = now;
     _frontend.node_state[i].healthy = true;
+}
+
+void AP_Ranging_Backend::set_anchor_distance(uint8_t id, float distance, uint32_t time_ms)
+{
+    if (id == 0 || id > AP_RANGING_MAX_ANCHORS || !isfinite(distance) || distance <= 0 || distance >= 1000) {
+        return;
+    }
+    auto &a = _frontend._anchors[id-1];
+    if (!a.enabled) {
+        return;
+    }
+    a.distance = distance;
+    a.time_ms = time_ms;
+    a.sample++;
+    a.valid = true;
 }
 
 #endif  // AP_RANGING_ENABLED

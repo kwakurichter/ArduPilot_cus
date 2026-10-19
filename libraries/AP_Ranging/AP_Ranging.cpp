@@ -19,6 +19,7 @@
 
 #include "AP_Ranging_Backend.h"
 #include "AP_Ranging_DW1000.h"
+#include "AP_Ranging_SITL.h"
 
 #include <AP_Logger/AP_Logger.h>
 #include <GCS_MAVLink/GCS.h>
@@ -31,15 +32,16 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @Param: _TYPE
     // @DisplayName: UWB ranging device type
     // @Description: What type of UWB ranging device is connected
-    // @Values: 0:None,1:DW1000
+    // @Values: 0:None,1:DW1000,10:SITL
+    // @RebootRequired: True
     // @User: Advanced
     AP_GROUPINFO_FLAGS("_TYPE", 0, AP_Ranging, _type, 0, AP_PARAM_FLAG_ENABLE),
 
     // index 1 was NODE_ID; this node's id is MAV_SYSID now
 
     // @Param: _DEBUG
-    // @DisplayName: UWB ranging debug output
-    // @Description: Enables verbose ranging debug messages over MAVLink.
+    // @DisplayName: UWB ranging diagnostic logging
+    // @Description: Enables ranging health and transmit-timestamp diagnostic logs.
     // @Values: 0:Disabled,1:Enabled
     // @User: Advanced
     AP_GROUPINFO("_DEBUG", 2, AP_Ranging, _debug, 0),
@@ -50,6 +52,7 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @DisplayName: Ranging peer 1 system id
     // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
     // @Range: 0 255
+    // @RebootRequired: True
     // @User: Standard
     AP_GROUPINFO("_PEER_1", 10, AP_Ranging, _peer_id[0], 0),
 
@@ -57,6 +60,7 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @DisplayName: Ranging peer 2 system id
     // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
     // @Range: 0 255
+    // @RebootRequired: True
     // @User: Standard
     AP_GROUPINFO("_PEER_2", 11, AP_Ranging, _peer_id[1], 0),
 
@@ -64,6 +68,7 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @DisplayName: Ranging peer 3 system id
     // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
     // @Range: 0 255
+    // @RebootRequired: True
     // @User: Standard
     AP_GROUPINFO("_PEER_3", 12, AP_Ranging, _peer_id[2], 0),
 
@@ -71,6 +76,7 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @DisplayName: Ranging peer 4 system id
     // @Description: MAV_SYSID of a peer to range against. 0 leaves the slot unused. Only configured peers are polled, so ids need not be contiguous. A peer keeps its reporting slot for the life of the vehicle.
     // @Range: 0 255
+    // @RebootRequired: True
     // @User: Standard
     AP_GROUPINFO("_PEER_4", 13, AP_Ranging, _peer_id[3], 0),
 
@@ -84,10 +90,11 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
 
     // @Param: _POLL_MS
     // @DisplayName: UWB poll period
-    // @Description: Base interval between initiating a ranging exchange to each neighbour. Random jitter is added on top to de-synchronise nodes.
+    // @Description: Base interval between initiating successive ranging exchanges. Random jitter is added on top to de-synchronise nodes.
     // @Range: 10 1000
     // @Units: ms
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("_POLL_MS", 5, AP_Ranging, _poll_ms, 50),
 
     // @Param: _CHAN
@@ -104,14 +111,16 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @Range: 1500 20000
     // @Units: us
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("_REPLY_US", 7, AP_Ranging, _reply_us, 3000),
 
     // @Param: _XCHG_MS
     // @DisplayName: UWB exchange timeout
-    // @Description: Abort a stalled ranging exchange after this long and retry on the next cycle.
+    // @Description: Deadline for all four messages, including REPORT. Must cover four delayed transmissions plus at least 3 ms servicing margin.
     // @Range: 5 200
     // @Units: ms
     // @User: Advanced
+    // @RebootRequired: True
     AP_GROUPINFO("_XCHG_MS", 8, AP_Ranging, _xchg_ms, 30),
 
     // @Param: _FWD_PORT
@@ -121,6 +130,88 @@ const AP_Param::GroupInfo AP_Ranging::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_FWD_PORT", 9, AP_Ranging, _fwd_port, -1),
 
+    // @Param: _MODE
+    // @DisplayName: UWB ranging mode
+    // @Description: Peer mode ranges to configured vehicles using four-message TWR. Anchor mode ranges to enabled surveyed anchors.
+    // @Values: 0:Peer TWR,1:Anchor TWR
+    // @RebootRequired: True
+    // @User: Advanced
+    AP_GROUPINFO("_MODE", 14, AP_Ranging, _mode, 0),
+    // @Param: _NET_ID
+    // @DisplayName: UWB network identifier
+    // @Description: Network identifier for four-message peer and anchor ranging. Must match on all participating radios.
+    // @Range: 1 32767
+    // @RebootRequired: True
+    // @User: Advanced
+    AP_GROUPINFO("_NET_ID", 15, AP_Ranging, _network_id, 1),
+    // @Group: _A1_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[0], "_A1_", 16, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Group: _A2_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[1], "_A2_", 17, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Group: _A3_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[2], "_A3_", 18, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Group: _A4_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[3], "_A4_", 19, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Group: _A5_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[4], "_A5_", 20, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Group: _A6_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[5], "_A6_", 21, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Group: _A7_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[6], "_A7_", 22, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Group: _A8_
+    // @Path: AP_Ranging_AnchorParams.cpp
+    AP_SUBGROUPINFO(_anchor_params[7], "_A8_", 23, AP_Ranging, AP_Ranging::AnchorParams),
+    // @Param: _A_POLL_MS
+    // @DisplayName: Anchor exchange interval
+    // @Description: Minimum interval between starting successive anchor exchanges. Bounded random jitter is added.
+    // @Range: 10 1000
+    // @Units: ms
+    // @RebootRequired: True
+    // @User: Advanced
+    AP_GROUPINFO("_A_POLL_MS", 24, AP_Ranging, _anchor_poll_ms, 10),
+    // @Param: _A_TMO_MS
+    // @DisplayName: Anchor exchange timeout
+    // @Description: Deadline for all four packets of an anchor exchange, including the report. Must cover four delayed transmissions plus at least 3 ms servicing margin.
+    // @Range: 5 200
+    // @Units: ms
+    // @RebootRequired: True
+    // @User: Advanced
+    AP_GROUPINFO("_A_TMO_MS", 25, AP_Ranging, _anchor_timeout_ms, 30),
+
+    // @Param: _A_NSE
+    // @DisplayName: Anchor bootstrap range noise
+    // @Description: Calibrated range standard deviation for the independent bootstrap solver. Configure EK3_BCN_M_NSE separately for EKF fusion.
+    // @Range: 0.05 5
+    // @Units: m
+    // @User: Advanced
+    AP_GROUPINFO("_A_NSE", 26, AP_Ranging, _anchor_noise, 0.3f),
+
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+    // @Param: _SIM_MASK
+    // @DisplayName: Simulated operational anchors
+    // @Description: Operational anchor IDs for SITL dropout testing. Does not change the surveyed map.
+    // @Bitmask: 0:Anchor1,1:Anchor2,2:Anchor3,3:Anchor4,4:Anchor5,5:Anchor6,6:Anchor7,7:Anchor8
+    // @User: Advanced
+    AP_GROUPINFO("_SIM_MASK", 27, AP_Ranging, _sim_mask, 255),
+#endif
+    // Index 28 is reserved for the retired RNG_F_SHDW bench parameter.
+#if AP_RANGING_RF_DIAGNOSTICS_ENABLED
+    // @Param: _RF_DIAG
+    // @DisplayName: Anchor radio diagnostic mask
+    // @Description: Requests packet receive-power and timestamp-correction diagnostics from selected anchors. Zero disables. Requires diagnostic-capable node firmware on each selected anchor; older nodes cannot answer the extended poll. Bench only. Adds SPI reads and log records without changing range corrections or positioning inputs.
+    // @Bitmask: 0:Anchor1,1:Anchor2,2:Anchor3,3:Anchor4,4:Anchor5,5:Anchor6,6:Anchor7,7:Anchor8
+    // @Range: 0 255
+    // @User: Advanced
+    // @RebootRequired: True
+    AP_GROUPINFO("_RF_DIAG", 29, AP_Ranging, _rf_diag_mask, 0),
+#endif
     AP_GROUPEND
 };
 
@@ -143,16 +234,93 @@ void AP_Ranging::init(void)
         return;
     }
 
+    const int32_t values[] = {_type.get(), _network_id.get(), _poll_ms.get(), _anchor_poll_ms.get(),
+                              _reply_us.get(), _xchg_ms.get(), _anchor_timeout_ms.get(),
+                              _channel.get(), _ant_delay.get(), _peer_id[0].get(), _peer_id[1].get(),
+                              _peer_id[2].get(), _peer_id[3].get(), gcs().sysid_this_mav()};
+    memcpy(_boot_values, values, sizeof(values));
+    _active_mode = _mode;
+    _config_valid = (_active_mode == Mode::Peer || _active_mode == Mode::Anchor) && _network_id > 0 &&
+                    ((_channel >= 1 && _channel <= 5) || _channel == 7) && _ant_delay >= 0;
+    for (const auto &id : _peer_id) {
+        _config_valid &= id >= 0 && id <= 255;
+    }
+    for (uint8_t i = 0; i < AP_RANGING_MAX_ANCHORS; i++) {
+        auto &a = _anchors[i];
+        a.position = _anchor_params[i].position.get();
+        a.enabled = _anchor_params[i].enable == 1;
+        _config_valid &= _anchor_params[i].enable == 0 || _anchor_params[i].enable == 1;
+        if (a.enabled) {
+            _config_valid &= !a.position.is_nan() && !a.position.is_inf() && a.position.length() < 10000.0f;
+            for (uint8_t j = 0; j < i; j++) {
+                if (_anchors[j].enabled && (a.position - _anchors[j].position).length() < 0.05f) {
+                    _config_valid = false;
+                }
+            }
+        }
+    }
+    if (!_config_valid) {
+        GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "Ranging: invalid mode or anchor configuration");
+        return;
+    }
     // create backend
     switch ((Type)_type) {
 #if AP_RANGING_DW1000_ENABLED
     case Type::DW1000:
         _driver = NEW_NOTHROW AP_Ranging_DW1000(*this);
+        if (_driver == nullptr) {
+            GCS_SEND_TEXT(MAV_SEVERITY_ERROR, "UWB: init FAILED, out of memory");
+        }
+        break;
+#endif
+#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
+    case Type::SITL:
+        _driver = NEW_NOTHROW AP_Ranging_SITL(*this);
         break;
 #endif
     case Type::None:
+        if (_debug > 0) {
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "UWB: disabled (RNG_TYPE=0)");
+        }
         break;
     }
+}
+
+bool AP_Ranging::configuration_changed() const
+{
+    const int32_t values[] = {_type.get(), _network_id.get(), _poll_ms.get(), _anchor_poll_ms.get(),
+                              _reply_us.get(), _xchg_ms.get(), _anchor_timeout_ms.get(),
+                              _channel.get(), _ant_delay.get(), _peer_id[0].get(), _peer_id[1].get(),
+                              _peer_id[2].get(), _peer_id[3].get(), gcs().sysid_this_mav()};
+    if (memcmp(_boot_values, values, sizeof(values)) != 0) {
+        return true;
+    }
+    if (int8_t(_active_mode) != _mode.get()) {
+        return true;
+    }
+    for (uint8_t i = 0; i < AP_RANGING_MAX_ANCHORS; i++) {
+        if ((_anchor_params[i].enable != 0 && _anchor_params[i].enable != 1) ||
+            (_anchor_params[i].enable == 1) != _anchors[i].enabled ||
+            _anchor_params[i].position.get() != _anchors[i].position) {
+            return true;
+        }
+    }
+    return false;
+}
+
+uint8_t AP_Ranging::anchor_count() const
+{
+    uint8_t n = 0;
+    for (const auto &a : _anchors) {
+        n += a.enabled;
+    }
+    return n;
+}
+
+bool AP_Ranging::anchor_healthy(uint8_t index) const
+{
+    return index < AP_RANGING_MAX_ANCHORS && _anchors[index].enabled && _anchors[index].valid &&
+           AP_HAL::millis() - _anchors[index].time_ms < AP_RANGING_TIMEOUT_MS;
 }
 
 // return true if ranging is enabled
@@ -252,6 +420,17 @@ void AP_Ranging::log()
     if (!enabled()) {
         return;
     }
+    if (mode() == Mode::Anchor) {
+        const uint32_t now = AP_HAL::millis();
+        for (uint8_t i = 0; i < AP_RANGING_MAX_ANCHORS; i++) {
+            const auto &a = _anchors[i];
+            AP::logger().Write("RANC", "TimeUS,ID,En,Ok,Age,Sample,Dist,N,E,D", "QBBBIIffff",
+                               AP_HAL::micros64(), uint8_t(i + 1), uint8_t(a.enabled), uint8_t(anchor_healthy(i)),
+                               a.valid ? now - a.time_ms : UINT32_MAX, a.sample, a.distance,
+                               a.position.x, a.position.y, a.position.z);
+        }
+        return;
+    }
 
     // gather each fixed slot's node id + last measured range into locals (avoid
     // taking the address of packed struct members), and set the health bit if
@@ -301,7 +480,7 @@ void AP_Ranging::send_tunnel()
 {
 #if HAL_GCS_ENABLED
     const int8_t port = _fwd_port.get();
-    if (port < 0 || !device_ready()) {
+    if (port < 0 || !device_ready() || mode() != Mode::Peer) {
         return;
     }
 

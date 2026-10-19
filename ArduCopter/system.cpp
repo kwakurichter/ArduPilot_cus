@@ -152,14 +152,13 @@ void Copter::init_ardupilot()
     g2.proximity.init();
 #endif
 
-#if AP_BEACON_ENABLED
-    // init beacons used for non-gps position estimation
-    g2.beacon.init();
+#if AP_RANGING_ENABLED
+    // The beacon adapter needs the configured anchor map before it starts.
+    g2.ranging.init();
 #endif
 
-#if AP_RANGING_ENABLED
-    // init UWB two-way-ranging deck (e.g. DWM1000 Loco deck)
-    g2.ranging.init();
+#if AP_BEACON_ENABLED
+    g2.beacon.init();
 #endif
 
 #if MODE_AUTO_ENABLED

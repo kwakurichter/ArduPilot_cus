@@ -63,6 +63,14 @@ bool AP_Arming_Copter::run_pre_arm_checks(bool display_failure)
     }
 #endif
 
+#if AP_BEACON_RANGING_ENABLED
+    if (copter.g2.beacon.uses_ranging() &&
+        (copter.g2.ranging.configuration_changed() || !copter.g2.beacon.healthy())) {
+        check_failed(display_failure, "Ranging: survey, anchors or reboot");
+        passed = false;
+    }
+#endif
+
     // If not passed all checks return false
     if (!passed) {
         return false;
