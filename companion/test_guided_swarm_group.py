@@ -318,5 +318,139 @@ class PairTests(unittest.TestCase):
                 relay.close()
 
 
+class LostSetupAckTests(unittest.TestCase):
+    """Field case 2026-10-20: one lost home, mode or pre-arm ACK aborted a whole mission."""
+
+    def mission(self):
+        args = gp.arguments(['--target-systems', '1', '2', '3', '--pattern', 'hover', '--hover', '.5'])
+        relay = SimRelay(args)
+        homes = []
+        command_int = relay.command_int
+
+        def counted(sid, comp, frame, cmd, *params):
+            if cmd == gp.mav.MAV_CMD_DO_SET_HOME:
+                homes.append(sid)
+            command_int(sid, comp, frame, cmd, *params)
+
+        relay.mav.command_int_send.side_effect = counted
+        log = Mock()
+        return gp.SwarmFlight(relay, args, log), relay, log, homes
+
+    def run_flight(self, flight, relay):
+        with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), \
+                contextlib.redirect_stdout(io.StringIO()):
+            flight.run()
+
+    def test_lost_home_mode_and_prearm_acks_are_confirmed_from_state(self):
+        flight, relay, log, homes = self.mission()
+        for cmd in (gp.mav.MAV_CMD_DO_SET_HOME, gp.mav.MAV_CMD_DO_SET_MODE, gp.mav.MAV_CMD_RUN_PREARM_CHECKS):
+            relay.drop_acks.add((3, cmd))
+        self.run_flight(flight, relay)
+        self.assertTrue(all(not s['armed'] for s in relay.state.values()))
+        confirmed = [c.kwargs['command'] for c in log.call_args_list if c.args == ('ack_missing_state_confirmed',)]
+        self.assertEqual(sorted(confirmed), [gp.mav.MAV_CMD_DO_SET_MODE, gp.mav.MAV_CMD_DO_SET_HOME])
+        self.assertTrue(any(c.args == ('prearm_ack_timeout',) and c.kwargs['system'] == 3
+                            for c in log.call_args_list))
+        # The effect was visible, so nothing was sent twice.
+        self.assertEqual(homes, [1, 2, 3])
+
+    def test_home_retried_once_then_fails_if_never_observed(self):
+        flight, relay, log, homes = self.mission()
+        relay.drop_acks.add((2, gp.mav.MAV_CMD_DO_SET_HOME))
+        command_int = relay.mav.command_int_send.side_effect
+
+        def ignored(sid, comp, frame, cmd, *params):
+            if sid == 2 and cmd == gp.mav.MAV_CMD_DO_SET_HOME:
+                homes.append(sid)  # Lost on the way up: no effect, no ACK.
+                return
+            command_int(sid, comp, frame, cmd, *params)
+
+        relay.mav.command_int_send.side_effect = ignored
+        relay.state[2]['home'] = 5000
+        with self.assertRaises(gp.WaitTimeout) as caught:
+            self.run_flight(flight, relay)
+        self.assertIn('home position not observed after two attempts', str(caught.exception))
+        self.assertEqual(homes.count(2), 2)
+        self.assertFalse(any(s['armed'] for s in relay.state.values()))
+
+    def test_explicit_home_or_mode_rejection_still_stops(self):
+        for cmd in (gp.mav.MAV_CMD_DO_SET_HOME, gp.mav.MAV_CMD_DO_SET_MODE):
+            with self.subTest(cmd=cmd):
+                flight, relay, log, homes = self.mission()
+                ack = relay.ack
+
+                def reject(sid, command, result=gp.mav.MAV_RESULT_ACCEPTED, cmd=cmd, ack=ack):
+                    ack(sid, command, gp.mav.MAV_RESULT_DENIED if (sid, command) == (1, cmd) else result)
+
+                relay.ack = reject
+                with self.assertRaises(gp.CommandRejected):
+                    self.run_flight(flight, relay)
+                self.assertFalse(any(s['armed'] for s in relay.state.values()))
+                self.assertFalse(any(c.args == ('ack_missing_state_confirmed',) for c in log.call_args_list))
+
+    def test_explicit_prearm_rejection_still_stops(self):
+        flight, relay, log, homes = self.mission()
+        ack = relay.ack
+
+        def reject(sid, command, result=gp.mav.MAV_RESULT_ACCEPTED):
+            bad = (sid, command) == (2, gp.mav.MAV_CMD_RUN_PREARM_CHECKS)
+            ack(sid, command, gp.mav.MAV_RESULT_TEMPORARILY_REJECTED if bad else result)
+
+        relay.ack = reject
+        with self.assertRaises(gp.CommandRejected):
+            self.run_flight(flight, relay)
+        self.assertFalse(any(s['armed'] for s in relay.state.values()))
+
+
+class ThreeAxisDistanceTests(unittest.TestCase):
+    """One --distance for every leg; legs must exceed the arrival tolerance."""
+
+    def test_three_axis_flies_every_leg_at_distance_and_returns(self):
+        args = gp.arguments(['--target-systems', '1', '2', '3', '--pattern', 'three-axis', '--distance', '.4',
+                             '--hover', '.5', '--hold', '.3', '--max-flight-time', '60'])
+        relay = SimRelay(args)
+        log = Mock()
+        flight = gp.SwarmFlight(relay, args, log)
+        with patch.object(gp.time, 'monotonic', side_effect=lambda: relay.now), \
+                contextlib.redirect_stdout(io.StringIO()):
+            flight.run()
+        phases = [c.kwargs['name'] for c in log.call_args_list if c.args == ('phase',)]
+        self.assertEqual(phases, ['takeoff', 'hover', 'move left', 'return from left', 'move right',
+                                  'return from right', 'move backward', 'return from backward', 'land'])
+        for sid, start in flight.starts.items():
+            yaw = flight.yaws[sid]
+            targets = [e[3] for e in relay.events if e[1:3] == (sid, 'setpoint')]
+            visited = [t for i, t in enumerate(targets) if i == 0 or t != targets[i - 1]]
+            expected = [start, gp.left_target(start, yaw, .4), start, gp.left_target(start, yaw, -.4), start,
+                        gp.backward_target(start, yaw, .4), start]
+            self.assertEqual(len(visited), len(expected))
+            for got, want in zip(visited, expected):
+                for a, b in zip(got, want):
+                    self.assertAlmostEqual(a, b)
+        self.assertTrue(all(not s['armed'] for s in relay.state.values()))
+
+    def test_distance_must_exceed_arrival_tolerance(self):
+        for options in (['--pattern', 'three-axis', '--distance', '.3'],
+                        ['--pattern', 'left-return', '--distance', '.25'],
+                        ['--pattern', 'right-return', '--distance', '.2', '--position-tolerance', '.2'],
+                        ['--pattern', 'three-axis', '--left-distance', '.4']):
+            with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    gp.arguments(options)
+        gp.arguments(['--pattern', 'three-axis', '--distance', '.25', '--position-tolerance', '.1',
+                      '--max-flight-time', '60'])
+        gp.arguments(['--pattern', 'circle', '--distance', '.1'])  # not used by paths
+
+    def test_preview_lists_legs_with_distance(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), patch.object(gp, 'Relay') as relay:
+            gp.main(['--pattern', 'three-axis', '--distance', '.5', '--max-flight-time', '60'])
+        relay.assert_not_called()
+        text = out.getvalue()
+        self.assertIn('move left 0.5 m; return from left; move right 0.5 m; return from right; '
+                      'move backward 0.5 m; return from backward; LAND', text)
+        self.assertIn('Maximum requested excursion from each hover spot: 0.50 m.', text)
+
+
 if __name__ == '__main__':
     unittest.main()

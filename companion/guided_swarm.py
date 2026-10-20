@@ -2,7 +2,7 @@
 # AP_FLAKE8_CLEAN
 """GUIDED hover, movement and formation demos for 1–4 aircraft; preview by default.
 
-Requires pymavlink. See guided_swarm_README.txt. One shared bridge and QGC relay.
+Requires pymavlink. Normally run through swarm_hub.py; see swarm_hub_README.txt.
 """
 
 import argparse
@@ -60,13 +60,21 @@ def left_target(start, yaw, distance):
             start[1] - distance * math.cos(yaw), start[2])
 
 
+def pattern_directions(pattern):
+    """Directions a fixed-target pattern visits, in order; empty for others."""
+    if pattern == 'three-axis':
+        return ('left', 'right', 'backward')
+    if pattern.endswith('-return'):
+        return (pattern.removesuffix('-return'),)
+    return ()
+
+
 def mission_targets(start, yaw, distance, pattern):
     """Targets relative to one captured heading and origin, with a return per leg."""
     if pattern == 'hover':
         return []
-    directions = ('left', 'right', 'backward') if pattern == 'three-axis' else (pattern.removesuffix('-return'),)
     targets = []
-    for direction in directions:
+    for direction in pattern_directions(pattern):
         if direction in ('left', 'right'):
             target = left_target(start, yaw, distance if direction == 'left' else -distance)
         else:
@@ -327,6 +335,33 @@ class Flight:
             0, 0, 0, 0, 0, 0, round(self.args.lat * 1e7), round(self.args.lon * 1e7), self.args.amsl)
         self.wait_ack(CMD_SET_GLOBAL_ORIGIN, started)
 
+    def confirm_setup(self, command, send, effect, label, request=None):
+        """Idempotent setup: retry once, and accept a lost ACK when fresh state shows the effect.
+
+        Only for commands that are harmless to repeat and whose result is visible in
+        telemetry (home, GUIDED on the ground). An explicit rejection still stops.
+        """
+        for attempt in (1, 2):
+            started = time.monotonic()
+            send()
+            try:
+                self.wait_ack(command, started, timeout=2)
+                return
+            except WaitTimeout:
+                self.log('setup_ack_timeout', command=command, attempt=attempt)
+            if request is not None:
+                request()
+            try:
+                self.wait(lambda: self.ack_received(command, started) or effect(started), 2, label,
+                          guard=self.monitor_mode)
+            except WaitTimeout:
+                continue
+            self.log('ack_missing_state_confirmed', command=command, attempt=attempt)
+            print(f'Vehicle {self.args.target_system}: ACK for command {command} lost; '
+                  f'fresh telemetry confirms {label}.', flush=True)
+            return
+        raise WaitTimeout(f'Timeout: ACK for command {command}; {label} not observed after two attempts')
+
     def command_home(self, origin):
         ground = self.link.fresh('LOCAL_POSITION_NED', 1)
         if ground is None or not math.isfinite(ground.z):
@@ -334,14 +369,33 @@ class Flight:
         altitude_m = origin.altitude / 1000 - ground.z
         # Use the indoor origin as the horizontal home reference. "Use current"
         # requires a valid horizontal EKF location, unavailable on this deck at rest.
-        started = time.monotonic()
         self.link.cache.pop('HOME_POSITION', None)
-        self.log('command_int', command=mav.MAV_CMD_DO_SET_HOME, latitude=origin.latitude / 1e7,
-                 longitude=origin.longitude / 1e7, altitude_m=altitude_m)
-        self.link.mav.command_int_send(
-            self.args.target_system, 1, mav.MAV_FRAME_GLOBAL, mav.MAV_CMD_DO_SET_HOME,
-            0, 0, 0, 0, 0, 0, origin.latitude, origin.longitude, altitude_m)
-        self.wait_ack(mav.MAV_CMD_DO_SET_HOME, started)
+
+        def send():
+            self.log('command_int', command=mav.MAV_CMD_DO_SET_HOME, latitude=origin.latitude / 1e7,
+                     longitude=origin.longitude / 1e7, altitude_m=altitude_m)
+            self.link.mav.command_int_send(
+                self.args.target_system, 1, mav.MAV_FRAME_GLOBAL, mav.MAV_CMD_DO_SET_HOME,
+                0, 0, 0, 0, 0, 0, origin.latitude, origin.longitude, altitude_m)
+
+        def home_set(started):
+            when, home = self.link.cache.get('HOME_POSITION', (0, None))
+            return (home is not None and when >= started
+                    and home.latitude == origin.latitude and home.longitude == origin.longitude
+                    and abs(home.altitude / 1000 - altitude_m) <= 0.05)
+
+        self.confirm_setup(mav.MAV_CMD_DO_SET_HOME, send, home_set, 'home position',
+                           request=lambda: self.request(mav.MAVLINK_MSG_ID_HOME_POSITION))
+
+    def set_guided(self):
+        def guided(started):
+            when, hb = self.link.cache.get('HEARTBEAT', (0, None))
+            return hb is not None and when >= started and hb.custom_mode == GUIDED
+
+        self.confirm_setup(mav.MAV_CMD_DO_SET_MODE,
+                           lambda: self.send_command(mav.MAV_CMD_DO_SET_MODE,
+                                                     mav.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, GUIDED),
+                           guided, 'GUIDED mode')
 
     def prearm_checks(self):
         deadline = time.monotonic() + 30
@@ -350,8 +404,13 @@ class Flight:
             self.link.pump()
             self.guard()
             if time.monotonic() >= next_check:
-                # ACCEPTED means checks were run, not that they passed.
-                self.command(mav.MAV_CMD_RUN_PREARM_CHECKS)
+                # ACCEPTED means checks were run, not that they passed, so
+                # readiness comes from SYS_STATUS. A lost ACK just means
+                # asking again; an explicit rejection still stops.
+                try:
+                    self.command(mav.MAV_CMD_RUN_PREARM_CHECKS)
+                except WaitTimeout:
+                    self.log('prearm_ack_timeout')
                 next_check = time.monotonic() + 2
             state = self.link.fresh('SYS_STATUS', 2)
             if state and state.onboard_control_sensors_health & mav.MAV_SYS_STATUS_PREARM_CHECK:
@@ -519,7 +578,7 @@ class GroupFlight:
         if ground is None or abs(target_z - (ground.z - self.args.height)) > 0.25:
             raise FlightError(f'Vehicle {sid}: home and local height disagree')
         self.heights[sid] = target_z
-        f.command(mav.MAV_CMD_DO_SET_MODE, mav.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, GUIDED)
+        f.set_guided()
         f.wait(lambda: f.link.fresh('HEARTBEAT', 3).custom_mode == GUIDED, 5, 'GUIDED confirmation')
         f.command(mav.MAV_CMD_DO_CHANGE_SPEED, 1, self.args.speed, -1)
         f.prearm_checks()
@@ -938,7 +997,7 @@ def arguments(argv=None):
             parser.error('Trajectory peak requested speed must not exceed 0.35 m/s; reduce radius or increase duration')
         minimum_time = args.duration + args.hover + args.hold
     else:
-        minimum_time = args.hover + len(mission_targets((0, 0, 0), 0, args.distance, args.pattern)) * args.hold
+        minimum_time = args.hover + 2 * len(pattern_directions(args.pattern)) * args.hold
     if args.max_flight_time > 60 or args.max_flight_time <= minimum_time:
         parser.error('Flight time limit must cover the routine and be at most 60 seconds')
     points = layout(len(args.target_systems), args.spacing)
@@ -958,6 +1017,10 @@ def arguments(argv=None):
     for name in ['height', 'distance', 'speed', 'hold', 'position_tolerance', 'settle_speed', 'move_timeout']:
         if not math.isfinite(getattr(args, name)) or getattr(args, name) <= 0:
             parser.error(f'{name} must be finite and positive')
+    # A target closer than the arrival radius counts as reached before the move.
+    if pattern_directions(args.pattern) and args.distance <= args.position_tolerance:
+        parser.error(f'--distance {args.distance:g} m must exceed the {args.position_tolerance:g} m arrival '
+                     'tolerance; lengthen it or lower --position-tolerance')
     if args.listen[0] != '127.0.0.1' or args.qgc[0] != '127.0.0.1' or args.listen == args.qgc:
         parser.error('Use separate loopback ports for the bridge listener and QGC')
     return args
@@ -970,7 +1033,9 @@ def main(argv=None):
         sequence = f'one {args.pattern} (half-width {args.radius:g} m) in {args.duration:g} s; settle {args.hold:g} s'
         excursion = 2 * args.radius
     else:
-        labels = [label for label, _ in mission_targets((0, 0, 0), 0, args.distance, args.pattern)]
+        labels = []
+        for direction in pattern_directions(args.pattern):
+            labels += [f'move {direction} {args.distance:g} m', f'return from {direction}']
         sequence = '; '.join(labels) if labels else 'hover only'
         excursion = args.distance if labels else 0
     print(f'Aircraft {args.target_systems}: takeoff {args.height:g} m; hover {args.hover:g} s; {sequence}; LAND.')
@@ -981,7 +1046,8 @@ def main(argv=None):
     if args.pattern in ('circle', 'diamond'):
         print(f'Peak requested speed: {peak_speed(args.pattern, args.radius, args.duration):.3f} m/s.')
     elif args.pattern != 'hover':
-        print('Fixed position targets; aircraft position control determines movement speed.')
+        print('Fixed position targets; aircraft position control determines movement speed. '
+              f'A leg counts as reached within {args.position_tolerance:g} m of its target.')
     if args.pattern == 'diamond':
         print('Diamond vertices relative to hover (forward, right): '
               f'(0, 0) -> ({-args.radius:g}, {args.radius:g}) -> ({-2 * args.radius:g}, 0) -> '
