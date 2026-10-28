@@ -71,3 +71,41 @@ Logs
 companion/logs/<date>/, named automatically: a session .tlog (all MAVLink), a session .jsonl (link events) and one .jsonl per mission.
 
 Tests: python3 -m unittest discover -s companion -p 'test_*.py'
+
+OptiTrack (Motive)
+------------------
+The hub can forward Motive rigid bodies to their drones as ATT_POS_MOCAP (ArduPilot's
+ExternalNav input). Each rigid body is mapped to one MAV_SYSID and only that drone gets it.
+Needs the NatNet client in the same venv:  $PY -m pip install natnet
+
+  # 2 drones, one dongle; Motive rigid bodies 66 and 67 fly as systems 1 and 2
+  $PY companion/swarm_hub.py --uri radio://0/80/2M/E7E7E7E701 --uri radio://0/80/2M/E7E7E7E702 \
+      --mocap-server 192.168.50.208 --mocap-local 192.168.50.198 \
+      --mocap-body 66:1 --mocap-body 67:2
+
+  --mocap-body RB:SYSID   repeatable; each rigid body and each system used once
+  --mocap-server IP       the Motive PC
+  --mocap-local IP        this computer's address on the Motive network
+  --mocap-unicast         if Motive streams unicast (default multicast)
+  --mocap-frame y-up      Motive's up axis: y-up (default: N = -Z, E = X, D = -Y)
+                          or z-up (N = X, E = -Y, D = -Z)
+  --mocap-rate 30         poses per second per drone (0 = every Motive frame)
+  --mocap-max-queue 2     skip a pose while that drone's radio uplink is backed up
+
+Motive setup: stream rigid bodies (NatNet) on the network the hub uses. Create each
+rigid body with the drone level and its nose along the axis that maps to north
+(-Z for y-up, +X for z-up), so the body axes start aligned with FRD.
+
+A pose goes out only once its drone has been heard (heartbeat with that sysid), while
+Motive reports the body tracked, and while that drone's uplink queue is short; the
+radio sends one frame per poll, so stale poses are skipped rather than queued.
+"status" shows each body's state, send rate and last NED position; the session log
+gets mocap_stats every --stats-sec, and every pose sent is in the session .tlog.
+
+ArduPilot parameters (ExternalNav from mocap; check against your setup):
+  VISO_TYPE      1   (MAVLink)
+  VISO_DELAY_MS  ~30 (Motive + radio latency; measure)
+  VISO_POS_M_NSE 0.05, VISO_YAW_M_NSE 0.05
+  EK3_SRC1_POSXY 6, EK3_SRC1_POSZ 6 (or 2 to keep the rangefinder),
+  EK3_SRC1_VELXY 0 (or 5 to keep optical flow), EK3_SRC1_VELZ 0, EK3_SRC1_YAW 6
+  The mocap frame's north is not true north: do not mix compass yaw with ExternalNav position.

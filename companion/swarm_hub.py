@@ -35,6 +35,14 @@ Logs go to companion/logs/<date>/ by default:
     HHMMSS-session.jsonl  link statistics, radio failures and recoveries,
                           mission start/end
     HHMMSS-<pattern>-sysN.jsonl  one per mission, in guided_swarm's format
+
+OptiTrack: with --mocap-body RIGID_BODY_ID:SYSID (repeatable), Motive poses are
+converted to NED and sent as ATT_POS_MOCAP to the vehicle with that system id
+only (mocap.py):
+
+    ... companion/swarm_hub.py --uri ...E701 --uri ...E702 \\
+        --mocap-server 192.168.50.208 --mocap-local 192.168.50.198 \\
+        --mocap-body 66:1 --mocap-body 67:2
 """
 
 import argparse
@@ -310,6 +318,7 @@ class Hub:
         self.groups = []
         self.state = {}
         self.mission = None
+        self.mocap = None
         self._mission_lock = threading.Lock()
         # The router's decoder is stateful; QGC and mission threads both route.
         self._uplink_lock = threading.Lock()
@@ -360,9 +369,29 @@ class Hub:
         threading.Thread(target=self._monitor, daemon=True).start()
         print(f'QGC: sending to {self.args.qgc[0]}:{self.args.qgc[1]} (local port {self.qgc.sock.getsockname()[1]})')
         print(f'Logs: {self.session.tlog_path.parent}/')
+        if getattr(self.args, 'mocap_body', None):
+            self.start_mocap()
+
+    def start_mocap(self, client_factory=None):
+        import mocap
+        args = self.args
+        self.mocap = mocap.MocapForwarder(
+            self, args.mocap_body, frame=args.mocap_frame, rate_hz=args.mocap_rate,
+            max_queue=args.mocap_max_queue, server=args.mocap_server, local=args.mocap_local,
+            multicast=not args.mocap_unicast, client_factory=client_factory)
+        self.session.event('mocap_start', server=args.mocap_server, local=args.mocap_local,
+                           bodies=args.mocap_body, frame=args.mocap_frame, rate_hz=args.mocap_rate)
+        rate = f'{args.mocap_rate:g} Hz per body' if args.mocap_rate else 'every frame'
+        print(f'OptiTrack: Motive {args.mocap_server} via {args.mocap_local}, {args.mocap_frame}, {rate}')
+        for body, sysid in args.mocap_body.items():
+            print(f'    rigid body {body} -> system {sysid}')
+        self.mocap.start()
 
     def stop(self):
         self._running = False
+        if self.mocap is not None:
+            self.mocap.stop()
+            self.session.event('mocap_stats', **self.mocap.summary())
         for g in self.groups:
             g.stop()
         self.qgc.stop()
@@ -404,6 +433,16 @@ class Hub:
             relay = self.mission
             if relay is not None:
                 relay.inbox.put((True, frame))
+
+    def vehicle_for_sysid(self, sysid):
+        """The one link whose autopilot heartbeat carries sysid; None if unheard or ambiguous."""
+        matches = [v for v in self.vehicles if v.sysid == sysid]
+        return matches[0] if len(matches) == 1 else None
+
+    def send_to_vehicle(self, vehicle, frame):
+        """Any thread: a frame for exactly one vehicle, bypassing the router."""
+        self.session.frame(frame)
+        vehicle.queue_frame(frame)
 
     def attach(self, relay):
         with self._mission_lock:
@@ -448,8 +487,12 @@ class Hub:
                 elif silent <= LINK_LOST_S and s.lost:
                     s.lost = False
                     self.notify(f'{self.name(v)} ({v.label()}): link restored')
+            if self.mocap is not None:
+                self.mocap.check(now)
             if now >= next_stats:
                 next_stats = now + self.args.stats_sec
+                if self.mocap is not None:
+                    self.session.event('mocap_stats', **self.mocap.summary())
                 for g in self.groups:
                     for v in g.vehicles:
                         self.session.event(
@@ -491,6 +534,8 @@ class Hub:
         qgc_age = 'never' if self.qgc.last_rx is None else f'{now - self.qgc.last_rx:.1f} s ago'
         lines.append(f'QGC {self.qgc.peer[0]}:{self.qgc.peer[1]}: last heard {qgc_age}, '
                      f'{self.qgc.frames_out} frames out, {self.qgc.frames_in} in')
+        if self.mocap is not None:
+            lines.extend(self.mocap.status_lines(now))
         lines.append(f'Logs: {self.session.tlog_path}')
         return lines
 
@@ -568,7 +613,7 @@ class Console:
   fly [options]      preview a guided_swarm mission, confirm, fly it
   preview [options]  show the plan only
   again              preview and fly the previous mission again
-  status             links, dongles, QGC and log location
+  status             links, dongles, QGC, OptiTrack and log location
   help fly           all mission options (guided_swarm.py's)
   quit               leave (Ctrl-D too)
 Mission options are guided_swarm.py's; --execute, --log, --listen and --qgc are
@@ -799,7 +844,29 @@ def arguments(argv=None):
                     help='pause after a polling round with no traffic (default 2.0)')
     ap.add_argument('--stats-sec', type=float, default=2.0,
                     help='seconds between link_stats records in the session log (default 2.0)')
+    mocap = ap.add_argument_group('OptiTrack (NatNet) forwarding')
+    mocap.add_argument('--mocap-body', action='append', metavar='RIGID_BODY_ID:SYSID',
+                       help='forward this Motive rigid body to this MAVLink system as ATT_POS_MOCAP; repeatable')
+    mocap.add_argument('--mocap-server', metavar='IP', help='Motive (NatNet server) address')
+    mocap.add_argument('--mocap-local', metavar='IP', help='this computer\'s address on the Motive network')
+    mocap.add_argument('--mocap-unicast', action='store_true', help='unicast NatNet instead of multicast')
+    mocap.add_argument('--mocap-frame', choices=('y-up', 'z-up'), default='y-up',
+                       help='Motive up axis: y-up (default; N=-Z, E=X, D=-Y) or z-up (N=X, E=-Y, D=-Z)')
+    mocap.add_argument('--mocap-rate', type=float, default=30.0, metavar='HZ',
+                       help='maximum poses per second per vehicle; 0 sends every Motive frame (default 30)')
+    mocap.add_argument('--mocap-max-queue', type=int, default=2, metavar='CHUNKS',
+                       help='skip a pose while the vehicle\'s uplink queue holds more chunks (default 2)')
     args = ap.parse_args(argv)
+    if args.mocap_body:
+        import mocap as mocap_module
+        try:
+            args.mocap_body = mocap_module.body_map(mocap_module.parse_body(b) for b in args.mocap_body)
+        except ValueError as exc:
+            ap.error(f'--mocap-body: {exc}')
+        if not (args.mocap_server and args.mocap_local):
+            ap.error('--mocap-body needs --mocap-server and --mocap-local')
+        if args.mocap_rate < 0:
+            ap.error('--mocap-rate must be >= 0')
     host, _, port = args.qgc.rpartition(':')
     try:
         args.qgc = (socket.gethostbyname(host), int(port))
@@ -817,8 +884,8 @@ def main(argv=None):
     import guided_swarm
     hub = Hub(args, bridge, guided_swarm)
     hub.open_links()
-    hub.start()
     try:
+        hub.start()
         Console(hub).run()
     finally:
         print('Closing links...', flush=True)
