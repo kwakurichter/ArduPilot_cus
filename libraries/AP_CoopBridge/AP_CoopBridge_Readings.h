@@ -66,18 +66,20 @@ struct Baro {
     bool valid;
 };
 
-// One fix of the marker frontend: the body pose in the map at the exposure, already converted
-// from the camera frame (body FLU to map ENU, the estimator's frames), with its 6x6 covariance
-// in the right tangent [rotation, translation] as the upper triangle, row by row. A source
-// that only knows the position (the SITL stand-in) sends a very large rotation variance.
-struct Camera {
-    uint64_t capture_us;
+// One sparse global fix (COOP_GLOBAL_FIX): the body pose in the map at the capture, already
+// in the estimator's frames (body FLU to map ENU), with its 6x6 covariance [rotation (body
+// right tangent), position (map)] as the upper triangle, row by row, and the DoF it
+// constrains (COOP_FIX_DOF mask). From motion capture (push_mocap) or any FC-side frontend.
+struct GlobalFix {
+    uint64_t capture_us;                // micros64() at the capture
     uint32_t receipt_after_capture_us;  // when the fix became available on the FC
-    uint32_t end_after_capture_us;      // end of the exposure
+    uint32_t end_after_capture_us;      // end of the exposure (0 for mocap)
     float q[4];                 // w, x, y, z
     Vector3f position_m;
     float covariance[21];
-    uint8_t marker_id;
+    uint8_t mask;               // COOP_FIX_DOF bits
+    uint8_t source;             // COOP_FIX_SOURCE
+    uint8_t source_id;
     bool valid;
 };
 

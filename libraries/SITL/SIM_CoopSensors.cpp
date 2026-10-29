@@ -125,7 +125,7 @@ const AP_Param::GroupInfo CoopSensors::var_info[] = {
 
     // @Param: MAP_E
     // @DisplayName: Home east in the map
-    // @Description: East coordinate of this vehicle's home in the map the companions share (map origin: the first vehicle's home). Used by the camera stand-in and the disturbance band.
+    // @Description: East coordinate of this vehicle's home in the map the companions share (map origin: the first vehicle's home). Used by the global fix stand-in and the disturbance band.
     // @Units: m
     // @User: Advanced
     AP_GROUPINFO("MAP_E", 8, CoopSensors, _map_e, 0.0f),
@@ -137,29 +137,29 @@ const AP_Param::GroupInfo CoopSensors::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("MAP_N", 9, CoopSensors, _map_n, 0.0f),
 
-    // @Param: CAM_HZ
-    // @DisplayName: Camera stand-in rate
-    // @Description: Rate of the sparse position fixes that stand in for the HM01B0 marker frontend (sent as position-only COOP_CAMERA). 0 disables them.
+    // @Param: FIX_HZ
+    // @DisplayName: Global fix stand-in rate
+    // @Description: Rate of the motion-capture stand-in poses (body pose in the shared map), which AP_CoopBridge treats like ATT_POS_MOCAP and thins to COOP_FIX_HZ. 0 disables them.
     // @Units: Hz
-    // @Range: 0 10
-    // @User: Advanced
-    AP_GROUPINFO("CAM_HZ", 10, CoopSensors, _cam_hz, 0.0f),
-
-    // @Param: CAM_SD
-    // @DisplayName: Camera stand-in position noise
-    // @Description: Standard deviation of each position coordinate of a camera stand-in fix.
-    // @Units: m
-    // @Range: 0.001 1
-    // @User: Advanced
-    AP_GROUPINFO("CAM_SD", 11, CoopSensors, _cam_sd, 0.025f),
-
-    // @Param: CAM_LAT
-    // @DisplayName: Camera stand-in latency
-    // @Description: Time from the capture to the fix being available on the FC (detection latency).
-    // @Units: ms
     // @Range: 0 200
     // @User: Advanced
-    AP_GROUPINFO("CAM_LAT", 12, CoopSensors, _cam_lat_ms, 40.0f),
+    AP_GROUPINFO("FIX_HZ", 10, CoopSensors, _fix_hz, 0.0f),
+
+    // @Param: FIX_SD
+    // @DisplayName: Global fix stand-in position noise
+    // @Description: Standard deviation of each position coordinate of a stand-in pose.
+    // @Units: m
+    // @Range: 0 1
+    // @User: Advanced
+    AP_GROUPINFO("FIX_SD", 11, CoopSensors, _fix_sd, 0.025f),
+
+    // @Param: FIX_LAT
+    // @DisplayName: Global fix stand-in latency
+    // @Description: Time from the capture to the pose being available on the FC (motion capture, hub and radio).
+    // @Units: ms
+    // @Range: 0 500
+    // @User: Advanced
+    AP_GROUPINFO("FIX_LAT", 12, CoopSensors, _fix_lat_ms, 40.0f),
 
     // @Param: UWB_SD
     // @DisplayName: UWB range noise
@@ -218,6 +218,14 @@ const AP_Param::GroupInfo CoopSensors::var_info[] = {
     // @Units: m
     // @User: Advanced
     AP_GROUPINFO("ANT_Z", 20, CoopSensors, _ant_frd[2], -0.02f),
+
+    // @Param: FIX_RSD
+    // @DisplayName: Global fix stand-in rotation noise
+    // @Description: Standard deviation of each rotation axis of a stand-in pose. 0 (default) leaves the attitude exact and draws no noise for it.
+    // @Units: rad
+    // @Range: 0 0.5
+    // @User: Advanced
+    AP_GROUPINFO("FIX_RSD", 21, CoopSensors, _fix_rsd, 0.0f),
 
     AP_GROUPEND
 };
@@ -365,7 +373,7 @@ void CoopSensors::update(const Aircraft &aircraft, uint64_t now_us)
     update_tof(x, a, now_us);
     update_baro(x, a, now_us);
     update_mag(x, a, now_us);
-    update_camera(x, a, now_us);
+    update_fix(x, a, now_us);
 }
 
 void CoopSensors::update_flow(const Truth &x, uint64_t a, uint64_t b)
@@ -553,49 +561,61 @@ void CoopSensors::update_mag(const Truth &x, uint64_t a, uint64_t b)
 }
 
 
-void CoopSensors::update_camera(const Truth &x, uint64_t a, uint64_t b)
+void CoopSensors::update_fix(const Truth &x, uint64_t a, uint64_t b)
 {
-    // release the fixes whose detection latency has passed
+    // release the poses whose latency has passed
     uint8_t kept = 0;
-    for (uint8_t i = 0; i < _n_camera_pending; i++) {
-        if (_camera_pending[i].receipt_us <= b) {
-            if (!_camera_q.push(_camera_pending[i])) {
-                Camera old;
-                UNUSED_RESULT(_camera_q.pop(old));
-                _camera_q.push(_camera_pending[i]);
+    for (uint8_t i = 0; i < _n_fix_pending; i++) {
+        if (_fix_pending[i].receipt_us <= b) {
+            if (!_fix_q.push(_fix_pending[i])) {
+                Fix old;
+                UNUSED_RESULT(_fix_q.pop(old));
+                _fix_q.push(_fix_pending[i]);
             }
         } else {
-            _camera_pending[kept++] = _camera_pending[i];
+            _fix_pending[kept++] = _fix_pending[i];
         }
     }
-    _n_camera_pending = kept;
+    _n_fix_pending = kept;
 
-    if (!is_positive(_cam_hz.get())) {
+    if (!is_positive(_fix_hz.get())) {
         return;
     }
-    // captures on the absolute grid of the fix period, with the truth at the step's end
-    const uint64_t period = MAX(uint64_t(1e6f / _cam_hz.get()), uint64_t(10000));
+    // captures on the absolute grid of the pose period, with the truth at the step's end
+    const uint64_t period = MAX(uint64_t(1e6f / _fix_hz.get()), uint64_t(5000));
     for (uint64_t t = (a / period + 1) * period; t <= b; t += period) {
-        if (_n_camera_pending == MAX_PENDING_CAMERA) {
+        if (_n_fix_pending == MAX_PENDING_FIX) {
             break;
         }
-        Camera &c = _camera_pending[_n_camera_pending++];
+        Fix &c = _fix_pending[_n_fix_pending++];
         c.capture_us = t;
-        c.receipt_us = t + uint64_t(MAX(0.0f, _cam_lat_ms.get()) * 1000.0f);
-        // body FLU to map ENU: R = A * dcm * F with A = NED to ENU and F = FLU to FRD
-        const Matrix3f A(Vector3f(0, 1, 0), Vector3f(1, 0, 0), Vector3f(0, 0, -1));
-        const Matrix3f F(Vector3f(1, 0, 0), Vector3f(0, -1, 0), Vector3f(0, 0, -1));
+        c.receipt_us = t + uint64_t(MAX(0.0f, _fix_lat_ms.get()) * 1000.0f);
+        // body FRD to NED, with optional rotation noise (body frame)
+        Matrix3f dcm = x.dcm;
+        if (is_positive(_fix_rsd.get())) {
+            const float sd = _fix_rsd.get();
+            const Vector3f w(sd * float(gauss()), sd * float(gauss()), sd * float(gauss()));
+            const float angle = w.length();
+            if (is_positive(angle)) {
+                Matrix3f noise;
+                noise.from_axis_angle(w / angle, angle);
+                dcm = dcm * noise;
+            }
+        }
         Quaternion q;
-        q.from_rotation_matrix(A * x.dcm * F);
+        q.from_rotation_matrix(dcm);
         q.normalize();
-        c.q[0] = q.q1;
-        c.q[1] = q.q2;
-        c.q[2] = q.q3;
-        c.q[3] = q.q4;
-        c.sigma_m = _cam_sd.get();
-        c.position_m = Vector3f(x.p_ned.y + _map_e + c.sigma_m * gauss(),
-                                x.p_ned.x + _map_n + c.sigma_m * gauss(),
-                                -x.p_ned.z + c.sigma_m * gauss());
+        c.q_ned[0] = q.q1;
+        c.q_ned[1] = q.q2;
+        c.q_ned[2] = q.q3;
+        c.q_ned[3] = q.q4;
+        // the shared map in NED (the bridge converts to ENU); the noise draws keep the
+        // camera stand-in's order (east, north, up), so the other sensors' noise is unchanged
+        const float sd = _fix_sd.get();
+        const float e = float(x.p_ned.y) + _map_e + sd * float(gauss());
+        const float n = float(x.p_ned.x) + _map_n + sd * float(gauss());
+        const float u = float(-x.p_ned.z) + sd * float(gauss());
+        c.p_ned = Vector3f(n, e, -u);
     }
 }
 #endif  // AP_SIM_COOP_SENSORS_ENABLED

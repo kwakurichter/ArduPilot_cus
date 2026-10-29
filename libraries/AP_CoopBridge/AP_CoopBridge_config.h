@@ -10,7 +10,7 @@
 #define AP_COOPBRIDGE_ENABLED (HAL_GCS_ENABLED && CONFIG_HAL_BOARD == HAL_BOARD_SITL)
 #endif
 
-#include <SITL/SIM_config.h>     // AP_SIM_COOP_SENSORS_ENABLED (SITL camera stand-in)
+#include <SITL/SIM_config.h>     // AP_SIM_COOP_SENSORS_ENABLED (SITL global fix stand-in)
 
 // Length of one IMU first-stage sub-interval (us). The companion's second stage and the
 // 100 ms knots assume 10 ms; changing it changes the protocol.

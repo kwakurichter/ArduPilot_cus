@@ -28,9 +28,11 @@
                    p = p_ref(t) exp(-z / H) + bias(agent, t) + N(0, 1.5 / sqrt(2) Pa)
     MMC5983MA mag  every 10 ms, the truth field direction with N(0, 0.008 rad) per tangent axis;
                    optionally bent inside an east band (scenario S5, SIM_COOP_MD_*)
-    camera         stand-in for the HM01B0 marker frontend, off by default: sparse fixes of the
-                   body position in the map (SIM_COOP_CAM_HZ, _SD, _LAT), released after the
-                   detection latency; AP_CoopBridge sends them as COOP_CAMERA (position only)
+    global fix     stand-in for motion capture (OptiTrack through swarm_hub), off by default:
+                   the body pose in the shared map (NED) at SIM_COOP_FIX_HZ, with N(0, _SD)
+                   per position axis and N(0, _RSD) per rotation axis, released after
+                   SIM_COOP_FIX_LAT; AP_CoopBridge treats them as ATT_POS_MOCAP (push_mocap),
+                   thins them to COOP_FIX_HZ and sends COOP_GLOBAL_FIX
     DW1000 UWB     the truth antenna position in the shared map (SIM_COOP_ANT_*, body FRD) and
                    the error of each DS-TWR exchange as scenarios._uwb_round_robin: dropout,
                    N(0, SIM_COOP_UWB_SD), NLOS excess (exponential) or gross outlier
@@ -97,16 +99,13 @@ public:
         float pressure_pa;
         float temperature_c;
     };
-    // One camera stand-in fix: body pose in the map (FLU to ENU) at the capture.
-    struct Camera {
+    // One global fix stand-in pose, as motion capture reports it: body FRD in the shared map
+    // (NED), stamped at the capture (micros64()) and available at receipt.
+    struct Fix {
         uint64_t capture_us, receipt_us;
-        float q[4];              // w, x, y, z
-        Vector3f position_m;     // map ENU, with noise
-        float sigma_m;           // position noise per axis
+        float q_ned[4];          // w, x, y, z
+        Vector3f p_ned;          // map NED, with noise
     };
-    // Rotation standard deviation the bridge sends with a position-only fix (rad): large
-    // enough that the rotation carries no information.
-    static constexpr float CAMERA_ROTATION_SD = 3.0f;
 
     // One MMC5983MA sample.
     struct Mag {
@@ -119,7 +118,7 @@ public:
     bool pop_tof(Tof &r) { return _tof_q.pop(r); }
     bool pop_baro(Baro &r) { return _baro_q.pop(r); }
     bool pop_mag(Mag &r) { return _mag_q.pop(r); }
-    bool pop_camera(Camera &r) { return _camera_q.pop(r); }
+    bool pop_fix(Fix &r) { return _fix_q.pop(r); }
 
     // UWB (AP_Ranging_SITL, main thread). This vehicle's antenna in the shared map (ENU) at
     // FC time ``t_us``, extrapolated from the last physics step; false before the first.
@@ -155,7 +154,7 @@ private:
     void update_tof(const Truth &x, uint64_t a_us, uint64_t b_us);
     void update_baro(const Truth &x, uint64_t a_us, uint64_t b_us);
     void update_mag(const Truth &x, uint64_t a_us, uint64_t b_us);
-    void update_camera(const Truth &x, uint64_t a_us, uint64_t b_us);
+    void update_fix(const Truth &x, uint64_t a_us, uint64_t b_us);
 
     // Deterministic Gaussian noise (seeded by SIM_COOP_SEED and the agent). The UWB errors
     // have their own stream, so enabling ranging leaves the sensor noise unchanged.
@@ -173,9 +172,10 @@ private:
     AP_Float _magd_x0, _magd_x1; // east band of the magnetic disturbance (m from home)
     AP_Float _magd_deg;          // peak rotation at the band centre, 0 = off
     AP_Float _map_e, _map_n;     // this vehicle's home in the shared map (m)
-    AP_Float _cam_hz;            // camera stand-in fix rate, 0 = off
-    AP_Float _cam_sd;            // its position noise per axis (m)
-    AP_Float _cam_lat_ms;        // its detection latency (ms)
+    AP_Float _fix_hz;            // global fix stand-in rate, 0 = off
+    AP_Float _fix_sd;            // its position noise per axis (m)
+    AP_Float _fix_lat_ms;        // capture to availability on the FC (ms)
+    AP_Float _fix_rsd;           // its rotation noise per axis (rad)
     AP_Float _uwb_sd;            // line-of-sight range noise (m)
     AP_Float _uwb_nlos_p;        // probability of an NLOS exchange
     AP_Float _uwb_nlos_m;        // mean NLOS excess (m)
@@ -214,12 +214,12 @@ private:
     ObjectBuffer<Tof> _tof_q{4};
     ObjectBuffer<Baro> _baro_q{4};
     ObjectBuffer<Mag> _mag_q{16};
-    ObjectBuffer<Camera> _camera_q{4};
+    ObjectBuffer<Fix> _fix_q{8};
 
-    // camera fixes captured but not yet released (detection latency)
-    static constexpr uint8_t MAX_PENDING_CAMERA = 4;
-    Camera _camera_pending[MAX_PENDING_CAMERA];
-    uint8_t _n_camera_pending;
+    // global fixes captured but not yet released (latency)
+    static constexpr uint8_t MAX_PENDING_FIX = 8;
+    Fix _fix_pending[MAX_PENDING_FIX];
+    uint8_t _n_fix_pending;
 };
 
 }  // namespace SITL

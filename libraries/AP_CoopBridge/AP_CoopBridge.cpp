@@ -32,6 +32,9 @@
 extern const AP_HAL::HAL& hal;
 
 namespace {
+// Knot period of the companion's estimator (the global fix selection aligns to it).
+constexpr uint64_t KNOT_US = 100000;
+
 // Every time the companion sees is in mesh time (AP_SwarmMesh::mesh_micros64), the clock the
 // whole swarm shares; without a mesh it is micros64().
 uint64_t mesh_now_us()
@@ -134,6 +137,76 @@ const AP_Param::GroupInfo AP_CoopBridge::var_info[] = {
     // @Range: 0 1000
     // @User: Advanced
     AP_GROUPINFO("_MAG_NORM", 10, AP_CoopBridge, _mag_norm, 0.0f),
+
+    // Global fixes (motion capture): see the file comment in AP_CoopBridge.h.
+
+    // @Param: _FIX_SRC
+    // @DisplayName: Global fix source
+    // @Description: 1 hands ATT_POS_MOCAP to the bridge (sent to the companion as COOP_GLOBAL_FIX) instead of AP_VisualOdom, so ExternalNav carries only the companion's ODOMETRY. 0 keeps the stock path (fly on motion capture directly).
+    // @Values: 0:AP_VisualOdom (stock),1:Companion
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_SRC", 11, AP_CoopBridge, _fix_src, 0),
+
+    // @Param: _FIX_HZ
+    // @DisplayName: Global fix rate
+    // @Description: Global fixes forwarded to the companion per second, each the first one captured at or after a 100 ms knot that is due one. 0 sends none (a vehicle without fixes).
+    // @Units: Hz
+    // @Range: 0 10
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_HZ", 12, AP_CoopBridge, _fix_hz, 1.0f),
+
+    // @Param: _FIX_DOF
+    // @DisplayName: Global fix degrees of freedom
+    // @Description: What a motion-capture fix constrains: the full pose, position and yaw, or position only.
+    // @Values: 6:Pose,4:Position and yaw,3:Position
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_DOF", 13, AP_CoopBridge, _fix_dof, 6),
+
+    // @Param: _FIX_TIME
+    // @DisplayName: Global fix time source
+    // @Description: 1: ATT_POS_MOCAP time_usec is the capture time in this FC's clock (the sender synchronised with TIMESYNC); stamps more than 500 ms before or 2 ms after the arrival fall back to the arrival minus COOP_FIX_DELAY. 0: always the arrival minus COOP_FIX_DELAY.
+    // @Values: 0:Arrival minus delay,1:Synchronised time_usec
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_TIME", 14, AP_CoopBridge, _fix_time, 1),
+
+    // @Param: _FIX_DELAY
+    // @DisplayName: Global fix delay
+    // @Description: Capture-to-arrival delay assumed when the capture time is not synchronised (motion capture processing, hub and radio).
+    // @Units: ms
+    // @Range: 0 500
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_DELAY", 15, AP_CoopBridge, _fix_delay_ms, 30),
+
+    // @Param: _FIX_P_SD
+    // @DisplayName: Global fix position noise
+    // @Description: Standard deviation of each position coordinate of a fix, as declared to the estimator.
+    // @Units: m
+    // @Range: 0.001 1
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_P_SD", 16, AP_CoopBridge, _fix_p_sd, 0.10f),
+
+    // @Param: _FIX_R_SD
+    // @DisplayName: Global fix attitude noise
+    // @Description: Standard deviation of each attitude axis (6 DoF) or of the yaw (4 DoF) of a fix, as declared to the estimator.
+    // @Units: deg
+    // @Range: 0.1 90
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_R_SD", 17, AP_CoopBridge, _fix_r_sd, 10.0f),
+
+    // @Param: _FIX_SEL
+    // @DisplayName: Global fix selection
+    // @Description: 1 drops a fix that would reach the companion after the next knot (requirement R-FIX-1, so the EIF can use every fix). 0 forwards every due fix however late (to exercise the late-fix handling).
+    // @Values: 0:Forward late fixes,1:Drop late fixes
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_SEL", 18, AP_CoopBridge, _fix_sel, 1),
+
+    // @Param: _FIX_HOLD
+    // @DisplayName: Global fix hold
+    // @Description: Extra time each fix is held before it is forwarded, to emulate a slow onboard frontend.
+    // @Units: ms
+    // @Range: 0 1000
+    // @User: Advanced
+    AP_GROUPINFO("_FIX_HOLD", 19, AP_CoopBridge, _fix_hold_ms, 0),
 
     AP_GROUPEND
 };
@@ -309,13 +382,106 @@ bool AP_CoopBridge::push_baro(const AP_CoopReading::Baro &r)
     return true;
 }
 
-bool AP_CoopBridge::push_camera(const AP_CoopReading::Camera &r)
+bool AP_CoopBridge::push_fix(const AP_CoopReading::GlobalFix &r)
 {
-    if (_port.get() < 0 || !_camera_q.push(r)) {
+    if (_port.get() < 0 || !_fix_q.push(r)) {
         _stats.aids_dropped++;
         return false;
     }
     return true;
+}
+
+void AP_CoopBridge::push_mocap(const mavlink_att_pos_mocap_t &m, uint64_t arrival_us)
+{
+    if (_port.get() < 0) {
+        return;
+    }
+    _stats.fix_in++;
+    // capture time: the synchronised stamp when it is plausible, else arrival - delay
+    uint64_t capture_us;
+    if (_fix_time.get() == 1 && m.time_usec + 500000U >= arrival_us &&
+        m.time_usec <= arrival_us + 2000U) {
+        capture_us = m.time_usec;
+    } else {
+        const uint64_t delay_us = uint64_t(MAX(int16_t(0), _fix_delay_ms.get())) * 1000U;
+        capture_us = arrival_us > delay_us ? arrival_us - delay_us : 0;
+        _stats.fix_time_fallback++;
+    }
+    // thinning: one fix per due knot, decided at arrival (later fixes of a claimed knot go)
+    if (!is_positive(_fix_hz.get()) || _n_fix_held >= FIX_HOLD_MAX) {
+        _stats.fix_thinned++;
+        return;
+    }
+    const uint64_t knot = to_mesh(capture_us) / KNOT_US;
+    const uint64_t period_knots = MAX(uint64_t(1), uint64_t(lroundf(10.0f / _fix_hz.get())));
+    if (knot + period_knots < _fix_next_knot) {
+        // the mesh clock stepped back (a follower syncing): restart the knot schedule
+        _fix_next_knot = knot;
+    }
+    if (knot < _fix_next_knot) {
+        _stats.fix_thinned++;
+        return;
+    }
+    _fix_next_knot = knot + period_knots;
+
+    // body FRD in NED (ATT_POS_MOCAP) to body FLU in ENU (the estimator):
+    // R = A R_ned F with A = NED to ENU and F = FLU to FRD; position (east, north, up)
+    AP_CoopReading::GlobalFix r {};
+    r.capture_us = capture_us;
+    const Quaternion q_ned(m.q[0], m.q[1], m.q[2], m.q[3]);
+    Matrix3f r_ned;
+    q_ned.rotation_matrix(r_ned);
+    const Matrix3f A(Vector3f(0, 1, 0), Vector3f(1, 0, 0), Vector3f(0, 0, -1));
+    const Matrix3f F(Vector3f(1, 0, 0), Vector3f(0, -1, 0), Vector3f(0, 0, -1));
+    Quaternion q;
+    q.from_rotation_matrix(A * r_ned * F);
+    q.normalize();
+    r.q[0] = q.q1;
+    r.q[1] = q.q2;
+    r.q[2] = q.q3;
+    r.q[3] = q.q4;
+    r.position_m = Vector3f(m.y, m.x, -m.z);
+    // declared covariance: diag(rotation, position); a 4-DoF fix reads entry (2,2) as yaw
+    const float rot_var = sq(radians(_fix_r_sd.get()));
+    const float pos_var = sq(_fix_p_sd.get());
+    const float diag[6] {rot_var, rot_var, rot_var, pos_var, pos_var, pos_var};
+    uint8_t k = 0;
+    for (uint8_t row = 0; row < 6; row++) {
+        for (uint8_t col = row; col < 6; col++) {
+            r.covariance[k++] = row == col ? diag[row] : 0.0f;
+        }
+    }
+    switch (_fix_dof.get()) {
+    case 6: r.mask = COOP_FIX_POSITION | COOP_FIX_ATTITUDE; break;
+    case 4: r.mask = COOP_FIX_POSITION | COOP_FIX_YAW; break;
+    case 3: r.mask = COOP_FIX_POSITION; break;
+    default: r.mask = 0; break;  // the companion rejects it
+    }
+    r.source = COOP_FIX_SOURCE_MOCAP;
+    r.valid = true;
+    const uint64_t hold_us = uint64_t(MAX(int16_t(0), _fix_hold_ms.get())) * 1000U;
+    _fix_held[_n_fix_held++] = HeldFix{r, arrival_us + hold_us};
+}
+
+void AP_CoopBridge::release_mocap(uint64_t now_us)
+{
+    while (_n_fix_held > 0 && _fix_held[0].release_us <= now_us) {
+        AP_CoopReading::GlobalFix r = _fix_held[0].fix;
+        const uint64_t release_us = _fix_held[0].release_us;
+        for (uint8_t i = 1; i < _n_fix_held; i++) {
+            _fix_held[i - 1] = _fix_held[i];
+        }
+        _n_fix_held--;
+        const uint64_t knot = to_mesh(r.capture_us) / KNOT_US;
+        if (_fix_sel.get() == 1 && to_mesh(release_us) >= (knot + 1) * KNOT_US) {
+            // R-FIX-1: it would miss its segment in the EIF; let the next knot take one
+            _stats.fix_late++;
+            _fix_next_knot = MIN(_fix_next_knot, knot + 1);
+            continue;
+        }
+        r.receipt_after_capture_us = release_us > r.capture_us ? uint32_t(release_us - r.capture_us) : 0;
+        send_global_fix(r);
+    }
 }
 
 bool AP_CoopBridge::push_mag(const AP_CoopReading::Mag &r)
@@ -346,11 +512,12 @@ void AP_CoopBridge::send_aids()
         send_mag(mag);
     }
 #if AP_SIM_COOP_SENSORS_ENABLED
-    sitl_camera();
+    sitl_fixes();
 #endif
-    AP_CoopReading::Camera camera;
-    while (_camera_q.pop(camera)) {
-        send_camera(camera);
+    release_mocap(AP_HAL::micros64());
+    AP_CoopReading::GlobalFix fix;
+    while (_fix_q.pop(fix)) {
+        send_global_fix(fix);
     }
 #if AP_RANGING_ENABLED
     // UWB exchanges come straight from AP_Ranging's ring (this is its only consumer)
@@ -388,49 +555,39 @@ void AP_CoopBridge::send_uwb(const AP_Ranging::Exchange &e)
 #endif
 
 #if AP_SIM_COOP_SENSORS_ENABLED
-void AP_CoopBridge::sitl_camera()
+void AP_CoopBridge::sitl_fixes()
 {
-    // The HM01B0 marker frontend does not exist yet; in SITL the sensor model's sparse
-    // position fixes (SIM_COOP_CAM_*) take its place on the same path. Called from the main
-    // thread, the queue's only consumer.
+    // Stand-in for motion capture: the SIM_COOP_FIX poses (body FRD in the shared map, NED)
+    // take the hardware path through push_mocap(), stamped at the capture in micros64() as
+    // swarm_hub's synchronised ATT_POS_MOCAP would be, arriving after SIM_COOP_FIX_LAT.
+    // Called from the main thread, the queue's only consumer.
     SITL::SIM *sitl = AP::sitl();
     if (sitl == nullptr) {
         return;
     }
-    SITL::CoopSensors::Camera c;
-    while (sitl->models.coop_sensors.pop_camera(c)) {
-        AP_CoopReading::Camera r {};
-        r.capture_us = c.capture_us;
-        r.receipt_after_capture_us = uint32_t(c.receipt_us - c.capture_us);
-        r.end_after_capture_us = 0;
+    SITL::CoopSensors::Fix c;
+    while (sitl->models.coop_sensors.pop_fix(c)) {
+        mavlink_att_pos_mocap_t m {};
+        m.time_usec = c.capture_us;
         for (uint8_t i = 0; i < 4; i++) {
-            r.q[i] = c.q[i];
+            m.q[i] = c.q_ned[i];
         }
-        r.position_m = c.position_m;
-        // position only: the rotation carries (almost) no information
-        const float rot_var = sq(SITL::CoopSensors::CAMERA_ROTATION_SD);
-        const float pos_var = sq(c.sigma_m);
-        const float diag[6] {rot_var, rot_var, rot_var, pos_var, pos_var, pos_var};
-        uint8_t k = 0;
-        for (uint8_t row = 0; row < 6; row++) {
-            for (uint8_t col = row; col < 6; col++) {
-                r.covariance[k++] = row == col ? diag[row] : 0.0f;
-            }
-        }
-        r.valid = true;
-        push_camera(r);
+        m.x = c.p_ned.x;
+        m.y = c.p_ned.y;
+        m.z = c.p_ned.z;
+        push_mocap(m, c.receipt_us);
     }
 }
 #endif  // AP_SIM_COOP_SENSORS_ENABLED
 
-void AP_CoopBridge::send_camera(const AP_CoopReading::Camera &r)
+void AP_CoopBridge::send_global_fix(const AP_CoopReading::GlobalFix &r)
 {
     const mavlink_channel_t chan = mavlink_channel_t(_chan);
-    if (!HAVE_PAYLOAD_SPACE(chan, COOP_CAMERA)) {
+    if (!HAVE_PAYLOAD_SPACE(chan, COOP_GLOBAL_FIX)) {
         _stats.aids_dropped++;
         return;
     }
-    mavlink_coop_camera_t pkt {};
+    mavlink_coop_global_fix_t pkt {};
     pkt.time_usec = to_mesh(r.capture_us);
     pkt.receipt_after_capture_us = r.receipt_after_capture_us;
     pkt.end_after_capture_us = r.end_after_capture_us;
@@ -441,9 +598,11 @@ void AP_CoopBridge::send_camera(const AP_CoopReading::Camera &r)
     pkt.position[1] = r.position_m.y;
     pkt.position[2] = r.position_m.z;
     memcpy(pkt.covariance, r.covariance, sizeof(pkt.covariance));
-    pkt.marker_id = r.marker_id;
+    pkt.mask = r.mask;
+    pkt.source = r.source;
+    pkt.source_id = r.source_id;
     pkt.flags = r.valid ? COOP_SAMPLE_VALID : 0;
-    mavlink_msg_coop_camera_send_struct(chan, &pkt);
+    mavlink_msg_coop_global_fix_send_struct(chan, &pkt);
     _stats.aids_sent++;
 }
 
@@ -624,7 +783,7 @@ void AP_CoopBridge::log_stats(uint64_t now_us)
     // @Field: Drop: completed IMU sub-intervals not sent (port full or stall)
     // @Field: Gap: ticks with missing or late INS data
     // @Field: Clip: ticks with accelerometer clipping
-    // @Field: ASent: aid messages (flow, ToF, baro, mag, camera, UWB) sent
+    // @Field: ASent: aid messages (flow, ToF, baro, mag, global fix, UWB) sent
     // @Field: ADrop: aid readings lost (queue full or port full)
     AP::logger().WriteStreaming("COOP", "TimeUS,Sent,Drop,Gap,Clip,ASent,ADrop", "s------", "F------",
                                 "QIIIIII", now_us, _stats.imu_sent, _stats.imu_dropped, _stats.imu_gaps,
