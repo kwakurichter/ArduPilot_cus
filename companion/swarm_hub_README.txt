@@ -102,7 +102,34 @@ radio sends one frame per poll, so stale poses are skipped rather than queued.
 "status" shows each body's state, send rate and last NED position; the session log
 gets mocap_stats every --stats-sec, and every pose sent is in the session .tlog.
 
-ArduPilot parameters (ExternalNav from mocap; check against your setup):
+Timing
+  Each pose is stamped at its capture: the NatNet arrival minus Motive's latency (measured
+  from the frame's camera and transmit stamps once their tick rate is known, about 2 s
+  after start; 5 ms until then; --mocap-latency-ms N fixes it).
+  --mocap-time hub   (default) time_usec in the hub's clock; ArduPilot's stock jitter
+                     correction absorbs the offset. For flying on mocap (ExternalNav).
+  --mocap-time fc    time_usec in each drone's own clock: the hub sends it TIMESYNC at 2 Hz
+                     (stock ArduPilot answers) and fits the offset and drift through the
+                     fastest round trips. A drone gets no poses until about 10 answers are
+                     in (5 s). For the cooperative estimator: AP_CoopBridge with
+                     COOP_FIX_SRC 1, COOP_FIX_TIME 1 uses time_usec as the capture time.
+  "status" shows per drone the shortest round trip, the fit residual and the clock drift.
+  Keep --mocap-rate >= 30 with COOP_FIX_HZ: the bridge forwards the first pose captured
+  after each due 100 ms knot, so poses must arrive often enough to land early in the knot.
+
+Ground truth
+  Every Motive frame (all rigid bodies, full rate, mapped or not, tracked or not) goes to
+  <log dir>/<date>/HHMMSS-mocap-truth.csv: hub time, capture time (hub and, once synced,
+  the drone's clock), Motive frame and timestamp, latency, raw Motive pose and NED pose.
+  --no-mocap-truth turns it off.
+
+Cooperative estimator (thesis, P5 global fixes) instead of ExternalNav:
+  hub: --mocap-time fc
+  FC:  COOP_FIX_SRC 1, COOP_FIX_TIME 1, COOP_FIX_HZ 1 (0 on drones without fixes),
+       COOP_FIX_DOF 6/4/3, COOP_FIX_P_SD, COOP_FIX_R_SD; keep VISO_TYPE 1 and EK3_SRC1_* = 6
+       for the companion's ODOMETRY.
+
+ArduPilot parameters (flying on mocap through ExternalNav; check against your setup):
   VISO_TYPE      1   (MAVLink)
   VISO_DELAY_MS  ~30 (Motive + radio latency; measure)
   VISO_POS_M_NSE 0.05, VISO_YAW_M_NSE 0.05

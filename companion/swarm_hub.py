@@ -375,16 +375,23 @@ class Hub:
     def start_mocap(self, client_factory=None):
         import mocap
         args = self.args
+        truth = None if getattr(args, 'no_mocap_truth', False) else self.logbook.path('mocap-truth', '.csv')
         self.mocap = mocap.MocapForwarder(
             self, args.mocap_body, frame=args.mocap_frame, rate_hz=args.mocap_rate,
             max_queue=args.mocap_max_queue, server=args.mocap_server, local=args.mocap_local,
-            multicast=not args.mocap_unicast, client_factory=client_factory)
+            multicast=not args.mocap_unicast, client_factory=client_factory,
+            time_mode=getattr(args, 'mocap_time', 'hub'), latency_ms=getattr(args, 'mocap_latency_ms', None),
+            truth_path=truth)
         self.session.event('mocap_start', server=args.mocap_server, local=args.mocap_local,
                            bodies=args.mocap_body, frame=args.mocap_frame, rate_hz=args.mocap_rate)
         rate = f'{args.mocap_rate:g} Hz per body' if args.mocap_rate else 'every frame'
         print(f'OptiTrack: Motive {args.mocap_server} via {args.mocap_local}, {args.mocap_frame}, {rate}')
         for body, sysid in args.mocap_body.items():
             print(f'    rigid body {body} -> system {sysid}')
+        if self.mocap.time_mode == 'fc':
+            print('    time_usec in each FC\'s clock (TIMESYNC); poses wait for the clock fit')
+        if truth is not None:
+            print(f'    ground truth: {truth}')
         self.mocap.start()
 
     def stop(self):
@@ -417,6 +424,8 @@ class Hub:
             state.armed = bool(hb[1] & 0x80)
             state.mode = hb[2]
         self.session.frame(frame)
+        if self.mocap is not None:
+            self.mocap.on_downlink(vehicle, frame)
         self.qgc.send(frame)
         relay = self.mission
         if relay is not None:
@@ -489,6 +498,7 @@ class Hub:
                     self.notify(f'{self.name(v)} ({v.label()}): link restored')
             if self.mocap is not None:
                 self.mocap.check(now)
+                self.mocap.tick(now)
             if now >= next_stats:
                 next_stats = now + self.args.stats_sec
                 if self.mocap is not None:
@@ -854,6 +864,13 @@ def arguments(argv=None):
                        help='Motive up axis: y-up (default; N=-Z, E=X, D=-Y) or z-up (N=X, E=-Y, D=-Z)')
     mocap.add_argument('--mocap-rate', type=float, default=30.0, metavar='HZ',
                        help='maximum poses per second per vehicle; 0 sends every Motive frame (default 30)')
+    mocap.add_argument('--mocap-time', choices=('hub', 'fc'), default='hub',
+                       help='time_usec: capture in the hub clock (default) or in each FC\'s clock via '
+                            'TIMESYNC (for AP_CoopBridge, COOP_FIX_TIME 1)')
+    mocap.add_argument('--mocap-latency-ms', type=float, metavar='MS',
+                       help='fixed Motive latency (default: measured from the frame stamps, 5 ms until then)')
+    mocap.add_argument('--no-mocap-truth', action='store_true',
+                       help='no ground-truth CSV of every Motive frame in the session log folder')
     mocap.add_argument('--mocap-max-queue', type=int, default=2, metavar='CHUNKS',
                        help='skip a pose while the vehicle\'s uplink queue holds more chunks (default 2)')
     args = ap.parse_args(argv)

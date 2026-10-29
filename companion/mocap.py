@@ -15,11 +15,26 @@ vehicle whose heartbeat carries the mapped system id.
 The radio uplink sends one frame per poll, so a pose never waits behind a
 backlog: it is skipped while the vehicle's uplink queue holds more than
 `max_queue` chunks, and poses are thinned to `rate_hz` per body.
+
+Timing (docs/plans/p5_global_fix_plan.md 3.5 in the thesis repository). Each pose is
+stamped at its capture: the NatNet arrival minus Motive's own latency (camera
+mid-exposure to transmit, from the frame suffix; its tick rate is estimated against
+the hub clock) or a fixed `latency_ms`. In `time_mode='hub'` time_usec is that capture
+in the hub's monotonic clock (ArduPilot's stock jitter correction absorbs the offset);
+in `time_mode='fc'` it is mapped into each vehicle's micros64() with TIMESYNC
+(clocksync.ClockSync), which AP_CoopBridge uses as the capture time (COOP_FIX_TIME 1).
+A vehicle gets no poses until its clock fit is ready.
+
+Every Motive frame (all rigid bodies, full rate) can also go to a CSV ground-truth log,
+independent of what is sent.
 """
 
+import csv
 import math
 import threading
 import time
+
+import clocksync
 
 from pymavlink.dialects.v20 import ardupilotmega as mav
 
@@ -38,6 +53,13 @@ MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY = 197
 
 # A body that has not produced a valid pose for this long is reported lost.
 TRACKING_LOST_S = 0.5
+
+# Motive latency assumed until the frame suffix's tick rate is known (or without it).
+DEFAULT_LATENCY_MS = 5.0
+# Hub-clock span over which the suffix tick rate is estimated before it is used.
+TICK_RATE_SPAN_S = 2.0
+# TIMESYNC requests per second per vehicle.
+SYNC_HZ = 2.0
 
 # Tolerance on the rate-limit grid for frame arrival jitter.
 RATE_SLACK_S = 0.001
@@ -106,6 +128,69 @@ def body_map(pairs):
     return bodies
 
 
+class LatencyEstimator:
+    """Motive's latency (camera mid-exposure to transmit) of each frame, in seconds.
+
+    NatNet 3+ frames carry both stamps in the server's high-resolution ticks; the `natnet`
+    package does not decode the tick rate from the server description, so it is estimated
+    from the transmit stamps against the hub's clock over at least TICK_RATE_SPAN_S. Until
+    then, or without the stamps, the fixed latency is used; a given `fixed_ms` always wins.
+    """
+
+    def __init__(self, fixed_ms=None):
+        self.fixed_ms = fixed_ms
+        self.tick_hz = None
+        self._first = None    # (hub s, transmit ticks)
+        self.last_s = None
+
+    def latency_s(self, data_frame, now):
+        if self.fixed_ms is not None:
+            self.last_s = self.fixed_ms / 1e3
+            return self.last_s
+        suffix = getattr(data_frame, 'suffix', None)
+        mid = getattr(suffix, 'stamp_camera_mid_exposure', None)
+        transmit = getattr(suffix, 'stamp_transmit', None)
+        latency = DEFAULT_LATENCY_MS / 1e3
+        if isinstance(mid, int) and isinstance(transmit, int) and transmit > 0:
+            if self._first is None or transmit < self._first[1]:
+                self._first = (now, transmit)
+            elif now - self._first[0] >= TICK_RATE_SPAN_S:
+                self.tick_hz = (transmit - self._first[1]) / (now - self._first[0])
+            if self.tick_hz:
+                measured = (transmit - mid) / self.tick_hz
+                if 0.0 <= measured < 0.2:
+                    latency = measured
+        self.last_s = latency
+        return latency
+
+
+class TruthLog:
+    """CSV of every rigid body in every Motive frame (raw Motive frame and NED)."""
+
+    COLUMNS = ('hub_s', 'capture_hub_s', 'frame', 'motive_s', 'latency_ms', 'rigid_body', 'sysid',
+               'tracked', 'marker_error_m', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw',
+               'north', 'east', 'down', 'qw_ned', 'qx_ned', 'qy_ned', 'qz_ned', 'capture_fc_us')
+
+    def __init__(self, path):
+        self.path = path
+        self._file = open(path, 'x', newline='')
+        self._writer = csv.writer(self._file)
+        self._writer.writerow(self.COLUMNS)
+        self._last_flush = 0.0
+        self.rows = 0
+
+    def write(self, row, now):
+        self._writer.writerow(row)
+        self.rows += 1
+        if now - self._last_flush > 1.0:
+            self._file.flush()
+            self._last_flush = now
+
+    def close(self):
+        if not self._file.closed:
+            self._file.close()
+
+
 class BodyStats:
     def __init__(self, body, sysid):
         self.body = body
@@ -116,6 +201,7 @@ class BodyStats:
         self.thinned = 0         # skipped by the rate limit
         self.backlog = 0         # skipped because the uplink queue was busy
         self.no_vehicle = 0      # system id not heard (or heard on two links)
+        self.unsynced = 0        # time_mode 'fc' and the vehicle's clock fit is not ready yet
         self.last_valid = None   # monotonic time of the last valid pose
         self.last_sent = None
         self.next_due = None     # rate limit: send when a frame reaches this time
@@ -126,7 +212,7 @@ class BodyStats:
 
     def counters(self):
         return dict(frames=self.frames, sent=self.sent, untracked=self.untracked, thinned=self.thinned,
-                    backlog=self.backlog, no_vehicle=self.no_vehicle)
+                    backlog=self.backlog, no_vehicle=self.no_vehicle, unsynced=self.unsynced)
 
 
 class MocapForwarder:
@@ -138,7 +224,15 @@ class MocapForwarder:
 
     def __init__(self, hub, bodies, frame='y-up', rate_hz=30.0, max_queue=2,
                  server='127.0.0.1', local='127.0.0.1', multicast=True,
-                 component=MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY, client_factory=None):
+                 component=MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY, client_factory=None,
+                 time_mode='hub', latency_ms=None, truth_path=None):
+        if time_mode not in ('hub', 'fc'):
+            raise ValueError(f'unknown mocap time mode {time_mode!r}')
+        self.time_mode = time_mode
+        self.latency = LatencyEstimator(latency_ms)
+        self.truth = TruthLog(truth_path) if truth_path is not None else None
+        self.clocks = {sysid: clocksync.ClockSync(sysid) for sysid in bodies.values()}
+        self._last_sync = None
         self.hub = hub
         self.bodies = dict(bodies)
         self.converter = PoseConverter(frame)
@@ -188,6 +282,35 @@ class MocapForwarder:
                 client.shutdown()
             except Exception:  # noqa: BLE001
                 pass
+        if self.truth is not None:
+            with self._lock:
+                self.truth.close()
+
+    # ------------------------------------------------------------- TIMESYNC
+
+    def tick(self, now=None):
+        """Hub monitor: send due TIMESYNC requests, straight to each mapped vehicle."""
+        now = time.monotonic() if now is None else now
+        if self._last_sync is not None and now - self._last_sync < 1.0 / SYNC_HZ:
+            return
+        self._last_sync = now
+        for sysid, clock in self.clocks.items():
+            vehicle = self.hub.vehicle_for_sysid(sysid)
+            if vehicle is None:
+                continue
+            message = mav.MAVLink_timesync_message(0, clock.request())
+            self.hub.send_to_vehicle(vehicle, message.pack(self._encoders[sysid]))
+
+    def on_downlink(self, vehicle, frame):
+        """Radio thread: take a TIMESYNC answer from a mapped vehicle."""
+        fields = clocksync.timesync_fields(frame)
+        if fields is None:
+            return False
+        sysid, _, tc1, ts1 = fields
+        clock = self.clocks.get(sysid)
+        if clock is None or tc1 == 0 or sysid != vehicle.sysid:
+            return False
+        return clock.reply(tc1, ts1)
 
     # ------------------------------------------------------------- frames
 
@@ -203,15 +326,36 @@ class MocapForwarder:
     def _on_frame(self, data_frame, now):
         self.frames += 1
         self.last_frame = now
-        stamp_us = int(now * 1e6)
+        capture = now - self.latency.latency_s(data_frame, now)
+        capture_us = int(round(capture * 1e6))
         for rb in data_frame.rigid_bodies:
             stats = self.stats.get(rb.id_num)
-            if stats is None:
-                continue
             with self._lock:
-                self._forward(rb, stats, now, stamp_us)
+                if self.truth is not None:
+                    self._log_truth(data_frame, rb, stats, now, capture, capture_us)
+                if stats is not None:
+                    self._forward(rb, stats, now, capture_us)
 
-    def _forward(self, rb, stats, now, stamp_us):
+    def _log_truth(self, data_frame, rb, stats, now, capture, capture_us):
+        prefix = getattr(data_frame, 'prefix', None)
+        suffix = getattr(data_frame, 'suffix', None)
+        x, y, z = rb.pos
+        qx, qy, qz, qw = rb.rot
+        try:
+            ned = self.converter.position(rb.pos)
+            q = self.converter.quaternion(rb.rot)
+        except ValueError:
+            ned, q = (math.nan,) * 3, [math.nan] * 4
+        fc_us = None
+        if stats is not None:
+            fc_us = self.clocks[stats.sysid].to_fc_us(capture_us)
+        self.truth.write((f'{now:.6f}', f'{capture:.6f}', getattr(prefix, 'frame_number', ''),
+                          getattr(suffix, 'timestamp', ''), f'{(now - capture) * 1e3:.3f}', rb.id_num,
+                          stats.sysid if stats is not None else '', int(rb.tracking_valid is not False),
+                          getattr(rb, 'marker_error', ''), x, y, z, qx, qy, qz, qw, *ned, *q,
+                          '' if fc_us is None else fc_us), now)
+
+    def _forward(self, rb, stats, now, capture_us):
         stats.frames += 1
         # tracking_valid is None on NatNet streams older than 2.6.
         if rb.tracking_valid is False:
@@ -231,6 +375,13 @@ class MocapForwarder:
         if vehicle.pending_status()['chunks'] > self.max_queue:
             stats.backlog += 1
             return
+        if self.time_mode == 'fc':
+            stamp_us = self.clocks[stats.sysid].to_fc_us(capture_us)
+            if stamp_us is None:
+                stats.unsynced += 1
+                return
+        else:
+            stamp_us = capture_us
         north, east, down = self.converter.position(rb.pos)
         q = self.converter.quaternion(rb.rot)
         # covariance[0] = NaN: "unknown", so ArduPilot uses VISO_POS_M_NSE / VISO_YAW_M_NSE.
@@ -266,8 +417,12 @@ class MocapForwarder:
 
     def summary(self):
         with self._lock:
-            return dict(frames=self.frames, errors=self.errors,
-                        bodies={s.body: dict(sysid=s.sysid, **s.counters()) for s in self.stats.values()})
+            return dict(frames=self.frames, errors=self.errors, time_mode=self.time_mode,
+                        latency_ms=None if self.latency.last_s is None else self.latency.last_s * 1e3,
+                        tick_hz=self.latency.tick_hz,
+                        truth_rows=self.truth.rows if self.truth is not None else None,
+                        bodies={s.body: dict(sysid=s.sysid, **s.counters()) for s in self.stats.values()},
+                        timesync={sysid: c.status() for sysid, c in self.clocks.items()})
 
     def status_lines(self, now=None):
         now = time.monotonic() if now is None else now
@@ -275,6 +430,11 @@ class MocapForwarder:
         lines = [f'mocap {self.server} ({self.converter.frame}, <= {1 / self.min_interval:.0f} Hz per body)'
                  if self.min_interval else f'mocap {self.server} ({self.converter.frame}, every frame)']
         lines[0] += f': last frame {age}, {self.frames} frames'
+        latency = self.latency
+        if latency.last_s is not None:
+            source = ('fixed' if latency.fixed_ms is not None
+                      else 'measured' if latency.tick_hz else 'assumed')
+            lines[0] += f', latency {latency.last_s * 1e3:.1f} ms ({source}), time {self.time_mode}'
         with self._lock:
             for s in self.stats.values():
                 sent, then = s.previous
@@ -290,7 +450,15 @@ class MocapForwarder:
                 if s.last_ned is not None:
                     pose = ' NED ({:+.2f}, {:+.2f}, {:+.2f}) m'.format(*s.last_ned)
                 drops = ', '.join(f'{k} {v}' for k, v in s.counters().items()
-                                  if k in ('untracked', 'backlog', 'no_vehicle') and v)
+                                  if k in ('untracked', 'backlog', 'no_vehicle', 'unsynced') and v)
                 lines.append(f'    body {s.body} -> sys{s.sysid}: {state}, sent {s.sent}{rate}{pose}'
                              + (f' (skipped: {drops})' if drops else ''))
+                sync = self.clocks[s.sysid].status()
+                if sync.get('envelope'):
+                    lines.append(f'        timesync: rtt min {sync["rtt_min_ms"]:.1f} ms, fit residual '
+                                 f'{sync["residual_ms"]:.2f} ms, drift {sync["drift_ppm"]:+.0f} ppm, '
+                                 f'{sync["envelope"]} of {sync["replies"]} replies'
+                                 + ('' if sync['ready'] else ' (not ready)'))
+                else:
+                    lines.append(f'        timesync: {sync["replies"]} replies to {sync["requests"]} requests')
         return lines
