@@ -4129,6 +4129,16 @@ void GCS_MAVLINK::handle_att_pos_mocap(const mavlink_message_t &msg)
     mavlink_att_pos_mocap_t m;
     mavlink_msg_att_pos_mocap_decode(&msg, &m);
 
+#if AP_COOPBRIDGE_ENABLED
+    // COOP_FIX_SRC = 1: the pose is a global fix for the cooperative estimator on the
+    // companion, not an ExternalNav input (which then carries only the companion's ODOMETRY)
+    AP_CoopBridge *bridge = AP::coopbridge();
+    if (bridge != nullptr && bridge->takes_mocap()) {
+        bridge->push_mocap(m, AP_HAL::micros64());
+        return;
+    }
+#endif
+
     // correct offboard timestamp to be in local ms since boot
     uint32_t timestamp_ms = correct_offboard_timestamp_usec_to_ms(m.time_usec, PAYLOAD_SIZE(chan, ATT_POS_MOCAP));
    
