@@ -1,5 +1,6 @@
 # Crazyflie brushless Gazebo model with ArduCopter SITL.
-# Vehicle-specific SYSID and CEN_* values are set by the Python orchestrator.
+# Airframe and tuning only; sensor sources, scripting and swarm settings come from
+# the profiles in gazebo_swarm/params (see gazebo_swarm/README.md).
 
 FRAME_CLASS 1
 FRAME_TYPE 1
