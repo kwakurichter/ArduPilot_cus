@@ -1,0 +1,22 @@
+# Settings shared by every vehicle of the swarm simulation, for both physics backends.
+# Loaded after Tools/autotest/default_params/copter.parm and, with Gazebo, after
+# ../crazyflie_sitl_gazebo.parm (airframe and tuning).
+
+# EKF3 on simulated sensors, never the perfect SITL state estimator.
+AHRS_EKF_TYPE 3
+EK2_ENABLE 0
+EK3_ENABLE 1
+
+# The swarm mission runs onboard.
+SCR_ENABLE 1
+SCR_HEAP_SIZE 150000
+
+# The orchestrator only watches; it is not a GCS the vehicles depend on.
+FS_GCS_ENABLE 0
+FS_THR_ENABLE 0
+BATT_MONITOR 0
+
+LOG_DISARMED 1
+# copter.parm maps RC7 to SaveWaypoint; nothing here uses RC
+RC7_OPTION 0
+LOG_FILE_DSRMROT 0

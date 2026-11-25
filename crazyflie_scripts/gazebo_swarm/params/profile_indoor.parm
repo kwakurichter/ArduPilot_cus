@@ -1,0 +1,27 @@
+# GPS-denied EKF3 sources, as with the Crazyflie Flow Deck: optical flow for
+# horizontal velocity, downward rangefinder for height, compass for yaw. There is
+# no absolute horizontal position; the mission script sets each vehicle's EKF
+# origin from its known pad so the AP_SwarmMesh peer positions share one frame.
+GPS1_TYPE 0
+SIM_GPS1_ENABLE 0
+COMPASS_ENABLE 1
+COMPASS_USE 1
+EK3_SRC1_POSXY 0
+EK3_SRC1_VELXY 5
+EK3_SRC1_POSZ 2
+EK3_SRC1_VELZ 0
+EK3_SRC1_YAW 1
+EK3_SRC_OPTIONS 0
+
+# SITL optical flow and rangefinder. With Gazebo the range comes from the model's
+# downward gpu_lidar (the launcher adds it); the JSON backend has no other source.
+FLOW_TYPE 10
+SIM_FLOW_ENABLE 1
+SIM_FLOW_RATE 10
+SIM_FLOW_RND 0.05
+RNGFND1_TYPE 100
+RNGFND1_MIN 0.01
+RNGFND1_MAX 4.00
+RNGFND1_GNDCLR 0.01
+RNGFND1_ORIENT 25
+SIM_SONAR_RND 0

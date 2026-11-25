@@ -1,0 +1,11 @@
+# AP_SwarmMesh over the SITL UDP multicast group (one swarm per host).
+# The launcher adds P2P_SWARM_SIZE per vehicle.
+P2P_TYPE 10
+P2P_DESTID 0
+P2P_TTL 1
+P2P_SR_POSITION 10
+P2P_SR_EXT_STAT 2
+P2P_SR_EXTRA1 0
+P2P_PRUNE_SECS 0
+# no peer snapshots on disk in SITL
+P2P_SAVE_HZ 0

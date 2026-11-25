@@ -1,0 +1,6 @@
+# --physics sitl with --profile indoor only. SITL's built-in quad puts the
+# rangefinder at the ground, reading 0 m (below RNGFND1_MIN), so EKF3 never gets a
+# valid ground distance and declares no relative position. Mount it 2 cm up, as
+# the Gazebo model's ToF is.
+SIM_SONAR_POS_Z -0.02
+RNGFND1_GNDCLR 0.02

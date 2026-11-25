@@ -1,0 +1,13 @@
+# EKF3 sources: simulated GPS for position and velocity, barometer for height,
+# compass for yaw. Every vehicle's position is in one global frame, so the
+# AP_SwarmMesh peer positions agree without further alignment.
+GPS1_TYPE 1
+SIM_GPS1_ENABLE 1
+SIM_GPS1_TYPE 1
+COMPASS_ENABLE 1
+COMPASS_USE 1
+EK3_SRC1_POSXY 3
+EK3_SRC1_VELXY 3
+EK3_SRC1_POSZ 1
+EK3_SRC1_VELZ 3
+EK3_SRC1_YAW 1
