@@ -276,6 +276,13 @@ void AP_SwarmMesh_Backend::process_packet()
         return;
     }
 
+    // Our own packets come back to us: SITL multicast loops them back to the sender, and
+    // on a radio mesh a neighbour relays them. They are not from a peer, and relaying them
+    // again would only feed the loop. Not counted, as every packet echoes in SITL.
+    if (hdr->origin_id == frontend_sysid()) {
+        return;
+    }
+
     AP_SwarmMesh::PeerState *ps = frontend_peerstate(hdr->origin_id);
     if (ps == nullptr) {
         _dropped++;
