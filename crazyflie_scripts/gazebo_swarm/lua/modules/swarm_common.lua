@@ -1,43 +1,63 @@
 --[[
-   swarm_mission.lua: synchronized swarm hover for the Crazyflie swarm simulation.
+   swarm_common.lua: everything a swarm mission script shares in the Crazyflie swarm
+   simulation, so a mission only has to say where the vehicle should be.
 
-   Every vehicle runs this script. Per-vehicle data (index, pads, world origin,
-   altitude lanes, timing) comes from scripts/modules/swarm_site.lua, which the
-   launcher (run_swarm.py) generates for each vehicle. Other vehicles are seen only
-   through AP_SwarmMesh: swarm:get_peer_location(sysid).
+   A mission script is
 
-   Sequence:
+      local swarm_common = require("swarm_common")
+      return swarm_common.run({
+         name = "hover",
+         reference = function(ctx, now)
+            -- where this vehicle should be now (world north/east, m) and how fast
+            -- that point moves (m/s); return nil to hold position
+            return ctx.site.pad_n, ctx.site.pad_e, 0, 0
+         end,
+      })
+
+   run() owns the rest of the flight:
      SITE      indoor profile only: set the EKF origin to this vehicle's pad in the
-               shared world frame, so every vehicle's position (and what SwarmMesh
+               shared world frame, so every vehicle's position (and what AP_SwarmMesh
                broadcasts) is in one frame
      WAIT      wait for a position, every peer on the mesh, GUIDED (selected while
                disarmed; Copter refuses it without a usable position) and the
                pre-arm checks
      READY     all of that held for READY_HOLD_MS; wait for CFSW_START
-     TAKEOFF   at CFSW_START (this vehicle's own millis()): GUIDED, arm, take off
-               to this vehicle's altitude lane
-     HOVER     hold the pad position (velocity control in the world frame, with a
-               simple separation guard against peers) until the common end time
+     TAKEOFF   at CFSW_START (this vehicle's own millis()): GUIDED, arm, take off to
+               this vehicle's altitude lane
+     FLY       track the mission's reference in the world frame, in the altitude
+               lane, with a simple separation guard against peers, until the common
+               end time; the mission's own clock starts at ctx.t0 for every vehicle
      LAND      LAND until disarmed
      DONE / ABORT
 
    CFSW_START is a time in this vehicle's own boot clock (ms). The orchestrator
-   measures each vehicle's clock with MAVLink TIMESYNC and sets CFSW_START on every
-   vehicle so they all start at the same instant. The end of the hover is
-   CFSW_START + climb_s + duration, so the landing is synchronized too.
+   (run_swarm.py) measures each vehicle's clock with MAVLink TIMESYNC and sets
+   CFSW_START on every vehicle so they all start at the same instant. Then
+   ctx.t0 = CFSW_START + climb_s and the landing is at ctx.t0 + duration, the same
+   instants on every vehicle.
 
-   Status for the orchestrator (NAMED_VALUE_FLOAT): SWSTATE (state number below),
-   SWPEERS (peers with a fresh position) and, once airborne, SWTKO (millis() at arming).
+   The context passed to reference():
+     ctx.site       this vehicle's swarm_site.lua (index, sysid, pads, timing, ...)
+     ctx.t0         common mission start, ms in this vehicle's clock
+     ctx.peers      sysid -> {n, e, vn, ve} for every peer AP_SwarmMesh has a fresh
+                    position for (world frame; vn/ve nil without a fresh velocity)
+     ctx.land(now, why)  end the mission early
 
-   Parameters (created by this script):
+   Status for the orchestrator (NAMED_VALUE_FLOAT): SWSTATE (state number above),
+   SWPEERS (peers with a fresh position), SWTKO (millis() at arming) and, in FLY,
+   SWERR (horizontal distance to the reference, m).
+
+   Parameters (created here):
      CFSW_START   synchronized start time, ms since boot (0 = not set)
      CFSW_SPEED   maximum horizontal speed, m/s
      CFSW_KP      horizontal position gain, 1/s
      CFSW_AVOID   separation guard radius, m
      CFSW_PUSH    maximum guard velocity, m/s
      CFSW_TOL     altitude tolerance for the end of the climb, m
-     CFSW_VZMAX   maximum vertical speed while hovering, m/s
+     CFSW_VZMAX   maximum vertical speed in FLY, m/s
 --]]
+
+local M = {}
 
 local site = require("swarm_site")
 
@@ -49,7 +69,7 @@ local READY_HOLD_MS = 2000
 local READY_DROP_MS = 1000     -- READY is lost only after this long not ready
 local START_GRACE_MS = 1000    -- keep trying to take off this long after the start
 local START_RETRY_MS = 20
-local WAIT_REPORT_MS = 3000     -- rate limit for the waiting reason
+local WAIT_REPORT_MS = 3000    -- rate limit for the waiting reason
 local LATE_START_MS = 500      -- a start this far in the past is refused
 local PEERS_HOLD_MS = 3000     -- no peer heard this long: hold position
 local PEERS_LAND_MS = 10000    -- no peer heard this long: land
@@ -60,8 +80,8 @@ local SEV_ERROR = 3
 local SEV_WARN = 4
 local SEV_INFO = 6
 
-local S_SITE, S_WAIT, S_READY, S_TAKEOFF, S_HOVER, S_LAND, S_DONE, S_ABORT = 0, 1, 2, 3, 4, 5, 6, 7
-local STATE_NAMES = {[0] = "SITE", "WAIT", "READY", "TAKEOFF", "HOVER", "LAND", "DONE", "ABORT"}
+local S_SITE, S_WAIT, S_READY, S_TAKEOFF, S_FLY, S_LAND, S_DONE, S_ABORT = 0, 1, 2, 3, 4, 5, 6, 7
+local STATE_NAMES = {[0] = "SITE", "WAIT", "READY", "TAKEOFF", "FLY", "LAND", "DONE", "ABORT"}
 
 -- key 82 = TKO_, 83 = SQR_ (crazyflie_scripts); 85 is free
 local PARAM_TABLE_KEY = 85
@@ -101,7 +121,7 @@ end
 local ORIGIN = world_origin()
 local LANE_ALT = lane_altitude(site.index, site.count)
 local CLIMB_MS = math.floor(site.climb_s * 1000)
-local HOVER_MS = math.floor(site.duration * 1000)
+local FLY_MS = math.floor(site.duration * 1000)
 
 -- world north/east (m) of a location
 local function world_ne(loc)
@@ -119,8 +139,9 @@ end
 
 -- ------------------------------------------------------------------ state
 
+local mission = nil
+local ctx = {site = site, peers = {}, t0 = nil}
 local state = S_SITE
-local state_since = 0
 local ready_since = nil
 local not_ready_since = nil
 local start_ms = nil
@@ -134,12 +155,11 @@ local last_wait_reason = nil
 local last_wait_report = -100000
 local last_peer_ms = nil
 local guard_n, guard_e = 0, 0
-local peers = {}       -- sysid -> {n, e}
 local fresh_peers = 0
+local tracking_error = nil
 
-local function enter(new_state, now, why)
+local function enter(new_state, why)
    state = new_state
-   state_since = now
    local text = string.format("swarm: %s", STATE_NAMES[new_state])
    if why then
       text = text .. " (" .. why .. ")"
@@ -151,11 +171,19 @@ local function enter(new_state, now, why)
    gcs:send_text(severity, text)
 end
 
-local function abort(now, why)
+local function abort(why)
    if arming:is_armed() then
       vehicle:set_mode(MODE_LAND)
    end
-   enter(S_ABORT, now, why)
+   enter(S_ABORT, why)
+end
+
+-- ctx.land(): a mission ends its flight early
+function ctx.land(_, why)
+   if state == S_TAKEOFF or state == S_FLY then
+      gcs:send_text(SEV_WARN, "swarm: landing: " .. tostring(why))
+      enter(S_LAND, why)
+   end
 end
 
 local function update_peers(now)
@@ -165,10 +193,15 @@ local function update_peers(now)
          local loc = swarm:get_peer_location(sysid)
          if loc then
             local n, e = world_ne(loc)
-            peers[sysid] = {n = n, e = e}
+            local peer = {n = n, e = e}
+            local vel = swarm:get_peer_velocity_NED(sysid)
+            if vel then
+               peer.vn, peer.ve = vel:x(), vel:y()
+            end
+            ctx.peers[sysid] = peer
             fresh_peers = fresh_peers + 1
          else
-            peers[sysid] = nil
+            ctx.peers[sysid] = nil
          end
       end
    end
@@ -187,6 +220,9 @@ local function report(now)
    if tko_ms then
       gcs:send_named_float("SWTKO", tko_ms)
    end
+   if state == S_FLY and tracking_error then
+      gcs:send_named_float("SWERR", tracking_error)
+   end
 end
 
 local function altitude()
@@ -197,11 +233,11 @@ local function altitude()
    return -d
 end
 
--- ------------------------------------------------------------------ states
+-- ------------------------------------------------------------------ on the ground
 
 local function update_site(now)
    if site.profile ~= "indoor" or ahrs:get_origin() then
-      enter(S_WAIT, now)
+      enter(S_WAIT)
       return
    end
    if now - last_origin_try < 1000 or not ahrs:initialised() then
@@ -215,10 +251,9 @@ local function update_site(now)
    end
 end
 
--- Ready means this vehicle could take off now: a healthy position estimate, every
--- peer on the mesh, GUIDED accepted and the pre-arm checks passing. Copter accepts
--- GUIDED only with a usable position, the same test arming applies in GUIDED, so the
--- mode is selected (disarmed) as part of becoming ready.
+-- Ready means this vehicle could take off now. Copter accepts GUIDED only with a
+-- usable position, the same test arming applies in GUIDED, so the mode is selected
+-- (disarmed) as part of becoming ready.
 local function swarm_ready(now)
    if not ahrs:healthy() then
       return false, "AHRS not healthy"
@@ -251,6 +286,7 @@ local function start_time(now)
    if start_ms ~= t then
       start_ms = t
       start_seen_ms = now
+      ctx.t0 = t + CLIMB_MS
       gcs:send_text(SEV_INFO, string.format("swarm: start at %d ms (in %d ms)", t, t - now))
    end
    return t
@@ -285,7 +321,7 @@ local function update_wait(now)
          ready_since = now
       end
       if state == S_WAIT and now - ready_since >= READY_HOLD_MS then
-         enter(S_READY, now)
+         enter(S_READY)
       end
    else
       ready_since = nil
@@ -294,7 +330,7 @@ local function update_wait(now)
       end
       -- checks such as the EKF's can flicker briefly; only a lasting loss counts
       if state == S_READY and now - not_ready_since >= READY_DROP_MS then
-         enter(S_WAIT, now, "readiness lost: " .. reason)
+         enter(S_WAIT, "readiness lost: " .. reason)
       end
    end
 
@@ -304,7 +340,7 @@ local function update_wait(now)
    end
    if start_seen_ms > t + LATE_START_MS then
       -- the start reached us too late to be synchronized with the others
-      abort(now, string.format("start time %d ms had passed when it arrived", t))
+      abort(string.format("start time %d ms had passed when it arrived", t))
       return TICK_MS
    end
    if now < t then
@@ -312,7 +348,7 @@ local function update_wait(now)
       return math.max(1, math.min(TICK_MS, t - now))
    end
    if state ~= S_READY then
-      abort(now, "not ready at the start time (" .. tostring(reason) .. ")")
+      abort("not ready at the start time (" .. tostring(reason) .. ")")
       return TICK_MS
    end
    local ok, why = false, reason
@@ -320,31 +356,24 @@ local function update_wait(now)
       ok, why = try_takeoff(now)
    end
    if ok then
-      enter(S_TAKEOFF, now, string.format("%.2f m, late %d ms", LANE_ALT, now - start_ms))
+      enter(S_TAKEOFF, string.format("%.2f m, late %d ms", LANE_ALT, now - start_ms))
       return TICK_MS
    end
    if now - t >= START_GRACE_MS then
-      abort(now, "could not take off: " .. tostring(why))
+      abort("could not take off: " .. tostring(why))
       return TICK_MS
    end
    return START_RETRY_MS
 end
 
-local function command_hover(now)
-   local loc = ahrs:get_location()
-   local alt = altitude()
-   if loc == nil or alt == nil then
-      vehicle:set_target_velocity_NED(Vector3f())
-      return
-   end
-   local n, e = world_ne(loc)
+-- ------------------------------------------------------------------ in the air
 
-   -- separation guard: push away from peers inside CFSW_AVOID (horizontal)
+local function separation_guard(n, e)
    local avoid = p_avoid:get()
    local push_n, push_e = 0, 0
    if avoid > 0 then
       local gain = p_push:get() / avoid
-      for _, peer in pairs(peers) do
+      for _, peer in pairs(ctx.peers) do
          local dn, de = n - peer.n, e - peer.e
          local d = math.sqrt(dn * dn + de * de)
          if d < avoid and d > 1e-3 then
@@ -356,14 +385,30 @@ local function command_hover(now)
    end
    guard_n = guard_n + GUARD_FILTER * (push_n - guard_n)
    guard_e = guard_e + GUARD_FILTER * (push_e - guard_e)
+   return guard_n, guard_e
+end
 
-   local vn, ve = 0, 0
-   local lost = last_peer_ms ~= nil and now - last_peer_ms > PEERS_HOLD_MS
-   if not lost then
-      local kp = p_kp:get()
-      vn, ve = saturate(kp * (site.pad_n - n), kp * (site.pad_e - e), p_speed:get())
+local function command_fly(now)
+   local loc = ahrs:get_location()
+   local alt = altitude()
+   if loc == nil or alt == nil then
+      vehicle:set_target_velocity_NED(Vector3f())
+      return
    end
-   vn, ve = vn + guard_n, ve + guard_e
+   local n, e = world_ne(loc)
+
+   -- track the mission's reference: its velocity plus a correction toward it
+   local vn, ve = 0, 0
+   tracking_error = nil
+   local lost = last_peer_ms ~= nil and now - last_peer_ms > PEERS_HOLD_MS
+   local rn, re, rvn, rve = mission.reference(ctx, now)
+   if rn ~= nil and not lost then
+      local kp = p_kp:get()
+      vn, ve = saturate((rvn or 0) + kp * (rn - n), (rve or 0) + kp * (re - e), p_speed:get())
+      tracking_error = math.sqrt((rn - n) ^ 2 + (re - e) ^ 2)
+   end
+   local gn, ge = separation_guard(n, e)
+   vn, ve = vn + gn, ve + ge
 
    local vzmax = p_vzmax:get()
    local vup = math.max(-vzmax, math.min(vzmax, KZ * (LANE_ALT - alt)))
@@ -377,32 +422,30 @@ end
 local function update_flight(now)
    if not arming:is_armed() then
       if state == S_LAND then
-         enter(S_DONE, now)
+         enter(S_DONE)
       else
-         abort(now, "disarmed in flight")
+         abort("disarmed in flight")
       end
       return
    end
-   local end_ms = start_ms + CLIMB_MS + HOVER_MS
    if state ~= S_LAND then
       if last_peer_ms ~= nil and now - last_peer_ms > PEERS_LAND_MS then
-         gcs:send_text(SEV_WARN, "swarm: no peers, landing")
-         enter(S_LAND, now, "peers lost")
-      elseif now >= end_ms then
-         enter(S_LAND, now)
+         ctx.land(now, "peers lost")
+      elseif now >= ctx.t0 + FLY_MS then
+         enter(S_LAND)
       end
    end
    if state == S_TAKEOFF then
       local alt = altitude()
       if alt ~= nil and alt >= LANE_ALT - p_tol:get() then
-         enter(S_HOVER, now, string.format("%.2f m", alt))
-      elseif now - start_ms > CLIMB_MS then
-         gcs:send_text(SEV_WARN, "swarm: climb timed out, landing")
-         enter(S_LAND, now, "climb timeout")
+         enter(S_FLY, string.format("%.2f m", alt))
+      elseif now > ctx.t0 then
+         ctx.land(now, "climb timed out")
       end
-   elseif state == S_HOVER then
-      command_hover(now)
-   elseif state == S_LAND and not land_sent then
+   elseif state == S_FLY then
+      command_fly(now)
+   end
+   if state == S_LAND and not land_sent then
       land_sent = vehicle:set_mode(MODE_LAND)
    end
 end
@@ -412,10 +455,9 @@ end
 local function validate_site()
    assert(site.index ~= nil and site.count ~= nil and site.sysid ~= nil, "swarm_site: identity")
    assert(site.origin_lat_e7 and site.origin_lng_e7 and site.origin_alt_cm, "swarm_site: origin")
-   assert(site.pad_n and site.pad_e, "swarm_site: pad")
+   assert(site.pad_n and site.pad_e and site.pads, "swarm_site: pads")
    assert(site.alt and site.lane_count and site.lane_spacing, "swarm_site: altitudes")
    assert(site.climb_s and site.duration, "swarm_site: timing")
-   assert(site.mission == "hover", "swarm_site: only the hover mission is implemented")
 end
 
 local function update()
@@ -426,7 +468,7 @@ local function update()
       update_site(now)
    elseif state == S_WAIT or state == S_READY then
       delay = update_wait(now)
-   elseif state == S_TAKEOFF or state == S_HOVER or state == S_LAND then
+   elseif state == S_TAKEOFF or state == S_FLY or state == S_LAND then
       update_flight(now)
    end
    report(now)
@@ -450,7 +492,18 @@ local function protected_update()
    return protected_update, delay
 end
 
-validate_site()
-gcs:send_text(SEV_INFO, string.format("swarm: vehicle %d of %d, sysid %d, lane %.2f m",
-   site.index + 1, site.count, site.sysid, LANE_ALT))
-return protected_update, 1000
+-- Start a mission: {name = string, reference = function(ctx, now)}.
+-- Returns the function and delay a script returns to the scheduler.
+function M.run(m)
+   assert(m and m.name and m.reference, "swarm_common.run: mission needs a name and a reference()")
+   mission = m
+   validate_site()
+   assert(site.mission == m.name, string.format("swarm_site is for mission %s, not %s",
+      tostring(site.mission), m.name))
+   -- STATUSTEXT holds 50 characters
+   gcs:send_text(SEV_INFO, string.format("swarm: %s %d/%d, sysid %d, lane %.2f m",
+      m.name, site.index + 1, site.count, site.sysid, LANE_ALT))
+   return protected_update, 1000
+end
+
+return M

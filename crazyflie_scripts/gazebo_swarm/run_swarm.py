@@ -4,7 +4,9 @@
 
 One Gazebo Harmonic world holds every Crazyflie 2.1 Brushless; each vehicle is one
 ArduCopter SITL process (JSON backend, lock-step). The vehicles see each other only
-through AP_SwarmMesh (SITL multicast) and fly lua/swarm_mission.lua onboard.
+through AP_SwarmMesh (SITL multicast) and fly a mission script onboard:
+
+    --mission hover    lua/swarm_hover.lua: every vehicle holds its pad position
 
 The script is the orchestrator: it never arms a vehicle, changes its mode or sends it
 a target. It only
@@ -14,8 +16,9 @@ a target. It only
 2. once every vehicle reports READY, picks one host instant a few seconds ahead and
    sets CFSW_START on each vehicle to that instant in the vehicle's own clock.
 
-Each mission script then arms and takes off when its millis() reaches CFSW_START, and
-lands at CFSW_START + climb + duration, so the swarm takes off and lands together.
+Each mission script then arms and takes off when its millis() reaches CFSW_START, starts
+its mission at CFSW_START + climb and lands at CFSW_START + climb + duration, so the
+swarm takes off, starts and lands together.
 
 ``--physics sitl`` replaces Gazebo with SITL's built-in multicopter (a generic quad, not
 a Crazyflie) to exercise the mesh, the clock sync and the mission script without Gazebo.
@@ -50,7 +53,8 @@ sys.path.insert(0, str(HERE))
 from swarm_clock import ClockSync  # noqa: E402
 
 PARAMS_DIR = HERE / "params"
-MISSION_LUA = HERE / "lua" / "swarm_mission.lua"
+LUA_DIR = HERE / "lua"
+MISSIONS = {"hover": "swarm_hover.lua"}
 AIRFRAME_PARM = AP_ROOT / "crazyflie_scripts" / "crazyflie_sitl_gazebo.parm"
 COPTER_PARM = AP_ROOT / "Tools" / "autotest" / "default_params" / "copter.parm"
 
@@ -67,9 +71,9 @@ SPAWN_Z_M = 0.007
 MIN_LANE_ALT_M = 0.30
 LOCK_PATH = Path(tempfile.gettempdir()) / "crazyflie_swarm_sim.lock"
 
-# swarm_mission.lua states (SWSTATE)
-STATE_NAMES = {0: "SITE", 1: "WAIT", 2: "READY", 3: "TAKEOFF", 4: "HOVER", 5: "LAND", 6: "DONE", 7: "ABORT"}
-S_READY, S_DONE, S_ABORT = 2, 6, 7
+# swarm_common.lua states (SWSTATE)
+STATE_NAMES = {0: "SITE", 1: "WAIT", 2: "READY", 3: "TAKEOFF", 4: "FLY", 5: "LAND", 6: "DONE", 7: "ABORT"}
+S_READY, S_FLY, S_DONE, S_ABORT = 2, 4, 6, 7
 
 TIMESYNC_PERIOD_S = 0.2
 HEARTBEAT_PERIOD_S = 1.0
@@ -152,7 +156,7 @@ def site_lua(index, count, home, pads, profile, args):
         f"  pad_e = {pad_e:.4f},\n"
         f"  pads = {{\n{pad_rows}\n  }},\n"
         f"  profile = \"{profile}\",\n"
-        "  mission = \"hover\",\n"
+        f"  mission = \"{args.mission}\",\n"
         f"  alt = {args.alt:.3f},\n"
         f"  lane_count = {args.lanes},\n"
         f"  lane_spacing = {args.lane_spacing:.3f},\n"
@@ -428,8 +432,10 @@ class Vehicle:
         self.tko_ms = None
         self.start_ms = None
         self.start_confirmed = False
+        self.start_clock = None   # the clock mapping the start was scheduled with
         self.relative_alt = None
         self.max_alt = 0.0
+        self.errors = []      # SWERR while flying the mission, m
         self.armed = False
         self.intervals_requested = False
         self.next_timesync = 0.0
@@ -463,6 +469,8 @@ class Vehicle:
                     self.peers = int(round(message.value))
                 elif name == "SWTKO" and self.tko_ms is None:
                     self.tko_ms = int(round(message.value))
+                elif name == "SWERR" and self.state == S_FLY:
+                    self.errors.append(message.value)
             elif kind == "GLOBAL_POSITION_INT":
                 self.relative_alt = message.relative_alt / 1000.0
                 if self.armed:
@@ -561,7 +569,8 @@ class Orchestrator:
             clock = f"±{sync['residual_ms']:.2f}ms" if sync.get("ready") else f"sync {sync['replies']}"
             alt = f"{v.relative_alt:.2f}m" if v.relative_alt is not None else "-"
             peers = v.peers if v.peers is not None else "-"
-            parts.append(f"{v.sysid}:{v.state_name()} p{peers} {alt} {clock}")
+            error = f" err {v.errors[-1]:.2f}m" if v.state == S_FLY and v.errors else ""
+            parts.append(f"{v.sysid}:{v.state_name()} p{peers} {alt}{error} {clock}")
         self.log(f"t={self.elapsed():6.1f}s [{self.phase}] " + " | ".join(parts))
 
     # -------------------------------------------------------------- phases
@@ -620,7 +629,8 @@ class Orchestrator:
             self.phase = "start"
             host_us = time.monotonic_ns() // 1000 + int(args.lead * 1e6)
             for v in self.vehicles:
-                fc_us = v.clock.to_fc_us(host_us)
+                v.start_clock = v.clock.frozen()
+                fc_us = v.start_clock.to_fc_us(host_us)
                 v.start_ms = int(round(fc_us / 1000.0))
                 v.start_confirmed = False
                 if v.start_ms >= FLOAT_EXACT_MS:
@@ -657,23 +667,31 @@ class Orchestrator:
             self.poll(0.2)
 
     def summary(self):
+        """Per-vehicle results. Takeoff times are mapped to the host clock through the
+        mapping each start was scheduled with, so the spread shows how well the vehicles
+        acted on one instant (clock fit error + script scheduling), not later fit drift."""
         vehicles = []
         tko_host = []
-        start_host = []
         for v in self.vehicles:
-            entry = dict(sysid=v.sysid, final_state=v.state_name(), clock=v.clock.status(),
+            sync = v.start_clock.status() if v.start_clock else v.clock.status()
+            entry = dict(sysid=v.sysid, final_state=v.state_name(), clock_at_start=sync,
                          start_ms=v.start_ms, takeoff_ms=v.tko_ms, max_alt_m=round(v.max_alt, 3))
-            if v.tko_ms is not None and v.start_ms is not None:
+            if v.errors:
+                # skip the first 2 s of FLY: the climb overshoot settles there
+                settled = v.errors[4:] or v.errors
+                entry["tracking_error_m"] = dict(mean=round(sum(settled) / len(settled), 3),
+                                                 max=round(max(settled), 3), samples=len(settled))
+            if v.tko_ms is not None and v.start_clock is not None:
                 entry["takeoff_late_ms"] = v.tko_ms - v.start_ms
-                host = v.clock.to_host_us(v.tko_ms * 1000)
+                host = v.start_clock.to_host_us(v.tko_ms * 1000)
                 tko_host.append(host)
                 entry["takeoff_host_us"] = host
-            if v.start_ms is not None:
-                start_host.append(v.clock.to_host_us(v.start_ms * 1000))
             vehicles.append(entry)
         result = dict(vehicles=vehicles, all_done=all(v.state == S_DONE for v in self.vehicles))
-        if len(start_host) == len(self.vehicles) and len(start_host) > 1:
-            result["start_spread_ms"] = round((max(start_host) - min(start_host)) / 1000.0, 3)
+        if self.start_host_us is not None:
+            result["start_host_us"] = self.start_host_us
+            residuals = [v.start_clock.status()["residual_ms"] for v in self.vehicles if v.start_clock]
+            result["clock_residual_ms_max"] = round(max(residuals), 3)
         if len(tko_host) == len(self.vehicles) and len(tko_host) > 1:
             result["takeoff_spread_ms"] = round((max(tko_host) - min(tko_host)) / 1000.0, 3)
         return result
@@ -721,11 +739,13 @@ def parse_args(argv=None):
                         help="gazebo: Crazyflie model in Gazebo (default); sitl: SITL's generic quad, no Gazebo")
     parser.add_argument("--profile", choices=("gps", "indoor"), default="gps",
                         help="EKF3 sensor profile (default gps)")
-    parser.add_argument("--alt", type=float, default=1.0, help="centre hover altitude, m (default 1.0)")
+    parser.add_argument("--mission", choices=sorted(MISSIONS), default="hover",
+                        help="hover: hold the pads (default)")
+    parser.add_argument("--alt", type=float, default=1.0, help="centre altitude, m (default 1.0)")
     parser.add_argument("--lanes", type=int, default=4, help="altitude lanes (default 4)")
     parser.add_argument("--lane-spacing", type=float, default=0.25, help="altitude lane spacing, m (default 0.25)")
     parser.add_argument("--climb", type=float, default=10.0, help="time allowed for the climb, s (default 10)")
-    parser.add_argument("--duration", type=float, default=20.0, help="hover time after the climb, s (default 20)")
+    parser.add_argument("--duration", type=float, default=20.0, help="mission time after the climb, s (default 20)")
     parser.add_argument("--lead", type=float, default=5.0, help="start this far after scheduling, s (default 5)")
     parser.add_argument("--home", default=",".join(str(v) for v in DEFAULT_HOME),
                         help="world origin LAT,LON,ALT_M; write --home=LAT,... when LAT is negative (default CMAC)")
@@ -807,7 +827,9 @@ def prepare(args, log):
     for index in range(0 if args.world_only else args.count):
         agent_dir = run_dir / f"agent_{index}"
         (agent_dir / "scripts" / "modules").mkdir(parents=True)
-        shutil.copy2(MISSION_LUA, agent_dir / "scripts" / MISSION_LUA.name)
+        shutil.copy2(LUA_DIR / MISSIONS[args.mission], agent_dir / "scripts" / MISSIONS[args.mission])
+        for module in sorted((LUA_DIR / "modules").glob("*.lua")):
+            shutil.copy2(module, agent_dir / "scripts" / "modules" / module.name)
         (agent_dir / "scripts" / "modules" / "swarm_site.lua").write_text(
             site_lua(index, args.count, args.home, pads, args.profile, args))
         agent_parm = agent_dir / "agent.parm"
@@ -827,7 +849,7 @@ def prepare(args, log):
                 home=list(args.home), world=str(world_path) if world_path else None,
                 gazebo_commands=gz_commands, gazebo_partition=env["GZ_PARTITION"] if env else None,
                 parameter_files=[str(p) for p in defaults], vehicles=vehicles,
-                mission=dict(name="hover", alt=args.alt, lanes=args.lanes, lane_spacing=args.lane_spacing,
+                mission=dict(name=args.mission, alt=args.alt, lanes=args.lanes, lane_spacing=args.lane_spacing,
                              climb_s=args.climb, duration_s=args.duration, lead_s=args.lead))
     (run_dir / "launch.json").write_text(json.dumps(plan, indent=2) + "\n")
     return plan, env
@@ -897,13 +919,15 @@ def main(argv=None):
         summary["run_dir"] = str(run_dir)
         (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         log(f"summary: {run_dir / 'summary.json'}")
-        if "start_spread_ms" in summary:
-            log(f"scheduled start spread {summary['start_spread_ms']:.2f} ms, takeoff spread "
-                f"{summary.get('takeoff_spread_ms', float('nan')):.2f} ms (host clock)")
+        if "takeoff_spread_ms" in summary:
+            log(f"takeoff spread {summary['takeoff_spread_ms']:.2f} ms (host clock), clock fit residual "
+                f"at scheduling up to {summary['clock_residual_ms_max']:.2f} ms")
         for entry in summary["vehicles"]:
             late = entry.get("takeoff_late_ms")
+            error = entry.get("tracking_error_m")
             log(f"vehicle {entry['sysid']}: {entry['final_state']}, max alt {entry['max_alt_m']:.2f} m"
-                + (f", armed {late} ms after its start time" if late is not None else ""))
+                + (f", armed {late} ms after its start time" if late is not None else "")
+                + (f", tracking error mean {error['mean']:.2f} m max {error['max']:.2f} m" if error else ""))
         return 0 if summary.get("all_done") and "error" not in summary else 1
     except KeyboardInterrupt:
         log("interrupted")

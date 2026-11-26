@@ -3,8 +3,12 @@
 A swarm of Crazyflie 2.1 Brushless vehicles in one Gazebo Harmonic world. Each vehicle is
 its own ArduCopter SITL process (JSON backend, lock-step with Gazebo). The vehicles see
 each other only through **AP_SwarmMesh**, using the SITL multicast backend (`P2P_TYPE 10`).
-Each flies **`lua/swarm_mission.lua`** onboard: a synchronized takeoff, a hover in its own
-altitude lane over its pad, and a synchronized landing.
+Each flies a mission script onboard, with a synchronized takeoff into its own altitude
+lane and a synchronized landing:
+
+| `--mission` | Script | What it shows |
+|---|---|---|
+| `hover` (default) | `lua/swarm_hover.lua` | the synchronized swarm lifecycle: every vehicle holds its pad |
 
 `run_swarm.py` generates the world and starts every process. It acts as the
 orchestrator, but it never arms a vehicle, changes its mode or sends it a target.
@@ -20,7 +24,8 @@ It only synchronizes the start, using standard ArduPilot machinery:
    instant expressed in that vehicle's clock, and confirms each value from the
    `PARAM_VALUE` echo.
 3. **Onboard Lua.** Each script arms and takes off when its `millis()` reaches
-   `CFSW_START`. It lands at `CFSW_START + --climb + --duration`.
+   `CFSW_START`. It starts its mission at `t0 = CFSW_START + --climb` and lands at
+   `t0 + --duration`, the same instants on every vehicle.
 
 A vehicle is READY when it has a healthy position, all of its peers are fresh on the mesh,
 it is in GUIDED (selected while disarmed; Copter refuses GUIDED without a usable position)
@@ -64,16 +69,58 @@ crazyflie_scripts/gazebo_swarm/run_swarm.py --count 8 --layout circle --dry-run
 ```
 
 The orchestrator prints one status line every 2 s, showing each vehicle's state, peers,
-altitude and clock-fit residual, along with every STATUSTEXT. It exits 0 when every
-vehicle has landed. It writes `launch.json` and `summary.json` to the run directory
-(default: a new temporary directory, or `--run-dir`). `summary.json` holds the clock
-fits, the start and takeoff spread in host time, and each vehicle's takeoff lateness
-against its own start time. Per-vehicle SITL logs and DataFlash logs are in
-`agent_<i>/`.
+altitude, tracking error and clock-fit residual, along with every STATUSTEXT. It exits 0
+when every vehicle has landed. It writes `launch.json` and `summary.json` to the run
+directory (default: a new temporary directory, or `--run-dir`). `summary.json` holds:
 
-Key options: `--count`, `--layout grid|circle`, `--spacing`, `--radius`, `--profile gps|indoor`,
-`--alt` (centre lane), `--lanes`, `--lane-spacing`, `--climb`, `--duration`, `--lead`,
+- the clock fit each start was scheduled with;
+- the takeoff spread in host time;
+- each vehicle's takeoff lateness against its own start time;
+- each vehicle's tracking error: its distance from the mission's reference, mean and max.
+
+Per-vehicle SITL logs and DataFlash logs are in `agent_<i>/`.
+
+Key options: `--count`, `--mission hover`, `--layout grid|circle`, `--spacing`,
+`--radius`, `--profile gps|indoor`, `--alt` (centre lane), `--lanes`, `--lane-spacing`,
+`--climb`, `--duration`, `--lead`,
 `--home=LAT,LON,ALT` (the world origin), `--headless`, `--extra-param-file`.
+
+## Writing a mission
+
+A mission script says where the vehicle should be. `lua/modules/swarm_common.lua` does
+the rest of the flight: readiness, the synchronized start, the climb into the altitude
+lane, tracking, the separation guard, and the landing. A mission returns a *reference*:
+a world north/east position (m) and the velocity of that point (m/s), or `nil` to hold.
+`swarm_common` flies toward it with `velocity + CFSW_KP * position error`, limited to
+`CFSW_SPEED`. The whole hover mission is:
+
+```lua
+local swarm_common = require("swarm_common")
+
+return swarm_common.run({
+   name = "hover",
+   reference = function(ctx, now)
+      return ctx.site.pad_n, ctx.site.pad_e, 0, 0
+   end,
+})
+```
+
+`reference(ctx, now)` gets:
+
+| | |
+|---|---|
+| `now` | this vehicle's `millis()` |
+| `ctx.t0` | the common mission start in this vehicle's clock: use `now - ctx.t0` as mission time |
+| `ctx.site` | this vehicle's generated `swarm_site.lua`: `index`, `sysid`, `count`, `sysids`, `pad_n`/`pad_e`, `pads[sysid]`, timing, lanes |
+| `ctx.peers` | `sysid -> {n, e, vn, ve}` for every peer AP_SwarmMesh has a fresh position for, in the world frame |
+| `ctx.land(now, why)` | end the mission early |
+
+`ctx.peers` is the mesh: each tick, `swarm_common` fills it from
+`swarm:get_peer_location(sysid)` and `swarm:get_peer_velocity_NED(sysid)`. A peer drops
+out of it when AP_SwarmMesh no longer has a fresh position for it.
+
+To add a mission: write `lua/swarm_<name>.lua` and add it to `MISSIONS` in
+`run_swarm.py`. Add any data it needs to `site_lua()`.
 
 ### Using swarm_hub.py or a GCS instead
 
@@ -111,10 +158,10 @@ The launcher rewrites the model's `no_time_sync` to 0. With 1, `SIM_JSON` silent
 `AHRS_EKF_TYPE 10` (perfect state) instead of EKF3. The orchestrator checks
 `AHRS_EKF_TYPE == 3` and `P2P_TYPE == 10` before scheduling a start.
 
-Mission script parameters: `CFSW_START`, `CFSW_SPEED`, `CFSW_KP`, `CFSW_AVOID`,
-`CFSW_PUSH`, `CFSW_TOL` and `CFSW_VZMAX` (see the script header). The separation guard is
-a simple bounded repulsion inside `CFSW_AVOID`. It is a safety net for the demo, not a
-collision-avoidance method.
+Mission parameters, created by `swarm_common.lua`: `CFSW_START`, `CFSW_SPEED`,
+`CFSW_KP`, `CFSW_AVOID`, `CFSW_PUSH`, `CFSW_TOL` and `CFSW_VZMAX` (see its header). The
+separation guard is a simple bounded repulsion inside `CFSW_AVOID`. It is a safety net
+for the demos, not a collision-avoidance method.
 
 ## Tests
 
@@ -122,8 +169,8 @@ collision-avoidance method.
 python3 -m unittest discover -s crazyflie_scripts/gazebo_swarm/tests
 ```
 
-These tests cover file generation, the clock fit and the mission state machine (Lua,
-with stubbed bindings via `lupa`). None of them needs Gazebo or SITL.
+These tests cover file generation, the clock fit, the shared mission state machine and
+the hover mission (Lua, with stubbed bindings via `lupa`). None of them needs Gazebo or SITL.
 
 ## Troubleshooting
 

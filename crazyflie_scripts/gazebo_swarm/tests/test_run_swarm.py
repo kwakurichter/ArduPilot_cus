@@ -185,7 +185,9 @@ class Generation(unittest.TestCase):
             self.assertIn("origin_alt_cm = 60000,", text)
             self.assertIn(f"pad_n = {v['pad_n']:.4f},", text)
             self.assertIn(f"pad_e = {v['pad_e']:.4f},", text)
-            self.assertTrue((Path(v["dir"]) / "scripts" / "swarm_mission.lua").is_file())
+            self.assertTrue((Path(v["dir"]) / "scripts" / "swarm_hover.lua").is_file())
+            self.assertTrue((Path(v["dir"]) / "scripts" / "modules" / "swarm_common.lua").is_file())
+            self.assertIn('mission = "hover",', text)
             self.assertEqual((Path(v["dir"]) / "agent.parm").read_text(), "P2P_SWARM_SIZE 4\n")
 
     def test_site_module_parses_as_lua(self):
@@ -275,6 +277,18 @@ class Clock(unittest.TestCase):
         expected_us = (rate * host_us * 1000 + offset) / 1000
         self.assertAlmostEqual(clock.to_fc_us(host_us), expected_us, delta=100)
         self.assertAlmostEqual(clock.to_host_us(clock.to_fc_us(host_us)), host_us, delta=1)
+
+    def test_frozen_mapping_ignores_later_samples(self):
+        clock = ClockSync(1)
+        for k in range(20):
+            self.exchange(clock, 1_000_000_000_000 + k * 200_000_000, -900_000_000_000, 1.0, 500_000)
+        frozen = clock.frozen()
+        before = frozen.to_fc_us(1_005_000_000)
+        for k in range(20, 80):   # the vehicle clock jumps by 50 ms
+            self.exchange(clock, 1_000_000_000_000 + k * 200_000_000, -899_950_000_000, 1.0, 500_000)
+        self.assertEqual(frozen.to_fc_us(1_005_000_000), before)
+        self.assertGreater(clock.to_fc_us(1_005_000_000) - before, 40_000)
+        self.assertIsNone(ClockSync(2).frozen())
 
     def test_not_ready_and_foreign_replies(self):
         clock = ClockSync(1)

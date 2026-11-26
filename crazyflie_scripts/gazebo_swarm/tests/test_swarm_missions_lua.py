@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # AP_FLAKE8_CLEAN
-"""Logic tests of lua/swarm_mission.lua with stubbed ArduPilot bindings (needs lupa).
+"""Logic tests of the mission scripts and swarm_common.lua with stubbed bindings (needs lupa).
 
     python3 -m unittest discover -s crazyflie_scripts/gazebo_swarm/tests
 """
@@ -13,7 +13,11 @@ try:
 except ImportError:  # pragma: no cover
     lupa = None
 
-SCRIPT = Path(__file__).resolve().parents[1] / "lua" / "swarm_mission.lua"
+# velocity tolerance: a stub Location, like a real one, holds 1e-7 degrees (~1.1 cm),
+# which the position gain (0.8 /s) turns into up to ~0.01 m/s
+Q = 0.012
+
+LUA_DIR = Path(__file__).resolve().parents[1] / "lua"
 
 # Minimal stand-ins for the bindings the script uses. Positions are flat-earth
 # metres from a fixed origin; a Location stores lat/lng in 1e-7 degrees.
@@ -21,7 +25,8 @@ STUBS = r"""
 local M_PER_E7 = 0.011131884502145034   -- metres per 1e-7 degree of latitude
 sim = {now = 0, params = {}, texts = {}, named = {}, mode = 0, armed = false, healthy = true,
        position = nil, alt = 0, origin = nil, peers = {}, prearm = true, guided_ok = true,
-       arm_calls = {}, takeoff = nil, velocity = nil, modes = {}, set_origin_calls = 0}
+       arm_calls = {}, takeoff = nil, velocity = nil, modes = {}, set_origin_calls = 0,
+       peer_vel = {}}
 
 local Loc = {}
 Loc.__index = Loc
@@ -82,6 +87,13 @@ function ahrs:get_relative_position_D_home() return -sim.alt end
 
 swarm = {}
 function swarm:get_peer_location(sysid) return sim.peers[sysid] end
+function swarm:get_peer_velocity_NED(sysid)
+   local v = sim.peer_vel[sysid]
+   if v == nil then return nil end
+   local out = Vector3f()
+   out:x(v[1]) out:y(v[2]) out:z(0)
+   return out
+end
 
 vehicle = {}
 function vehicle:get_mode() return sim.mode end
@@ -105,28 +117,32 @@ end
 """
 
 
-def site_table(index=0, count=3, profile="gps", climb=10.0, duration=20.0):
+def site_table(index=0, count=3, profile="gps", climb=10.0, duration=20.0, mission="hover"):
     pads = [(0.0, -0.6), (0.0, 0.0), (0.0, 0.6)][:count]
     rows = ", ".join(f"{{n = {n}, e = {e}}}" for n, e in pads)
     sysids = ", ".join(str(i + 1) for i in range(count))
     return (f"{{index = {index}, count = {count}, sysid = {index + 1}, sysids = {{{sysids}}}, "
             f"origin_lat_e7 = 0, origin_lng_e7 = 0, origin_alt_cm = 0, "
             f"pad_n = {pads[index][0]}, pad_e = {pads[index][1]}, pads = {{{rows}}}, "
-            f"profile = \"{profile}\", mission = \"hover\", alt = 1.0, lane_count = 4, "
+            f"profile = \"{profile}\", mission = \"{mission}\", alt = 1.0, lane_count = 4, "
             f"lane_spacing = 0.25, climb_s = {climb}, duration = {duration}}}")
 
 
 @unittest.skipIf(lupa is None, "lupa is not installed")
 class MissionScript(unittest.TestCase):
 
+    SCRIPT = "swarm_hover.lua"
+
     def load(self, **site):
+        site.setdefault("mission", self.SCRIPT[len("swarm_"):-len(".lua")])
         self.lua = lupa.LuaRuntime(unpack_returned_tuples=True)
         self.lua.execute(STUBS)
+        self.lua.globals().package.path = str(LUA_DIR / "modules" / "?.lua")
         self.lua.execute(f"package.preload['swarm_site'] = function() return {site_table(**site)} end")
         self.sim = self.lua.globals().sim
         self.index = site.get("index", 0)
         self.count = site.get("count", 3)
-        self.update, self.next_ms = self.lua.execute(SCRIPT.read_text())
+        self.update, self.next_ms = self.lua.execute((LUA_DIR / self.SCRIPT).read_text())
 
     def place(self, n, e, alt=0.0):
         self.sim.position = self.lua.globals().at_ne(n, e)
@@ -153,7 +169,7 @@ class MissionScript(unittest.TestCase):
             self.update, self.next_ms = result
         self.sim.now = t_ms
 
-    STATES = ["SITE", "WAIT", "READY", "TAKEOFF", "HOVER", "LAND", "DONE", "ABORT"]
+    STATES = ["SITE", "WAIT", "READY", "TAKEOFF", "FLY", "LAND", "DONE", "ABORT"]
 
     def state(self):
         """Current state, from the script's latest state-change message (SWSTATE is rate limited)."""
@@ -185,7 +201,7 @@ class MissionScript(unittest.TestCase):
         self.assertEqual(self.state(), 3)   # TAKEOFF
         self.sim.alt = 0.95
         self.run_until(8000)
-        self.assertEqual(self.state(), 4)   # HOVER
+        self.assertEqual(self.state(), 4)   # FLY
         # drifted 0.2 m north of the pad: commanded back south, and down a little
         self.place(0.2, 0.0, 1.1)
         self.run_until(8200)
@@ -278,6 +294,10 @@ class MissionScript(unittest.TestCase):
         self.assertEqual(origin.lat(origin), 0)
         # within the 1e-7 degree (~1.1 cm) quantization of a Location
         self.assertAlmostEqual(origin.lng(origin) * 0.011131884502145034, 0.6, delta=0.012)
+
+    def test_mission_must_match_site(self):
+        with self.assertRaises(lupa.LuaError):
+            self.load(index=0, mission="other")
 
 
 if __name__ == "__main__":

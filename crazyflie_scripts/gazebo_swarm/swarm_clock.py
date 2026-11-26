@@ -112,6 +112,16 @@ class ClockSync:
         # fc = h + a + b (h - t0)  =>  h = (fc - a + b t0) / (1 + b)
         return int(round((fc_us - a + b * t0) / (1.0 + b)))
 
+    def frozen(self):
+        """A copy of the current mapping that later samples do not change, or None until ready."""
+        with self._lock:
+            if self._fit is None or self._fit[6] < READY_SAMPLES:
+                return None
+            copy = ClockSync(self.sysid)
+            copy._fit = self._fit
+            copy.requests, copy.replies = self.requests, self.replies
+        return copy
+
     def status(self):
         with self._lock:
             if self._fit is None:
