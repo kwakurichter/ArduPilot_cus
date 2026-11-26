@@ -18,7 +18,11 @@
 #if AP_SWARMMESH_SITL_ENABLED
 
 #include <AP_HAL/AP_HAL.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #if AP_SIM_SWARMMESH_LOSS_ENABLED
 #include <SITL/SITL.h>
@@ -34,17 +38,88 @@
 #define SWARMMESH_SITL_RCVBUF (4 * 1024 * 1024)
 
 AP_SwarmMesh_SITL::AP_SwarmMesh_SITL(AP_SwarmMesh &frontend) :
-    AP_SwarmMesh_Backend(frontend),
-    _sock(true)
+    AP_SwarmMesh_Backend(frontend)
 {
-    _sock_ok = _sock.connect(SWARMMESH_MCAST_ADDRESS, SWARMMESH_MCAST_PORT);
-    if (_sock_ok) {
-        const int fd = _sock.get_read_fd();
-        if (fd >= 0) {
-            int rcvbuf = SWARMMESH_SITL_RCVBUF;
-            setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    _sock_ok = open_sockets();
+}
+
+/*
+  Every SITL instance runs on this host, so the mesh stays on the loopback
+  interface. Joining and sending on the default interface instead fails when that
+  interface cannot carry multicast: no network, a VPN default route, or macOS
+  refusing local-network multicast to the process (send() returns EPIPE).
+ */
+bool AP_SwarmMesh_SITL::open_sockets()
+{
+    struct sockaddr_in group {};
+    group.sin_family = AF_INET;
+    group.sin_port = htons(SWARMMESH_MCAST_PORT);
+    group.sin_addr.s_addr = inet_addr(SWARMMESH_MCAST_ADDRESS);
+#ifdef HAVE_SOCK_SIN_LEN
+    group.sin_len = sizeof(group);
+#endif
+    struct in_addr loopback {};
+    loopback.s_addr = htonl(INADDR_LOOPBACK);
+    const int one = 1;
+
+    _rx_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    _tx_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (_rx_fd == -1 || _tx_fd == -1) {
+        goto fail;
+    }
+    fcntl(_rx_fd, F_SETFD, FD_CLOEXEC);
+    fcntl(_tx_fd, F_SETFD, FD_CLOEXEC);
+
+    {
+        // receive: every instance binds the group port (SO_REUSEPORT gives each a copy)
+        IGNORE_RETURN(setsockopt(_rx_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)));
+#if defined(SO_REUSEPORT)
+        IGNORE_RETURN(setsockopt(_rx_fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)));
+#endif
+        struct sockaddr_in bind_addr = group;
+#if defined(__CYGWIN__) || defined(__CYGWIN64__) || defined(CYGWIN_BUILD)
+        bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+#endif
+        if (bind(_rx_fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) == -1) {
+            goto fail;
+        }
+        struct ip_mreq mreq {};
+        mreq.imr_multiaddr = group.sin_addr;
+        mreq.imr_interface = loopback;
+        if (setsockopt(_rx_fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) == -1) {
+            goto fail;
+        }
+        int rcvbuf = SWARMMESH_SITL_RCVBUF;
+        IGNORE_RETURN(setsockopt(_rx_fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)));
+        fcntl(_rx_fd, F_SETFL, fcntl(_rx_fd, F_GETFL, 0) | O_NONBLOCK);
+    }
+
+    {
+        // send: out of loopback, looped back to this host's members, never further
+        const uint8_t loop = 1;
+        const uint8_t ttl = 1;
+        if (setsockopt(_tx_fd, IPPROTO_IP, IP_MULTICAST_IF, &loopback, sizeof(loopback)) == -1 ||
+            setsockopt(_tx_fd, IPPROTO_IP, IP_MULTICAST_LOOP, &loop, sizeof(loop)) == -1 ||
+            setsockopt(_tx_fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl)) == -1) {
+            goto fail;
+        }
+        fcntl(_tx_fd, F_SETFL, fcntl(_tx_fd, F_GETFL, 0) | O_NONBLOCK);
+        if (connect(_tx_fd, (struct sockaddr *)&group, sizeof(group)) == -1) {
+            goto fail;
         }
     }
+    return true;
+
+fail:
+    if (_rx_fd != -1) {
+        close(_rx_fd);
+        _rx_fd = -1;
+    }
+    if (_tx_fd != -1) {
+        close(_tx_fd);
+        _tx_fd = -1;
+    }
+    return false;
 }
 
 bool AP_SwarmMesh_SITL::transport_ready() const
@@ -84,7 +159,7 @@ uint32_t AP_SwarmMesh_SITL::transport_available()
     }
     // buffer exhausted, try to pull the next datagram (non-blocking). bounded loop so a high simulated loss rate cannot stall this call
     for (uint8_t tries = 0; tries < 32; tries++) {
-        const ssize_t n = _sock.recv(_rx_buf, sizeof(_rx_buf), 0);
+        const ssize_t n = recv(_rx_fd, _rx_buf, sizeof(_rx_buf), 0);
         if (n <= 0) {
             return 0;
         }
@@ -110,7 +185,7 @@ int16_t AP_SwarmMesh_SITL::transport_read()
 
 void AP_SwarmMesh_SITL::transport_write(const uint8_t *buf, uint16_t len)
 {
-    _sock.send(buf, len);
+    IGNORE_RETURN(send(_tx_fd, buf, len, 0));
 }
 
 #endif  // AP_SWARMMESH_SITL_ENABLED

@@ -19,7 +19,6 @@
 
 #if AP_SWARMMESH_SITL_ENABLED
 
-#include <AP_HAL/utility/Socket_native.h>
 #include <SITL/SIM_config.h>
 
 class AP_SwarmMesh_SITL : public AP_SwarmMesh_Backend
@@ -40,7 +39,11 @@ private:
     bool packet_lost() const;
 #endif
 
-    SocketAPM_native _sock{true};   // true = datagram (UDP)
+    // join the multicast group and open the send socket, both on loopback
+    bool open_sockets();
+
+    int      _rx_fd = -1;           // bound to the group, member on loopback
+    int      _tx_fd = -1;           // connected to the group, sends on loopback
     bool     _sock_ok = false;
 
     // datagram receive buffer: holds one complete SwarmMesh packet at a time
