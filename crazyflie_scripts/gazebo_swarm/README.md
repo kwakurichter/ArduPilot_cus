@@ -127,6 +127,10 @@ with stubbed bindings via `lupa`). None of them needs Gazebo or SITL.
 
 ## Troubleshooting
 
+- Every vehicle stays at `p0` (no peers): the SITL mesh runs on loopback, so check that
+  the ArduPilot build includes `AP_SwarmMesh: keep the SITL mesh on loopback`. Before that
+  change, the mesh used the default interface, which macOS refuses for multicast sends
+  (`EPIPE`) on some setups, as do VPN default routes.
 - *ports already in use* / *another swarm simulation is running*: another SITL or
   swarm is still running. Stop it; two swarms on one host would hear each other's mesh.
 - A vehicle stays in WAIT: its STATUSTEXT `swarm: waiting: <reason>` says why (peers, no

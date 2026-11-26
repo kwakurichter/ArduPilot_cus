@@ -20,7 +20,7 @@ import collections
 import threading
 import time
 
-WINDOW_S = 30.0
+WINDOW_S = 10.0   # short: in lock-step the sim clock rate follows Gazebo's real-time factor
 ENVELOPE_US = 1000.0
 ENVELOPE_FRACTION = 0.25
 READY_SAMPLES = 10
