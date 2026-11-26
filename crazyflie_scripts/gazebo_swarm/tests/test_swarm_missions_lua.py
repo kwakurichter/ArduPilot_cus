@@ -125,7 +125,8 @@ def site_table(index=0, count=3, profile="gps", climb=10.0, duration=20.0, missi
             f"origin_lat_e7 = 0, origin_lng_e7 = 0, origin_alt_cm = 0, "
             f"pad_n = {pads[index][0]}, pad_e = {pads[index][1]}, pads = {{{rows}}}, "
             f"profile = \"{profile}\", mission = \"{mission}\", alt = 1.0, lane_count = 4, "
-            f"lane_spacing = 0.25, climb_s = {climb}, duration = {duration}}}")
+            f"lane_spacing = 0.25, climb_s = {climb}, duration = {duration}, "
+            f"leader_sysid = 1, circle_radius = 1.0, circle_speed = 0.15}}")
 
 
 @unittest.skipIf(lupa is None, "lupa is not installed")
@@ -297,7 +298,78 @@ class MissionScript(unittest.TestCase):
 
     def test_mission_must_match_site(self):
         with self.assertRaises(lupa.LuaError):
-            self.load(index=0, mission="other")
+            self.load(index=0, mission="follow")
+
+    def take_off_and_fly(self, index):
+        """Ready, synchronized start, climb to the lane; returns the common mission start t0."""
+        self.ready_vehicle(index=index)
+        start = self.sim.now + 1000
+        self.sim.params["CFSW_START"] = float(start)
+        self.run_until(start + 100)
+        self.sim.alt = [0.75, 1.0, 1.25][index]
+        self.run_until(start + 300)
+        self.assertEqual(self.state(), 4, self.texts())   # FLY
+        return start + 10000
+
+    def command(self):
+        return list(self.sim.velocity.values())
+
+
+@unittest.skipIf(lupa is None, "lupa is not installed")
+class FollowScript(MissionScript):
+    """swarm_follow.lua: pads (N, E) are (0, -0.6), (0, 0), (0, 0.6); vehicle 1 leads."""
+
+    SCRIPT = "swarm_follow.lua"
+
+    # the hover-specific checks of the parent class do not apply
+    test_ready_then_synchronized_takeoff_hover_land = None
+    test_separation_guard_pushes_away = None
+    test_mission_must_match_site = None
+
+    def test_leader_waits_over_its_pad_then_circles(self):
+        t0 = self.take_off_and_fly(index=0)
+        self.place(0.0, -0.6, 0.75)
+        self.run_until(t0 - 500)
+        vn, ve, _ = self.command()
+        self.assertAlmostEqual(vn, 0, delta=Q)
+        self.assertAlmostEqual(ve, 0, delta=Q)
+        # a quarter lap after t0 the reference is east of the centre (-1, -0.6), moving south
+        quarter = int(1000 * (3.14159265 / 2) / 0.15)
+        self.run_until(t0 + quarter)
+        self.place(-1.0, 0.4, 0.75)
+        self.run_until(t0 + quarter + 100)
+        vn, ve, _ = self.command()
+        self.assertAlmostEqual(vn, -0.15, delta=Q)
+        self.assertAlmostEqual(ve, 0.0, delta=Q)
+
+    def test_follower_holds_its_offset_and_matches_leader_velocity(self):
+        self.take_off_and_fly(index=2)
+        # the leader has moved to (1, 2) at (0.1, -0.05) m/s; this vehicle's slot is +1.2 m east
+        self.peers_at({1: (1.0, 2.0), 2: (0.0, 0.0)})
+        self.sim.peer_vel[1] = self.lua.table(0.1, -0.05)
+        self.place(1.0, 3.2, 1.25)
+        self.run_until(self.sim.now + 200)
+        vn, ve, _ = self.command()
+        self.assertAlmostEqual(vn, 0.1, delta=Q)
+        self.assertAlmostEqual(ve, -0.05, delta=Q)
+        # behind the slot by 0.1 m north: the correction adds kp * 0.1 northward
+        self.place(0.9, 3.2, 1.25)
+        self.run_until(self.sim.now + 200)
+        vn, ve, _ = self.command()
+        self.assertAlmostEqual(vn, 0.1 + 0.08, delta=Q)
+
+    def test_follower_holds_then_lands_without_the_leader(self):
+        self.take_off_and_fly(index=2)
+        self.place(0.0, 0.6, 1.25)
+        self.peers_at({2: (0.0, 0.0)})            # leader gone, vehicle 2 still heard
+        self.run_until(self.sim.now + 1000)
+        vn, ve, _ = self.command()
+        self.assertAlmostEqual(vn, 0, places=3)
+        self.assertAlmostEqual(ve, 0, places=3)
+        self.assertEqual(self.state(), 4)
+        self.run_until(self.sim.now + 5000)
+        self.assertEqual(self.state(), 5)          # LAND
+        self.assertIn("swarm: landing: leader lost", self.texts())
 
 
 if __name__ == "__main__":

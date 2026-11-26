@@ -190,6 +190,22 @@ class Generation(unittest.TestCase):
             self.assertIn('mission = "hover",', text)
             self.assertEqual((Path(v["dir"]) / "agent.parm").read_text(), "P2P_SWARM_SIZE 4\n")
 
+    def test_follow_mission(self):
+        args, plan, _ = self.prepare("--count", "3", "--mission", "follow", "--circle-radius", "0.8")
+        self.assertAlmostEqual(args.duration, round(2 * 3.14159265 * 0.8 / 0.15 + 2, 1), places=1)
+        for v in plan["vehicles"]:
+            scripts = Path(v["dir"]) / "scripts"
+            self.assertTrue((scripts / "swarm_follow.lua").is_file())
+            self.assertFalse((scripts / "swarm_hover.lua").exists())
+            text = (scripts / "modules" / "swarm_site.lua").read_text()
+            self.assertIn('mission = "follow",', text)
+            self.assertIn("leader_sysid = 1,", text)
+            self.assertIn("circle_radius = 0.800,", text)
+        with self.assertRaises(SystemExit):
+            run_swarm.parse_args(["--mission", "follow", "--count", "1"])
+        with self.assertRaises(SystemExit):
+            run_swarm.parse_args(["--mission", "follow", "--circle-speed", "0.3"])
+
     def test_site_module_parses_as_lua(self):
         try:
             import lupa

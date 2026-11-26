@@ -7,6 +7,9 @@ ArduCopter SITL process (JSON backend, lock-step). The vehicles see each other o
 through AP_SwarmMesh (SITL multicast) and fly a mission script onboard:
 
     --mission hover    lua/swarm_hover.lua: every vehicle holds its pad position
+    --mission follow   lua/swarm_follow.lua: vehicle 1 flies a circle, the others keep
+                       their starting offsets from it, using its AP_SwarmMesh position
+                       and velocity
 
 The script is the orchestrator: it never arms a vehicle, changes its mode or sends it
 a target. It only
@@ -27,6 +30,7 @@ Examples (from the ArduPilot root, after ./waf copter and building the plugin):
 
     crazyflie_scripts/gazebo_swarm/run_swarm.py --count 4
     crazyflie_scripts/gazebo_swarm/run_swarm.py --count 2 --profile indoor --headless
+    crazyflie_scripts/gazebo_swarm/run_swarm.py --count 4 --mission follow
     crazyflie_scripts/gazebo_swarm/run_swarm.py --count 3 --physics sitl
 """
 
@@ -54,7 +58,8 @@ from swarm_clock import ClockSync  # noqa: E402
 
 PARAMS_DIR = HERE / "params"
 LUA_DIR = HERE / "lua"
-MISSIONS = {"hover": "swarm_hover.lua"}
+MISSIONS = {"hover": "swarm_hover.lua", "follow": "swarm_follow.lua"}
+LEADER_SYSID = 1
 AIRFRAME_PARM = AP_ROOT / "crazyflie_scripts" / "crazyflie_sitl_gazebo.parm"
 COPTER_PARM = AP_ROOT / "Tools" / "autotest" / "default_params" / "copter.parm"
 
@@ -162,6 +167,9 @@ def site_lua(index, count, home, pads, profile, args):
         f"  lane_spacing = {args.lane_spacing:.3f},\n"
         f"  climb_s = {args.climb:.1f},\n"
         f"  duration = {args.duration:.1f},\n"
+        f"  leader_sysid = {LEADER_SYSID},\n"
+        f"  circle_radius = {args.circle_radius:.3f},\n"
+        f"  circle_speed = {args.circle_speed:.3f},\n"
         "}\n"
     )
 
@@ -740,12 +748,16 @@ def parse_args(argv=None):
     parser.add_argument("--profile", choices=("gps", "indoor"), default="gps",
                         help="EKF3 sensor profile (default gps)")
     parser.add_argument("--mission", choices=sorted(MISSIONS), default="hover",
-                        help="hover: hold the pads (default)")
+                        help="hover: hold the pads (default); follow: vehicle 1 flies a circle, the others follow it")
+    parser.add_argument("--circle-radius", type=float, default=1.0, help="follow: leader circle radius, m (default 1.0)")
+    parser.add_argument("--circle-speed", type=float, default=0.15,
+                        help="follow: leader speed on the circle, m/s (default 0.15)")
     parser.add_argument("--alt", type=float, default=1.0, help="centre altitude, m (default 1.0)")
     parser.add_argument("--lanes", type=int, default=4, help="altitude lanes (default 4)")
     parser.add_argument("--lane-spacing", type=float, default=0.25, help="altitude lane spacing, m (default 0.25)")
     parser.add_argument("--climb", type=float, default=10.0, help="time allowed for the climb, s (default 10)")
-    parser.add_argument("--duration", type=float, default=20.0, help="mission time after the climb, s (default 20)")
+    parser.add_argument("--duration", type=float,
+                        help="mission time after the climb, s (default: hover 20, follow one lap of the circle)")
     parser.add_argument("--lead", type=float, default=5.0, help="start this far after scheduling, s (default 5)")
     parser.add_argument("--home", default=",".join(str(v) for v in DEFAULT_HOME),
                         help="world origin LAT,LON,ALT_M; write --home=LAT,... when LAT is negative (default CMAC)")
@@ -783,6 +795,17 @@ def parse_args(argv=None):
     except (ValueError, AssertionError):
         parser.error("--home must be LAT,LON,ALT_M")
     args.home = home
+    if args.mission == "follow":
+        if args.count < 2:
+            parser.error("--mission follow needs at least 2 vehicles")
+        if not 0 < args.circle_speed < 0.25:
+            parser.error("--circle-speed must be above 0 and below CFSW_SPEED (0.25 m/s), "
+                         "so the followers can catch up")
+        if args.circle_radius <= 0:
+            parser.error("--circle-radius must be positive")
+    if args.duration is None:
+        lap = 2 * math.pi * args.circle_radius / args.circle_speed
+        args.duration = round(lap + 2.0, 1) if args.mission == "follow" else 20.0
     lowest = min(lane_altitudes(args.count, args.alt, args.lanes, args.lane_spacing))
     if lowest < MIN_LANE_ALT_M:
         parser.error(f"the lowest altitude lane is {lowest:.2f} m; keep it at or above {MIN_LANE_ALT_M} m")
@@ -850,7 +873,9 @@ def prepare(args, log):
                 gazebo_commands=gz_commands, gazebo_partition=env["GZ_PARTITION"] if env else None,
                 parameter_files=[str(p) for p in defaults], vehicles=vehicles,
                 mission=dict(name=args.mission, alt=args.alt, lanes=args.lanes, lane_spacing=args.lane_spacing,
-                             climb_s=args.climb, duration_s=args.duration, lead_s=args.lead))
+                             climb_s=args.climb, duration_s=args.duration, lead_s=args.lead,
+                             leader_sysid=LEADER_SYSID if args.mission == "follow" else None,
+                             circle_radius_m=args.circle_radius, circle_speed_m_s=args.circle_speed))
     (run_dir / "launch.json").write_text(json.dumps(plan, indent=2) + "\n")
     return plan, env
 

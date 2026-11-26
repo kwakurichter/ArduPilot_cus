@@ -9,6 +9,7 @@ lane and a synchronized landing:
 | `--mission` | Script | What it shows |
 |---|---|---|
 | `hover` (default) | `lua/swarm_hover.lua` | the synchronized swarm lifecycle: every vehicle holds its pad |
+| `follow` | `lua/swarm_follow.lua` | **leader-follower over AP_SwarmMesh**: vehicle 1 flies a circle; the others keep their starting offsets from it, using only its mesh position and velocity |
 
 `run_swarm.py` generates the world and starts every process. It acts as the
 orchestrator, but it never arms a vehicle, changes its mode or sends it a target.
@@ -58,6 +59,9 @@ and its pre-arm checks pass, all held for 2 s.
 # 4 vehicles on a 0.6 m grid, GPS profile, Gazebo with GUI
 crazyflie_scripts/gazebo_swarm/run_swarm.py --count 4
 
+# leader-follower: vehicle 1 flies a 1 m circle at 0.15 m/s, one lap
+crazyflie_scripts/gazebo_swarm/run_swarm.py --count 4 --mission follow
+
 # GPS-denied: optical flow + downward ToF (the launcher adds a gpu_lidar to each model)
 crazyflie_scripts/gazebo_swarm/run_swarm.py --count 3 --layout circle --profile indoor --headless
 
@@ -80,9 +84,9 @@ directory (default: a new temporary directory, or `--run-dir`). `summary.json` h
 
 Per-vehicle SITL logs and DataFlash logs are in `agent_<i>/`.
 
-Key options: `--count`, `--mission hover`, `--layout grid|circle`, `--spacing`,
+Key options: `--count`, `--mission hover|follow`, `--layout grid|circle`, `--spacing`,
 `--radius`, `--profile gps|indoor`, `--alt` (centre lane), `--lanes`, `--lane-spacing`,
-`--climb`, `--duration`, `--lead`,
+`--climb`, `--duration`, `--lead`, `--circle-radius` and `--circle-speed` (follow),
 `--home=LAT,LON,ALT` (the world origin), `--headless`, `--extra-param-file`.
 
 ## Writing a mission
@@ -111,13 +115,33 @@ return swarm_common.run({
 |---|---|
 | `now` | this vehicle's `millis()` |
 | `ctx.t0` | the common mission start in this vehicle's clock: use `now - ctx.t0` as mission time |
-| `ctx.site` | this vehicle's generated `swarm_site.lua`: `index`, `sysid`, `count`, `sysids`, `pad_n`/`pad_e`, `pads[sysid]`, timing, lanes |
+| `ctx.site` | this vehicle's generated `swarm_site.lua`: `index`, `sysid`, `count`, `sysids`, `pad_n`/`pad_e`, `pads[sysid]`, `leader_sysid`, `circle_radius`, `circle_speed`, timing, lanes |
 | `ctx.peers` | `sysid -> {n, e, vn, ve}` for every peer AP_SwarmMesh has a fresh position for, in the world frame |
 | `ctx.land(now, why)` | end the mission early |
 
 `ctx.peers` is the mesh: each tick, `swarm_common` fills it from
 `swarm:get_peer_location(sysid)` and `swarm:get_peer_velocity_NED(sysid)`. A peer drops
 out of it when AP_SwarmMesh no longer has a fresh position for it.
+
+### The follow example
+
+`lua/swarm_follow.lua` is the leader-follower demo. Its follower is the whole idea:
+
+```lua
+local leader = ctx.peers[LEADER]
+if leader == nil then
+   return nil                                 -- hold until the leader is heard again
+end
+return leader.n + SLOT_N, leader.e + SLOT_E, leader.vn, leader.ve
+```
+
+Each follower's slot (`SLOT_N`, `SLOT_E`) is its pad minus the leader's pad, so the
+formation is the starting layout. Feeding the leader's velocity forward lets the
+followers move with the leader instead of trailing it. A follower that cannot hear the
+leader holds its position, and lands after 5 s. The leader's reference is a point moving
+around a circle that starts at its own pad, with the centre `--circle-radius` south of
+it, at `--circle-speed`. The circle starts at `ctx.t0`, so the leader waits over its pad
+until every vehicle has finished climbing.
 
 To add a mission: write `lua/swarm_<name>.lua` and add it to `MISSIONS` in
 `run_swarm.py`. Add any data it needs to `site_lua()`.
@@ -170,7 +194,7 @@ python3 -m unittest discover -s crazyflie_scripts/gazebo_swarm/tests
 ```
 
 These tests cover file generation, the clock fit, the shared mission state machine and
-the hover mission (Lua, with stubbed bindings via `lupa`). None of them needs Gazebo or SITL.
+both missions (Lua, with stubbed bindings via `lupa`). None of them needs Gazebo or SITL.
 
 ## Troubleshooting
 
